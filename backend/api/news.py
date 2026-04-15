@@ -14,4 +14,4 @@ async def get_sector_news(sector_name: str) -> list[NewsArticle]:
 @router.get("/news/search/{keyword}")
 async def search_news(keyword: str) -> list[NewsArticle]:
     """Search news by keyword."""
-    return NewsCrawlerService.get_sector_news(keyword)
+    return NewsCrawlerService.search_news(keyword)

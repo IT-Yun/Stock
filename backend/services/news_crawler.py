@@ -3,6 +3,8 @@ import requests
 from urllib.parse import quote
 from bs4 import BeautifulSoup
 import feedparser
+
+from config import settings
 from models.schemas import NewsArticle
 
 
@@ -94,6 +96,29 @@ class NewsCrawlerService:
         "양자컴퓨팅": "quantum computing",
         "수소": "hydrogen fuel cell clean energy",
     }
+
+    @staticmethod
+    def search_news(keyword: str) -> list[NewsArticle]:
+        """Aggregate news from configured sources for a keyword."""
+        articles: list[NewsArticle] = []
+
+        sources = {source.strip().lower() for source in settings.NEWS_SOURCES if source.strip()}
+
+        if "naver" in sources:
+            articles.extend(NewsCrawlerService.crawl_naver_news(keyword))
+
+        if "google" in sources:
+            articles.extend(NewsCrawlerService.crawl_google_news_rss(keyword))
+
+        # Deduplicate by title
+        seen_titles: set[str] = set()
+        unique_articles: list[NewsArticle] = []
+        for article in articles:
+            if article.title not in seen_titles:
+                seen_titles.add(article.title)
+                unique_articles.append(article)
+
+        return unique_articles
 
     @staticmethod
     def get_sector_news(sector_name: str) -> list[NewsArticle]:

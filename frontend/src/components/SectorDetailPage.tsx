@@ -358,44 +358,6 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
     return top;
   }, [chartData]);
 
-  // Buy/Sell signal detection from technical indicators
-  const buySellSignals = useMemo(() => {
-    if (chartData.length < 10) return [];
-    const signals: { date: string; close: number; type: "buy" | "sell"; reason: string }[] = [];
-    for (let i = 1; i < chartData.length; i++) {
-      const cur = chartData[i];
-      const prev = chartData[i - 1];
-      const reasons: string[] = [];
-      let buyScore = 0;
-      let sellScore = 0;
-      // RSI signals
-      if (cur.rsi != null && prev.rsi != null) {
-        if (prev.rsi < 30 && cur.rsi >= 30) { buyScore += 2; reasons.push("RSI 과매도 탈출"); }
-        if (prev.rsi < 70 && cur.rsi >= 70) { sellScore += 2; reasons.push("RSI 과매수 진입"); }
-      }
-      // MACD crossover
-      if (cur.macd != null && cur.macd_signal != null && prev.macd != null && prev.macd_signal != null) {
-        if (prev.macd <= prev.macd_signal && cur.macd > cur.macd_signal) { buyScore += 2; reasons.push("MACD 골든크로스"); }
-        if (prev.macd >= prev.macd_signal && cur.macd < cur.macd_signal) { sellScore += 2; reasons.push("MACD 데드크로스"); }
-      }
-      // Bollinger band touch
-      if (cur.bollinger_lower != null && cur.close <= cur.bollinger_lower && prev.close > (prev.bollinger_lower ?? prev.close)) {
-        buyScore += 1; reasons.push("볼린저 하단 터치");
-      }
-      if (cur.bollinger_upper != null && cur.close >= cur.bollinger_upper && prev.close < (prev.bollinger_upper ?? prev.close)) {
-        sellScore += 1; reasons.push("볼린저 상단 터치");
-      }
-      // SMA crossover (20/50)
-      if (cur.sma_20 != null && cur.sma_50 != null && prev.sma_20 != null && prev.sma_50 != null) {
-        if (prev.sma_20 <= prev.sma_50 && cur.sma_20 > cur.sma_50) { buyScore += 1; reasons.push("SMA 20/50 골든크로스"); }
-        if (prev.sma_20 >= prev.sma_50 && cur.sma_20 < cur.sma_50) { sellScore += 1; reasons.push("SMA 20/50 데드크로스"); }
-      }
-      if (buyScore >= 2) signals.push({ date: cur.date, close: cur.close, type: "buy", reason: reasons.join(" + ") });
-      else if (sellScore >= 2) signals.push({ date: cur.date, close: cur.close, type: "sell", reason: reasons.join(" + ") });
-    }
-    return signals;
-  }, [chartData]);
-
   // Match move reasons to chart big moves
   const findMoveReason = useCallback((date: string) => {
     if (!moveReasons?.moves) return null;
@@ -435,9 +397,6 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
         window: "향후 1~3개월",
         status: "neutral",
       }));
-  const referenceCandidates = checklistLive?.summary?.reference_candidates?.length
-    ? checklistLive.summary.reference_candidates
-    : [];
   const liveImpactNews = checklistLive?.summary?.live_impact_news?.length
     ? checklistLive.summary.live_impact_news
     : [];
@@ -594,24 +553,12 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                       if (!d) return null;
                       const moveInfo = findMoveReason(d.date);
                       const bigMove = bigMoves.find((m) => m.date === d.date);
-                      const signal = buySellSignals.find((s) => s.date === d.date);
                       return (
                         <div className="bg-[var(--color-bg-secondary)] border border-[var(--color-border)] rounded-xl p-3.5 shadow-2xl max-w-[340px]" style={{ backdropFilter: "blur(8px)" }}>
                           <div className="flex items-center justify-between mb-1">
                             <p className="text-[10px] text-[var(--color-text-muted)]">{d.date}</p>
                             <p className="text-sm font-bold text-[var(--color-text-primary)]">{currency}{d.close?.toLocaleString()}</p>
                           </div>
-                          {signal && (
-                            <div className="mt-1 mb-2 px-3 py-2 rounded-lg" style={{
-                              background: signal.type === "buy" ? "rgba(59,130,246,0.12)" : "rgba(249,115,22,0.12)",
-                              border: `1.5px solid ${signal.type === "buy" ? "rgba(59,130,246,0.4)" : "rgba(249,115,22,0.4)"}`
-                            }}>
-                              <p className="text-xs font-black" style={{ color: signal.type === "buy" ? "#3b82f6" : "#f97316" }}>
-                                {signal.type === "buy" ? "▲ 매수 시그널" : "▼ 매도 시그널"}
-                              </p>
-                              <p className="text-[10px] text-[var(--color-text-secondary)] mt-0.5">{signal.reason}</p>
-                            </div>
-                          )}
                           {bigMove && (
                             <div className="mt-2 pt-2 border-t border-[var(--color-border)]">
                               <div className="flex items-center gap-2 mb-2">
@@ -668,27 +615,14 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                       />
                     );
                   })}
-                  {/* Buy/Sell signal markers */}
-                  {buySellSignals.map((sig, i) => (
-                    <ReferenceDot
-                      key={`sig-${i}`}
-                      x={sig.date}
-                      y={sig.close}
-                      r={10}
-                      fill={sig.type === "buy" ? "#3b82f6" : "#f97316"}
-                      stroke="#fff"
-                      strokeWidth={2.5}
-                      style={{ cursor: "pointer", filter: `drop-shadow(0 0 8px ${sig.type === "buy" ? "rgba(59,130,246,0.8)" : "rgba(249,115,22,0.8)"})` }}
-                      label={{ value: sig.type === "buy" ? "▲매수" : "▼매도", position: sig.type === "buy" ? "bottom" : "top", fontSize: 9, fill: sig.type === "buy" ? "#3b82f6" : "#f97316", fontWeight: 900 }}
-                    />
-                  ))}
+                  {/* Buy/Sell signal markers — only shown when user enters average price */}
                 </ComposedChart>
               </ResponsiveContainer>
               </div>
             </div>
           </div>
 
-          {/* ═══ EXPECTATION — BIG & PROMINENT ═══ */}
+          {/* ═══ EXPECTATION — 기대감 ═══ */}
           <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-2xl p-5">
             <div className="flex items-center gap-2 mb-3">
               <div className="w-8 h-8 rounded-xl flex items-center justify-center" style={{ background: `${sectorColor}18`, border: `1px solid ${sectorColor}25` }}>
@@ -729,91 +663,85 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
             </div>
           </div>
 
-          {referenceCandidates.length > 0 && (
-            <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-2xl p-5">
-              <div className="flex items-center gap-2 mb-3">
-                <div className="w-8 h-8 rounded-xl flex items-center justify-center bg-[rgba(59,130,246,0.12)] border border-[rgba(59,130,246,0.22)]">
-                  <Activity size={16} className="text-[var(--color-accent-blue)]" />
-                </div>
-                <div>
-                  <h3 className="text-sm font-bold text-[var(--color-text-primary)]">주가 연관도 상위 참고 항목</h3>
-                  <p className="text-[10px] text-[var(--color-text-muted)]">역으로 찾은 선행/동행 신호 순위</p>
-                </div>
-              </div>
-              <div className="space-y-2">
-                {referenceCandidates.map((signal: any, index: number) => (
-                  <div
-                    key={`${signal.symbol}-${index}`}
-                    className="rounded-xl px-4 py-3"
-                    style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-[rgba(59,130,246,0.16)] text-[var(--color-accent-blue)]">
-                            #{index + 1}
-                          </span>
-                          <p className="text-sm font-semibold text-[var(--color-text-primary)]">{signal.name}</p>
-                          <span className="text-[10px] font-mono text-[var(--color-text-muted)]">{signal.symbol}</span>
-                        </div>
-                        <p className="text-xs text-[var(--color-text-secondary)] mt-1">{signal.why_it_matters}</p>
-                        <p className="text-[11px] text-[var(--color-text-muted)] mt-1">
-                          관계: {signal.relationship} · 현재: {signal.current_signal}
-                        </p>
-                        <p className="text-[11px] text-[var(--color-text-muted)] mt-1">
-                          연관도: 동행 {signal.same_day_corr} / 5일선행 {signal.lead_corr_5d} / 10일선행 {signal.lead_corr_10d}
-                        </p>
-                      </div>
-                      <div className="shrink-0 text-right">
-                        <p className="text-lg font-black text-[var(--color-accent-blue)]">{signal.score}</p>
-                        <p className="text-[10px] text-[var(--color-text-muted)]">연관 점수</p>
-                        <p className="text-[10px] text-[var(--color-text-muted)] mt-1">{signal.window}</p>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
+          {/* ═══ 실시간 뉴스 — 호재/악재 분류 ═══ */}
           {liveImpactNews.length > 0 && (
             <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-2xl p-5">
-              <div className="flex items-center gap-2 mb-3">
-                <div className="w-8 h-8 rounded-xl flex items-center justify-center bg-[rgba(239,68,68,0.12)] border border-[rgba(239,68,68,0.22)]">
-                  <Newspaper size={16} className="text-[var(--color-accent-red)]" />
+              <div className="flex items-center gap-2 mb-4">
+                <div className="w-8 h-8 rounded-xl flex items-center justify-center bg-[rgba(99,102,241,0.1)] border border-[rgba(99,102,241,0.2)]">
+                  <Newspaper size={16} className="text-[#6366f1]" />
                 </div>
                 <div>
-                  <h3 className="text-sm font-bold text-[var(--color-text-primary)]">실시간 이슈 뉴스</h3>
-                  <p className="text-[10px] text-[var(--color-text-muted)]">지금 주가에 영향이 클 가능성이 높은 기사만 선별</p>
+                  <h3 className="text-sm font-bold text-[var(--color-text-primary)]">실시간 뉴스 분석</h3>
+                  <p className="text-[10px] text-[var(--color-text-muted)]">최신 뉴스를 호재/악재로 분류 — 주가 영향 분석</p>
                 </div>
               </div>
-              <div className="space-y-2">
-                {liveImpactNews.map((article: any, index: number) => (
-                  <div
-                    key={`${article.title}-${index}`}
-                    className="rounded-xl px-4 py-3"
-                    style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-[rgba(239,68,68,0.14)] text-[var(--color-accent-red)]">
-                            영향도 {article.impact_score}
-                          </span>
-                          <p className="text-sm font-semibold text-[var(--color-text-primary)]">{article.issue_label}</p>
-                        </div>
-                        <p className="text-sm text-[var(--color-text-primary)] mt-2">{article.title}</p>
-                        <p className="text-xs text-[var(--color-text-secondary)] mt-2">{article.explanation}</p>
-                        {(article.source || article.published_at) && (
-                          <p className="text-[10px] text-[var(--color-text-muted)] mt-2">
-                            {[article.source, article.published_at].filter(Boolean).join(" · ")}
-                          </p>
-                        )}
+              {(() => {
+                const positiveNews = liveImpactNews.filter((a: any) =>
+                  a.impact_direction === "positive" || (!(a.impact_direction === "negative") && ((a.explanation || "").includes("상승") || (a.explanation || "").includes("호재") || (a.explanation || "").includes("긍정") || (a.explanation || "").includes("수혜")))
+                );
+                const negativeNews = liveImpactNews.filter((a: any) =>
+                  a.impact_direction === "negative" || (!(a.impact_direction === "positive") && ((a.explanation || "").includes("하락") || (a.explanation || "").includes("악재") || (a.explanation || "").includes("위험") || (a.explanation || "").includes("우려")))
+                );
+                const neutralNews = liveImpactNews.filter((a: any) => !positiveNews.includes(a) && !negativeNews.includes(a));
+
+                return (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-3 px-3 py-2 rounded-xl bg-[var(--color-bg-hover)]">
+                      <span className="text-xs font-bold text-[#22c55e]">호재 {positiveNews.length}</span>
+                      <div className="flex-1 h-2 rounded-full bg-[var(--color-bg-primary)] overflow-hidden flex">
+                        {positiveNews.length > 0 && <div className="h-full bg-[#22c55e]" style={{ width: `${positiveNews.length / liveImpactNews.length * 100}%` }} />}
+                        {neutralNews.length > 0 && <div className="h-full bg-[#eab308]" style={{ width: `${neutralNews.length / liveImpactNews.length * 100}%` }} />}
+                        {negativeNews.length > 0 && <div className="h-full bg-[#ef4444]" style={{ width: `${negativeNews.length / liveImpactNews.length * 100}%` }} />}
                       </div>
+                      <span className="text-xs font-bold text-[#ef4444]">악재 {negativeNews.length}</span>
                     </div>
+
+                    {positiveNews.length > 0 && (
+                      <div>
+                        <p className="text-[10px] font-bold text-[#22c55e] uppercase tracking-widest mb-2 flex items-center gap-1"><TrendingUp size={12} /> 호재</p>
+                        <div className="space-y-1.5">
+                          {positiveNews.map((a: any, i: number) => (
+                            <div key={`pos-${i}`} className="px-3 py-2.5 rounded-xl" style={{ background: "rgba(34,197,94,0.06)", border: "1px solid rgba(34,197,94,0.15)" }}>
+                              <p className="text-sm font-semibold text-[var(--color-text-primary)]">{a.title}</p>
+                              {a.explanation && <p className="text-xs text-[var(--color-text-secondary)] mt-1">{a.explanation}</p>}
+                              {a.source && <p className="text-[10px] text-[var(--color-text-muted)] mt-1">{a.source}{a.published_at ? ` · ${a.published_at}` : ""}</p>}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {negativeNews.length > 0 && (
+                      <div>
+                        <p className="text-[10px] font-bold text-[#ef4444] uppercase tracking-widest mb-2 flex items-center gap-1"><TrendingDown size={12} /> 악재</p>
+                        <div className="space-y-1.5">
+                          {negativeNews.map((a: any, i: number) => (
+                            <div key={`neg-${i}`} className="px-3 py-2.5 rounded-xl" style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.15)" }}>
+                              <p className="text-sm font-semibold text-[var(--color-text-primary)]">{a.title}</p>
+                              {a.explanation && <p className="text-xs text-[var(--color-text-secondary)] mt-1">{a.explanation}</p>}
+                              {a.source && <p className="text-[10px] text-[var(--color-text-muted)] mt-1">{a.source}{a.published_at ? ` · ${a.published_at}` : ""}</p>}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {neutralNews.length > 0 && (
+                      <div>
+                        <p className="text-[10px] font-bold text-[#eab308] uppercase tracking-widest mb-2 flex items-center gap-1"><MinusCircle size={12} /> 중립</p>
+                        <div className="space-y-1.5">
+                          {neutralNews.map((a: any, i: number) => (
+                            <div key={`neu-${i}`} className="px-3 py-2.5 rounded-xl" style={{ background: "rgba(234,179,8,0.04)", border: "1px solid rgba(234,179,8,0.12)" }}>
+                              <p className="text-sm font-semibold text-[var(--color-text-primary)]">{a.title}</p>
+                              {a.explanation && <p className="text-xs text-[var(--color-text-secondary)] mt-1">{a.explanation}</p>}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
-                ))}
-              </div>
+                );
+              })()}
             </div>
           )}
 

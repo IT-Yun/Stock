@@ -16,7 +16,7 @@ router = APIRouter(prefix="/api", tags=["analysis"])
 
 
 _ANALYSIS_CACHE: dict[str, tuple[float, object]] = {}
-ANALYSIS_CACHE_TTL = 600  # 10 min cache
+ANALYSIS_CACHE_TTL = 1800  # 30 min cache — minimize yfinance API calls to avoid rate limiting
 
 
 def _get_cached(key: str):
@@ -2645,9 +2645,12 @@ async def get_checklist_live(ticker: str) -> dict:
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
     cache_key = f"checklist-live:{ticker}"
-    cached = _get_cached_ttl(cache_key, 240)
+    cached = _get_cached_ttl(cache_key, 86400)  # 24 hours — update once per day
     if cached is not None:
         return cached
+
+    # Also keep a "last good" cache that never expires, for rate limit fallback
+    stale_key = f"checklist-stale:{ticker}"
 
     try:
         sources = CHECKLIST_SOURCES.get(ticker, CHECKLIST_SOURCES.get(ticker.replace(".KS", "").replace(".KQ", ""), []))
@@ -2655,6 +2658,12 @@ async def get_checklist_live(ticker: str) -> dict:
         # Fetch earnings data once
         stock = yf.Ticker(ticker)
         info = stock.info or {}
+        # Detect rate limiting
+        if not info or (isinstance(info, dict) and len(info) < 3):
+            stale = _ANALYSIS_CACHE.get(stale_key)
+            if stale:
+                return stale[1]
+            return {"ticker": ticker, "checklist": [], "error": "Rate limited — please try again later"}
         sector_id = _infer_sector_id_from_profile(ticker, info=info)
         if not sources:
             sources = _build_dynamic_checklist_sources(ticker, info=info)
@@ -3092,9 +3101,15 @@ async def get_checklist_live(ticker: str) -> dict:
             "summary": summary,
         }
         _set_cached(cache_key, response)
+        # Also save as stale backup for rate limit situations
+        _ANALYSIS_CACHE[stale_key] = (time.time(), response)
         return response
 
     except Exception as e:
+        # If rate limited or error, try to return stale cached data
+        stale = _ANALYSIS_CACHE.get(stale_key)
+        if stale:
+            return stale[1]
         return {"ticker": ticker.upper(), "checklist": [], "error": str(e)}
 
 

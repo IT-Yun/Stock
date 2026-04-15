@@ -17,7 +17,7 @@ from config import settings
 
 # Simple in-memory cache: {key: (timestamp, data)}
 _cache: dict[str, tuple[float, object]] = {}
-CACHE_TTL = 600  # 10 minutes — longer TTL to reduce API calls on free tier
+CACHE_TTL = 1800  # 30 minutes — minimize yfinance calls to avoid rate limiting
 
 
 def _get_cached(key: str):

@@ -225,16 +225,43 @@ def _build_stock_news_queries(ticker: str, info: dict | None = None, sector_id: 
     company_name = str((info or {}).get("shortName") or (info or {}).get("longName") or ticker).strip()
     queries: list[str] = [company_name, normalized]
 
-    if normalized in {"005930.KS", "005930"}:
-        queries.extend(["삼성전자 HBM", "삼성전자 반도체", "Samsung Electronics HBM", "Samsung foundry"])
-    elif normalized in {"000660.KS", "000660"}:
-        queries.extend(["SK하이닉스 HBM", "SK hynix NVIDIA HBM", "SK hynix DRAM"])
-    elif normalized == "NVDA":
-        queries.extend(["NVIDIA HBM supply", "NVIDIA AI capex", "엔비디아 HBM"])
-    elif normalized == "TSM":
-        queries.extend(["TSMC CoWoS", "TSMC 2nm", "TSMC AI demand"])
-    elif normalized == "AVGO":
-        queries.extend(["Broadcom custom AI chip", "Broadcom VMware synergy"])
+    # Per-stock enriched news queries — covers all sector top picks
+    _STOCK_NEWS_QUERIES = {
+        "005930.KS": ["삼성전자 HBM", "삼성전자 파운드리 수율", "Samsung Electronics HBM", "삼성전자 갤럭시"],
+        "005930": ["삼성전자 HBM", "삼성전자 파운드리 수율", "Samsung Electronics HBM", "삼성전자 갤럭시"],
+        "000660.KS": ["SK하이닉스 HBM", "SK hynix NVIDIA HBM4", "SK하이닉스 DRAM 가격"],
+        "000660": ["SK하이닉스 HBM", "SK hynix NVIDIA HBM4", "SK하이닉스 DRAM 가격"],
+        "NVDA": ["NVIDIA Blackwell GPU", "NVIDIA AI capex", "엔비디아 HBM 공급", "NVIDIA China export"],
+        "TSM": ["TSMC 2nm 양산", "TSMC CoWoS", "TSMC Arizona fab", "TSMC AI demand"],
+        "AVGO": ["Broadcom custom AI chip", "Broadcom VMware synergy", "Broadcom TPU"],
+        "TSLA": ["Tesla deliveries", "Tesla FSD robotaxi", "Tesla Optimus robot", "테슬라 인도량"],
+        "ISRG": ["Intuitive da Vinci 5", "da Vinci surgical procedures", "수술로봇 다빈치"],
+        "CEG": ["Constellation Energy nuclear", "data center power PPA", "원전 전력계약"],
+        "CCJ": ["Cameco uranium supply", "uranium price spot", "우라늄 공급 부족"],
+        "CRWD": ["CrowdStrike ARR", "CrowdStrike platform modules", "사이버보안 수요"],
+        "CRSP": ["CRISPR Therapeutics FDA", "유전자편집 임상", "Casgevy"],
+        "LLY": ["Eli Lilly GLP-1 Mounjaro", "비만약 처방 데이터", "Lilly Alzheimer donanemab"],
+        "IONQ": ["IonQ quantum computer", "양자컴퓨터 큐비트", "quantum computing contract"],
+        "RKLB": ["Rocket Lab Neutron", "Rocket Lab launch", "로켓랩 발사"],
+        "BE": ["Bloom Energy data center", "SOFC fuel cell", "블룸에너지 수주"],
+        # Korean stocks
+        "086520.KS": ["에코프로 리튬", "에코프로 양극재", "에코프로 인도네시아"],
+        "247540.KS": ["에코프로비엠 양극재", "에코프로비엠 수주"],
+        "373220.KS": ["LG에너지솔루션 배터리", "LGES battery supply"],
+        "006400.KS": ["삼성SDI 전고체 배터리", "Samsung SDI battery"],
+        "047810.KS": ["한국항공우주 KF-21", "KAI 수주"],
+        "012450.KS": ["한화에어로스페이스 방산", "한화에어로 수출"],
+    }
+    stock_queries = _STOCK_NEWS_QUERIES.get(normalized, [])
+    queries.extend(stock_queries)
+
+    # For KRX stocks: auto-add Korean name from _KRX_INDUSTRY_MAP if available
+    if not stock_queries and (normalized.endswith(".KS") or normalized.endswith(".KQ")):
+        code = normalized.split(".")[0]
+        krx_info = _KRX_INDUSTRY_MAP.get(code)
+        if krx_info:
+            queries.append(f"{krx_info['name']} {krx_info['industry']}")
+            queries.append(f"{krx_info['name']} 실적")
 
     sector_terms = {
         "ai-semi": ["HBM", "semiconductor", "AI chip"],
@@ -4821,6 +4848,74 @@ def get_checklist_live(ticker: str) -> dict:
             item["lead_signal"] = "선행 개선" if item["status"] == "positive" else ("선행 악화" if item["status"] == "negative" else "중립")
 
             results.append(item)
+
+        # ── NEWS-DRIVEN ISSUE ITEMS — real-time news analysis as checklist entries ──
+        try:
+            news_items = _extract_live_impact_news(ticker, info=info, sector_id=sector_id)
+            news_drivers = _extract_news_drivers(ticker, info=info, sector_id=sector_id)
+
+            # Convert top news into checklist items
+            seen_categories = set()
+            for news in news_items[:3]:
+                cat = news.get("issue_label", "뉴스")
+                if cat in seen_categories:
+                    continue
+                seen_categories.add(cat)
+                direction = news.get("impact_direction", "neutral")
+                status = "positive" if direction == "positive" else "negative" if direction == "negative" else "neutral"
+                item_score = 80 if status == "positive" else 20 if status == "negative" else 50
+                results.append({
+                    "name": f"뉴스: {cat}",
+                    "status": status,
+                    "value": None,
+                    "detail": news.get("explanation", news.get("title", "")),
+                    "trend_data": [],
+                    "stock_overlay": [],
+                    "correlation": 0.0,
+                    "corr_label": "",
+                    "thresholds": {},
+                    "source": f"뉴스 분석 ({news.get('source', '')})",
+                    "importance": 75,
+                    "window": "최근 1~2주",
+                    "why_it_matters": news.get("explanation", ""),
+                    "expected_condition": "",
+                    "item_score": item_score,
+                    "lead_signal": "호재" if status == "positive" else "악재" if status == "negative" else "중립",
+                    "news_headlines": [news.get("title", "")],
+                    "is_news_item": True,
+                })
+
+            # Also add news driver categories as monitoring items
+            for driver in news_drivers[:2]:
+                driver_name = driver.get("name", "")
+                if driver_name in seen_categories or not driver_name:
+                    continue
+                seen_categories.add(driver_name)
+                count = driver.get("count", 0)
+                if count < 2:
+                    continue  # skip if only 1 article
+                results.append({
+                    "name": f"이슈 모니터링: {driver_name}",
+                    "status": "neutral",
+                    "value": count,
+                    "detail": f"{driver_name} 관련 뉴스 {count}건 감지 — 관심 필요",
+                    "trend_data": [],
+                    "stock_overlay": [],
+                    "correlation": 0.0,
+                    "corr_label": "",
+                    "thresholds": {},
+                    "source": "뉴스 크롤링",
+                    "importance": 60,
+                    "window": "최근 1~2주",
+                    "why_it_matters": driver.get("why_it_matters", ""),
+                    "expected_condition": "",
+                    "item_score": 50,
+                    "lead_signal": "모니터링",
+                    "news_headlines": driver.get("headlines", []),
+                    "is_news_item": True,
+                })
+        except Exception:
+            pass  # news analysis is best-effort
 
         # Sort by importance (highest correlation first)
         results.sort(key=lambda r: r.get("importance", 0), reverse=True)

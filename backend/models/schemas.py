@@ -1,5 +1,4 @@
-from pydantic import BaseModel
-from datetime import datetime
+from pydantic import BaseModel, Field
 
 
 class Stock(BaseModel):
@@ -13,7 +12,7 @@ class Stock(BaseModel):
 class Sector(BaseModel):
     name: str
     description: str
-    stocks: list[Stock] = []
+    stocks: list[Stock] = Field(default_factory=list)
 
 
 class TechnicalIndicators(BaseModel):

@@ -1,6 +1,8 @@
 import requests
 from bs4 import BeautifulSoup
 import feedparser
+
+from config import settings
 from models.schemas import NewsArticle
 
 
@@ -78,15 +80,17 @@ class NewsCrawlerService:
             return []
 
     @staticmethod
-    def get_sector_news(sector_name: str) -> list[NewsArticle]:
-        """Aggregate news from multiple sources for a sector."""
+    def search_news(keyword: str) -> list[NewsArticle]:
+        """Aggregate news from configured sources for a keyword."""
         articles: list[NewsArticle] = []
 
-        naver_articles = NewsCrawlerService.crawl_naver_news(sector_name)
-        articles.extend(naver_articles)
+        sources = {source.strip().lower() for source in settings.NEWS_SOURCES if source.strip()}
 
-        google_articles = NewsCrawlerService.crawl_google_news_rss(sector_name)
-        articles.extend(google_articles)
+        if "naver" in sources:
+            articles.extend(NewsCrawlerService.crawl_naver_news(keyword))
+
+        if "google" in sources:
+            articles.extend(NewsCrawlerService.crawl_google_news_rss(keyword))
 
         # Deduplicate by title
         seen_titles: set[str] = set()
@@ -97,3 +101,8 @@ class NewsCrawlerService:
                 unique_articles.append(article)
 
         return unique_articles
+
+    @staticmethod
+    def get_sector_news(sector_name: str) -> list[NewsArticle]:
+        """Aggregate news from multiple sources for a sector."""
+        return NewsCrawlerService.search_news(sector_name)

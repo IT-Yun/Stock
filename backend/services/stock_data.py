@@ -1,4 +1,6 @@
 import json
+from pathlib import Path
+
 import yfinance as yf
 import pandas as pd
 from config import settings
@@ -6,6 +8,15 @@ from config import settings
 
 class StockDataService:
     """Service for fetching stock data via yfinance."""
+
+    @staticmethod
+    def _load_sectors() -> list[dict]:
+        """Load sector metadata from the configured JSON file."""
+        try:
+            with Path(settings.SECTOR_DATA_PATH).open("r", encoding="utf-8") as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return []
 
     @staticmethod
     def get_stock_info(ticker: str) -> dict:
@@ -48,10 +59,8 @@ class StockDataService:
     @staticmethod
     def get_sector_stocks(sector_name: str) -> list[dict]:
         """Reads sectors.json and fetches live data for top 3 stocks in a sector."""
-        try:
-            with open(settings.SECTOR_DATA_PATH, "r", encoding="utf-8") as f:
-                sectors_data = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
+        sectors_data = StockDataService._load_sectors()
+        if not sectors_data:
             return []
 
         sector = None
@@ -80,10 +89,8 @@ class StockDataService:
     @staticmethod
     def get_all_sectors() -> list[dict]:
         """Returns all sectors with their top 3 stocks."""
-        try:
-            with open(settings.SECTOR_DATA_PATH, "r", encoding="utf-8") as f:
-                sectors_data = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
+        sectors_data = StockDataService._load_sectors()
+        if not sectors_data:
             return []
 
         results = []

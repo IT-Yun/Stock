@@ -164,12 +164,23 @@ if FRONTEND_DIST.is_dir():
         # Don't intercept API routes
         if full_path.startswith("api/"):
             return {"error": "not found"}
-        # Try to serve the exact file first
+        # Try to serve the exact file first (but NOT stale .js/.css with wrong hash)
         file_path = FRONTEND_DIST / full_path
         if file_path.is_file():
             return FileResponse(str(file_path))
-        # Fallback to index.html for SPA routing
-        return FileResponse(str(FRONTEND_DIST / "index.html"))
+        # If browser requests a hashed asset that no longer exists → 404 (not index.html!)
+        # This prevents serving HTML as JS, which causes parse errors
+        if full_path.startswith("assets/"):
+            return JSONResponse(status_code=404, content={"error": "asset not found"})
+        # SPA fallback: always serve fresh index.html (no-cache so browser gets latest JS refs)
+        from starlette.responses import Response
+        index_path = FRONTEND_DIST / "index.html"
+        content = index_path.read_bytes()
+        return Response(
+            content=content,
+            media_type="text/html",
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache"},
+        )
 else:
     @app.get("/")
     async def root():

@@ -209,66 +209,109 @@ function analyzeFundamentals(earnings: any, patternData: any, checklistLive: any
 
 /* ── Stock checklist & momentum data ── */
 
-const STOCK_META: Record<string, { checklist: string[]; momentum: string[] }> = {
+type MomentumItem = { title: string; detail: string; condition: string };
+const STOCK_META: Record<string, { checklist: string[]; momentum: MomentumItem[] }> = {
   "NVDA": {
     checklist: ["데이터센터 매출 성장률 (QoQ)", "HBM/GPU ASP 추이", "AI 캡엑스 지출 (MSFT/GOOG/META)", "중국 수출 규제 변동", "경쟁사 AMD MI300 점유율"],
-    momentum: ["Blackwell Ultra 출시 (2026 H2)", "데이터센터 캡엑스 $200B+ 지속", "자율주행/로봇 GPU 수요 신규", "중국 규제 완화 가능성"],
+    momentum: [
+      { title: "Blackwell Ultra 출시 (2026 H2)", detail: "차세대 GPU 출시로 데이터센터 교체 수요가 본격화됩니다", condition: "출시 일정이 지켜지고, 주요 고객(MS/Google/Meta)의 사전 주문이 유지되어야 합니다" },
+      { title: "데이터센터 캡엑스 $200B+ 지속", detail: "빅테크 AI 인프라 투자가 계속 확대되고 있어 GPU 수요를 뒷받침합니다", condition: "빅테크 실적 발표에서 AI 캡엑스 가이던스가 유지/상향되어야 합니다" },
+      { title: "자율주행/로봇 GPU 수요 신규", detail: "자동차·로봇 분야에서 새로운 GPU 수요처가 열리고 있습니다", condition: "Tesla FSD, Waymo 등 자율주행 실적이 가시화되어야 합니다" },
+      { title: "중국 규제 완화 가능성", detail: "미중 관계 개선 시 수출 규제 완화로 중국 매출 회복 가능", condition: "미국 정부의 수출 규제 정책 변화 여부를 모니터링해야 합니다" },
+    ],
   },
   "TSM": {
     checklist: ["3nm/2nm 가동률", "웨이퍼 ASP 변동", "월별 매출 공시 (MoM)", "지정학 리스크 (대만 해협)", "CAPEX 집행률"],
-    momentum: ["2nm 양산 시작 (2026)", "미국 애리조나 팹 가동", "AI 수혜 고객사 확대", "CoWoS 패키징 풀가동"],
+    momentum: [
+      { title: "2nm 양산 시작 (2026)", detail: "차세대 2nm 공정 양산이 시작되면 ASP 상승과 점유율 확대가 기대됩니다", condition: "2nm 수율이 목표치에 도달하고, Apple/NVDA 등 핵심 고객 주문이 확정되어야 합니다" },
+      { title: "미국 애리조나 팹 가동", detail: "미국 현지 생산으로 지정학 리스크 완화 + 미국 정부 보조금 수혜", condition: "팹 가동률이 경제성 있는 수준까지 올라야 하며, 인력 확보가 순조로워야 합니다" },
+    ],
   },
   "AVGO": {
     checklist: ["커스텀 AI칩 수주 현황", "VMware 통합 시너지", "네트워킹 매출 비중", "배당 성장률", "Google TPU 계약"],
-    momentum: ["Google TPU v6 대량 수주", "AI 네트워킹 스위치 수요 급증", "VMware 매출 안정화"],
+    momentum: [
+      { title: "Google TPU v6 대량 수주", detail: "Google 커스텀 AI칩 수주가 매출 성장의 핵심 동력입니다", condition: "Google의 AI 인프라 투자가 유지되고, TPU 점유율이 NVDA GPU 대비 확대되어야 합니다" },
+      { title: "AI 네트워킹 스위치 수요 급증", detail: "AI 데이터센터 확장에 필수적인 네트워킹 장비 수요가 폭발적으로 증가 중", condition: "데이터센터 신규 건설 속도가 유지되어야 합니다" },
+    ],
   },
   "000660.KS": {
     checklist: ["DRAM 현물/계약가격 추이", "HBM 출하량/ASP", "재고 수준 (bit growth)", "NVDA HBM 공급 비중", "영업이익률 추이"],
-    momentum: ["HBM4 양산 (2026)", "NVDA HBM 독점 공급 유지", "DRAM 업사이클 진입", "서버 DRAM 가격 상승"],
+    momentum: [
+      { title: "HBM4 양산 (2026)", detail: "차세대 HBM4 양산으로 NVDA 독점 공급 지위를 공고히 합니다", condition: "HBM4 수율이 양산 가능 수준이고, NVDA의 차세대 GPU에 채택이 확정되어야 합니다" },
+      { title: "DRAM 업사이클 진입", detail: "서버 DRAM 가격 상승 사이클이 시작되어 실적 개선이 가속화됩니다", condition: "DRAM 현물가격이 계약가격 대비 프리미엄을 유지해야 합니다. 재고가 쌓이면 사이클이 꺾입니다" },
+    ],
   },
   "005930.KS": {
     checklist: ["DRAM/NAND 가격 추이", "파운드리 수율 개선", "HBM 수율 이슈", "갤럭시 판매량", "자사주 매입"],
-    momentum: ["HBM3E 수율 개선 기대", "파운드리 2nm GAA", "밸류업 프로그램 (주주환원)"],
+    momentum: [
+      { title: "HBM3E 수율 개선 기대", detail: "HBM 수율 문제가 해결되면 NVDA 공급 확대로 실적이 크게 개선됩니다", condition: "HBM3E 수율이 경쟁사(SK하이닉스) 수준까지 올라야 하며, NVDA 인증을 통과해야 합니다" },
+      { title: "밸류업 프로그램 (주주환원)", detail: "자사주 매입·소각으로 주당가치 상승이 기대됩니다", condition: "자사주 매입 규모가 기대 이상이어야 하며, 지속적인 주주환원 정책이 확인되어야 합니다" },
+    ],
   },
   "TSLA": {
     checklist: ["차량 인도량 (QoQ)", "Optimus 로봇 진행상황", "FSD 라이센싱 수익", "마진율 추이", "에너지 사업 매출"],
-    momentum: ["Optimus 2027 공장 투입", "FSD v13 대규모 업데이트", "로보택시 출시", "에너지 저장 사업 폭발적 성장"],
+    momentum: [
+      { title: "Optimus 2027 공장 투입", detail: "휴머노이드 로봇이 공장에 투입되면 로봇 사업의 매출 가시성이 생깁니다", condition: "2027년 일정이 지켜져야 하며, 로봇 성능이 실제 공장 작업에 적합해야 합니다" },
+      { title: "로보택시 출시", detail: "자율주행 택시 서비스가 시작되면 소프트웨어 반복매출이 폭발합니다", condition: "규제 승인과 안전 기록이 확보되어야 하며, 사고 리스크가 통제되어야 합니다" },
+    ],
   },
   "ISRG": {
     checklist: ["다빈치 시술 건수 (QoQ)", "시스템 설치 대수", "반복매출 비중", "경쟁사 진입 여부", "중국 시장 확대"],
-    momentum: ["다빈치 5 신규 설치 가속", "일반외과 적용 확대", "중국/인도 신시장 진출"],
+    momentum: [
+      { title: "다빈치 5 신규 설치 가속", detail: "최신 다빈치 5 시스템 설치가 빨라지면 반복매출(소모품)이 크게 증가합니다", condition: "병원들의 설비 투자 예산이 유지되고, 경쟁 로봇(Medtronic Hugo)이 점유율을 빼앗지 않아야 합니다" },
+    ],
   },
   "CEG": {
     checklist: ["원전 가동률", "전력 계약 가격(PPA)", "Microsoft/Google 전력 계약", "규제 환경 변화", "전력 수요 전망"],
-    momentum: ["AI 데이터센터 전력 수요 폭증", "MS 원전 전력 계약 확정", "전력 가격 상승 추세"],
+    momentum: [
+      { title: "AI 데이터센터 전력 수요 폭증", detail: "AI 데이터센터 확장으로 안정적인 원전 전력 수요가 급증하고 있습니다", condition: "빅테크의 데이터센터 건설 계획이 유지되고, 전력 장기계약(PPA) 가격이 상승 추세여야 합니다" },
+    ],
   },
   "CCJ": {
     checklist: ["우라늄 현물가격", "장기 계약가격", "공급 부족 규모", "카자흐스탄 생산량", "러시아 수출 제재"],
-    momentum: ["우라늄 $100/lb 돌파", "신규 원전 건설 러시", "공급 부족 심화"],
+    momentum: [
+      { title: "우라늄 $100/lb 돌파", detail: "우라늄 가격 상승은 CCJ 매출과 이익에 직결됩니다", condition: "러시아 우라늄 수출 제재가 유지되고, 신규 원전 건설 수주가 계속되어야 합니다" },
+    ],
   },
   "CRWD": {
     checklist: ["ARR 성장률", "고객당 모듈 수", "순유지율(NRR)", "경쟁사 대비 점유율", "보안사고 리스크"],
-    momentum: ["AI 기반 위협탐지 확대", "정부 계약 증가", "플랫폼 통합 가속"],
+    momentum: [
+      { title: "AI 기반 위협탐지 확대", detail: "AI 보안 솔루션 수요가 기존 방화벽을 대체하며 빠르게 성장합니다", condition: "ARR 성장률 30%+ 유지와 신규 모듈 채택률이 증가해야 합니다. 블루스크린 같은 보안사고 재발 시 급락 위험" },
+    ],
   },
   "CRSP": {
     checklist: ["임상시험 진행 단계", "FDA 승인 일정", "적응증 확대 파이프라인", "현금 보유량(런웨이)", "경쟁 유전자치료 동향"],
-    momentum: ["Casgevy FDA 승인 완료", "적응증 확대 (암, 심혈관)", "유전자편집 기술 특허 독점"],
+    momentum: [
+      { title: "Casgevy FDA 승인 완료", detail: "겸상적혈구병 유전자치료제가 FDA 승인을 받아 상업화 매출이 시작됩니다", condition: "보험사 커버리지 확대로 환자 접근성이 높아져야 하고, 경쟁 치료제(블루버드바이오) 대비 효능 우위가 유지되어야 합니다" },
+      { title: "적응증 확대 (암, 심혈관)", detail: "유전자편집 기술을 암·심혈관 질환으로 확장하면 시장이 수십배 커집니다", condition: "임상 2/3상 결과가 긍정적이어야 하며, FDA의 유전자치료 안전성 기준이 강화되지 않아야 합니다" },
+      { title: "유전자편집 기술 특허 독점", detail: "CRISPR 원천기술 특허로 경쟁사 진입을 막고 라이센스 수익이 가능합니다", condition: "특허 소송에서 승리해야 하며, 차세대 편집 기술(프라임 에디팅)이 CRISPR를 대체하지 않아야 합니다" },
+    ],
   },
   "LLY": {
     checklist: ["비만약(GLP-1) 처방 데이터", "분기별 매출 서프라이즈", "파이프라인 임상 결과", "경쟁사(NVO) 동향", "보험 커버리지 확대"],
-    momentum: ["비만약 시장 $100B 성장", "알츠하이머 신약 도나네맙", "경구용 GLP-1 개발"],
+    momentum: [
+      { title: "비만약 시장 $100B 성장", detail: "GLP-1 비만약 시장이 2030년까지 $100B 이상으로 성장할 전망입니다", condition: "보험사 커버리지 확대 + 공급 부족 해소가 필요합니다. 노보노디스크와의 경쟁에서 점유율을 지켜야 합니다" },
+      { title: "알츠하이머 신약 도나네맙", detail: "알츠하이머 치료제 시장은 연간 $10B+ 규모로, 승인 시 큰 매출원이 됩니다", condition: "임상 데이터가 경쟁약(레카네맙) 대비 우월해야 하며, 보험 급여가 확대되어야 합니다" },
+    ],
   },
   "IONQ": {
     checklist: ["큐비트 수 로드맵 진척", "매출 증가율", "현금 소진율", "정부/기업 계약", "기술적 마일스톤"],
-    momentum: ["양자 우위 달성 임박", "미 국방부 계약", "AQ64 시스템 상용화"],
+    momentum: [
+      { title: "양자 우위 달성 임박", detail: "양자 컴퓨터가 기존 슈퍼컴퓨터를 넘는 순간 시장이 폭발합니다", condition: "큐비트 수 로드맵이 지켜지고, 오류율이 실용 수준으로 낮아져야 합니다. 현금이 바닥나기 전에 성과를 내야 합니다" },
+    ],
   },
   "RKLB": {
     checklist: ["발사 횟수/성공률", "Neutron 로켓 개발 진척", "우주시스템 매출 비중", "수주잔고", "경쟁사(SpaceX) 동향"],
-    momentum: ["Neutron 첫 발사 예정", "우주 시스템 매출 급증", "발사 빈도 증가"],
+    momentum: [
+      { title: "Neutron 첫 발사 예정", detail: "중형 로켓 Neutron 성공 시 발사 시장 점유율이 크게 확대됩니다", condition: "발사 일정이 지켜지고, 첫 발사가 성공해야 합니다. 실패 시 주가 30%+ 급락 위험" },
+    ],
   },
   "BE": {
     checklist: ["SOFC 주문 잔고", "매출총이익률 추이", "AI 데이터센터 계약", "수소 전환 로드맵", "정부 보조금 현황"],
-    momentum: ["AI 데이터센터 분산전원 계약", "흑자 전환 임박", "마이크로그리드 수요"],
+    momentum: [
+      { title: "AI 데이터센터 분산전원 계약", detail: "데이터센터가 그리드 전력 부족으로 분산전원(연료전지)을 도입하고 있습니다", condition: "대형 데이터센터 계약이 추가되어야 하며, 전력 단가가 그리드 대비 경쟁력을 가져야 합니다" },
+      { title: "흑자 전환 임박", detail: "매출 확대와 원가 개선으로 흑자 전환이 예상됩니다", condition: "매출총이익률이 25%+ 유지되고, 운영비 증가를 통제해야 합니다" },
+    ],
   },
 };
 
@@ -277,7 +320,10 @@ function getStockMeta(ticker: string) {
   if (meta) return meta;
   return {
     checklist: ["분기 실적 발표 확인", "경쟁사 대비 밸류에이션", "산업 성장률 전망", "규제 환경 변화"],
-    momentum: ["실적 발표 예정", "산업 트렌드 수혜"],
+    momentum: [
+      { title: "분기 실적 발표 예정", detail: "다음 분기 실적이 시장 기대치를 충족하는지가 핵심입니다", condition: "매출 성장률과 이익률이 전분기 대비 개선되어야 합니다" },
+      { title: "산업 트렌드 수혜", detail: "해당 산업의 구조적 성장이 이 종목의 실적으로 이어지고 있습니다", condition: "산업 성장률이 유지되고, 경쟁사 대비 점유율이 유지/확대되어야 합니다" },
+    ],
   };
 }
 
@@ -403,10 +449,10 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
   const overall = scoreToVerdict(overallScore100);
   const momentumNotes = checklistLive?.summary?.momentum_notes?.length
     ? checklistLive.summary.momentum_notes
-    : meta.momentum.map((text) => ({
-        title: text,
-        detail: text,
-        expected_condition: "핵심 지표가 기대 수준을 유지해야 주가가 이를 선반영할 수 있습니다.",
+    : meta.momentum.map((m) => ({
+        title: typeof m === "string" ? m : m.title,
+        detail: typeof m === "string" ? "" : m.detail,
+        expected_condition: typeof m === "string" ? "" : m.condition,
         window: "향후 1~3개월",
         status: "neutral",
       }));

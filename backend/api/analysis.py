@@ -2649,9 +2649,16 @@ async def get_checklist_live(ticker: str) -> dict:
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
     cache_key = f"checklist-live:{ticker}"
-    cached = _get_cached_ttl(cache_key, 86400)  # 24 hours — update once per day
+    cached = _get_cached_ttl(cache_key, 86400)  # 24 hours for good data
     if cached is not None:
-        return cached
+        # If it was a rate-limited fallback, only cache 5 min
+        if cached.get("rate_limited"):
+            if time.time() - _ANALYSIS_CACHE[cache_key][0] > 300:
+                pass  # Expired fallback — retry below
+            else:
+                return cached
+        else:
+            return cached
 
     # Also keep a "last good" cache that never expires, for rate limit fallback
     stale_key = f"checklist-stale:{ticker}"
@@ -2667,7 +2674,38 @@ async def get_checklist_live(ticker: str) -> dict:
             stale = _ANALYSIS_CACHE.get(stale_key)
             if stale:
                 return stale[1]
-            return {"ticker": ticker, "checklist": [], "error": "Rate limited — please try again later"}
+            # Fallback: generate basic checklist from news only (no yfinance needed)
+            fallback_items = []
+            try:
+                news_drivers = _extract_news_drivers(ticker, sector_id=_infer_sector_id_from_profile(ticker))
+                for driver in news_drivers[:5]:
+                    fallback_items.append({
+                        "name": driver["name"],
+                        "status": "neutral",
+                        "value": None,
+                        "detail": f"뉴스 {driver['count']}건 감지",
+                        "trend_data": [],
+                        "stock_overlay": [],
+                        "correlation": 0.0,
+                        "corr_label": "",
+                        "thresholds": {},
+                        "source": "뉴스 기반 분석",
+                        "importance": 60,
+                        "window": "향후 1~3개월",
+                        "why_it_matters": driver.get("why_it_matters", ""),
+                        "expected_condition": "",
+                        "quarterly_chart": [],
+                        "preliminary_data": {},
+                        "news_headlines": driver.get("headlines", []),
+                    })
+            except Exception:
+                pass
+            if not fallback_items:
+                fallback_items = [{"name": "데이터 수집 대기 중", "status": "neutral", "value": None, "detail": "잠시 후 다시 시도해주세요", "trend_data": [], "stock_overlay": [], "correlation": 0, "corr_label": "", "thresholds": {}, "source": "", "importance": 50, "window": "", "why_it_matters": "yfinance API 제한으로 데이터 수집이 지연되고 있습니다", "expected_condition": "", "quarterly_chart": [], "preliminary_data": {}, "news_headlines": []}]
+            response = {"ticker": ticker.upper(), "checklist": fallback_items, "summary": {"score": None, "momentum_notes": [], "live_impact_news": []}, "rate_limited": True}
+            # Short cache — retry in 5 min
+            _ANALYSIS_CACHE[cache_key] = (time.time(), response)
+            return response
         sector_id = _infer_sector_id_from_profile(ticker, info=info)
         if not sources:
             sources = _build_dynamic_checklist_sources(ticker, info=info)

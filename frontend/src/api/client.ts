@@ -266,3 +266,13 @@ export async function fetchMacroEvents(): Promise<any> {
   const res = await dedupedGet("/analysis/macro-events");
   return res.data;
 }
+
+export async function fetchRefreshStatus(): Promise<any> {
+  const res = await api.get("/refresh-status");
+  return res.data;
+}
+
+export async function triggerRefreshNow(): Promise<any> {
+  const res = await api.post("/refresh-now");
+  return res.data;
+}

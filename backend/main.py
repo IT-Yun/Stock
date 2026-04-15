@@ -114,11 +114,97 @@ def _keep_alive():
             pass
 
 
+# ── Daily auto-refresh: updates all stock scores & data once per day ──
+_last_daily_refresh: dict = {"ts": None, "status": "idle", "stocks_updated": 0, "errors": 0}
+
+def _daily_refresh_worker():
+    """Background thread: refresh all stock data once per day (KST 06:00)."""
+    import time
+    from datetime import datetime, timezone, timedelta
+
+    KST = timezone(timedelta(hours=9))
+
+    while True:
+        now = datetime.now(KST)
+        # Calculate next 06:00 KST
+        target = now.replace(hour=6, minute=0, second=0, microsecond=0)
+        if now >= target:
+            target += timedelta(days=1)
+        wait_secs = (target - now).total_seconds()
+        print(f"[DAILY-REFRESH] Next refresh at {target.strftime('%Y-%m-%d %H:%M KST')} (in {wait_secs/3600:.1f}h)")
+        time.sleep(wait_secs)
+
+        _run_daily_refresh()
+
+
+def _run_daily_refresh():
+    """Execute the daily refresh: clear caches and re-score all stocks."""
+    from datetime import datetime, timezone, timedelta
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    KST = timezone(timedelta(hours=9))
+    _last_daily_refresh["status"] = "running"
+    _last_daily_refresh["ts"] = datetime.now(KST).isoformat()
+    print("[DAILY-REFRESH] Starting daily refresh...")
+
+    try:
+        from api.analysis import (
+            TOP_PICK_SECTOR_MAP, _ANALYSIS_CACHE, get_top_ranked,
+            get_technical_prediction, StockDataService, CommodityDataService,
+        )
+
+        # 1. Clear stale caches
+        stale_keys = [k for k in _ANALYSIS_CACHE if k.startswith(("top-ranked", "checklist:", "move-reasons:"))]
+        for k in stale_keys:
+            _ANALYSIS_CACHE.pop(k, None)
+        print(f"[DAILY-REFRESH] Cleared {len(stale_keys)} stale cache entries")
+
+        # 2. Refresh commodities
+        try:
+            CommodityDataService.get_commodity_prices()
+            print("[DAILY-REFRESH] Commodities refreshed")
+        except Exception as e:
+            print(f"[DAILY-REFRESH] Commodity refresh failed: {e}")
+
+        # 3. Refresh stock data for all tracked tickers (sequentially to avoid rate limits)
+        all_tickers = list(TOP_PICK_SECTOR_MAP.keys())
+        updated = 0
+        errors = 0
+        import time
+
+        for ticker in all_tickers:
+            try:
+                StockDataService.get_stock_history(ticker, period="3mo")
+                updated += 1
+                time.sleep(0.5)  # Rate limit protection
+            except Exception:
+                errors += 1
+
+        print(f"[DAILY-REFRESH] Stock data: {updated} updated, {errors} errors")
+
+        # 4. Regenerate top-ranked scores
+        try:
+            get_top_ranked()
+            print("[DAILY-REFRESH] Top-ranked regenerated")
+        except Exception as e:
+            print(f"[DAILY-REFRESH] Top-ranked failed: {e}")
+
+        _last_daily_refresh["stocks_updated"] = updated
+        _last_daily_refresh["errors"] = errors
+        _last_daily_refresh["status"] = "done"
+        print(f"[DAILY-REFRESH] Complete! {updated}/{len(all_tickers)} stocks updated")
+
+    except Exception as e:
+        _last_daily_refresh["status"] = f"error: {e}"
+        print(f"[DAILY-REFRESH] FAILED: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: warm cache in background thread (non-blocking)
     threading.Thread(target=_warmup_cache, daemon=True).start()
     threading.Thread(target=_keep_alive, daemon=True).start()
+    threading.Thread(target=_daily_refresh_worker, daemon=True).start()
     yield
 
 
@@ -149,6 +235,21 @@ app.include_router(news_router)
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/api/refresh-status")
+async def refresh_status():
+    """Check when the last daily data refresh happened."""
+    return _last_daily_refresh
+
+
+@app.post("/api/refresh-now")
+async def refresh_now():
+    """Manually trigger a full data refresh (admin only)."""
+    if _last_daily_refresh["status"] == "running":
+        return {"message": "이미 새로고침 진행 중입니다."}
+    threading.Thread(target=_run_daily_refresh, daemon=True).start()
+    return {"message": "새로고침을 시작했습니다. /api/refresh-status에서 진행상황을 확인하세요."}
 
 
 # ── Serve frontend static files (production build) ──

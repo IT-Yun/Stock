@@ -1507,6 +1507,21 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                   <div className="mt-3 h-20 bg-[var(--color-bg-hover)] rounded animate-pulse" />
                 </div>
               ))}
+              {/* Show missing meta items as "pending" when live checklist has fewer items */}
+              {checklistLive?.checklist && (() => {
+                const liveNames = new Set((checklistLive.checklist as any[]).map((c: any) => c.name?.toLowerCase()));
+                const missing = meta.checklist.filter((item) => !liveNames.has(item.toLowerCase()));
+                if (missing.length === 0) return null;
+                return missing.map((item, i) => (
+                  <div key={`meta-${i}`} className="rounded-xl p-4 bg-[var(--color-bg-primary)] border border-[var(--color-border)] opacity-60">
+                    <div className="flex items-center gap-2">
+                      <MinusCircle size={16} className="text-[var(--color-text-muted)]" />
+                      <span className="text-sm text-[var(--color-text-secondary)]">{item}</span>
+                      <span className="text-[9px] text-[var(--color-text-muted)] ml-auto">데이터 수집 중</span>
+                    </div>
+                  </div>
+                ));
+              })()}
             </div>
           </div>
 

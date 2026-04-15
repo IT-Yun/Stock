@@ -393,32 +393,24 @@ export default function SectorMindMap() {
             style={{ boxShadow: "0 12px 40px rgba(0,0,0,0.35)" }}
           >
             <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-xl flex items-center justify-center bg-white/5 border border-white/10">
-                <Search size={16} className="text-[var(--color-text-secondary)]" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--color-text-muted)]">빠른 진입</p>
-                <input
-                  value={query}
-                  onChange={(e) => {
-                    setQuery(e.target.value);
-                    setSearchOpen(true);
-                  }}
-                  onFocus={() => setSearchOpen(true)}
-                  onBlur={() => window.setTimeout(() => setSearchOpen(false), 150)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && searchResults[0]) {
-                        openStock(searchResults[0]);
-                      }
-                    }}
-                  placeholder="티커 또는 종목명 검색 (예: NVDA, 삼성전자, SK하이닉스)"
-                  className="w-full bg-transparent text-sm text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] outline-none mt-1"
-                />
-              </div>
+              <Search size={16} className="text-[var(--color-text-muted)] shrink-0" />
+              <input
+                value={query}
+                onChange={(e) => {
+                  setQuery(e.target.value);
+                  setSearchOpen(true);
+                }}
+                onFocus={() => setSearchOpen(true)}
+                onBlur={() => window.setTimeout(() => setSearchOpen(false), 150)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && searchResults[0]) {
+                    openStock(searchResults[0]);
+                  }
+                }}
+                placeholder="AI 분석 개별종목 검색"
+                className="w-full bg-transparent text-sm text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] outline-none"
+              />
             </div>
-            <p className="text-[10px] text-[var(--color-text-muted)] mt-2 pl-12">
-              미국/한국 전체 종목을 검색해서 바로 실시간 분석으로 진입합니다.
-            </p>
           </div>
 
           {searchOpen && normalizedQuery && (

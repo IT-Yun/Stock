@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: stock-analyzer
+    runtime: python
+    buildCommand: bash build.sh
+    startCommand: cd backend && python main.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11"
+      - key: NODE_VERSION
+        value: "20"
+    healthCheckPath: /health

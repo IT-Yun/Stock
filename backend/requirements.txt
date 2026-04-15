@@ -1,7 +1,6 @@
 fastapi
-uvicorn
+uvicorn[standard]
 yfinance
-finance-datareader
 pandas
 numpy
 requests

@@ -10,7 +10,7 @@ from models.schemas import NewsArticle
 
 
 _NEWS_CACHE: dict[str, tuple[float, object]] = {}
-NEWS_CACHE_TTL = 900
+NEWS_CACHE_TTL = 180  # 3분 — 뉴스는 실시간이 중요, rate limit 없음
 
 
 def _get_cached(key: str):

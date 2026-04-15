@@ -148,7 +148,7 @@ def _build_stock_news_queries(ticker: str, info: dict | None = None, sector_id: 
 
 def _extract_news_drivers(ticker: str, info: dict | None = None, sector_id: str | None = None) -> list[dict]:
     cache_key = f"news-drivers:{_ticker_key(ticker)}"
-    cached = _get_cached_ttl(cache_key, 900)
+    cached = _get_cached_ttl(cache_key, 180)  # 3분 — 뉴스는 실시간
     if cached is not None:
         return cached
 
@@ -332,11 +332,15 @@ def _explain_live_article_impact(title: str, ticker: str, sector_id: str | None)
 
 def _extract_live_impact_news(ticker: str, info: dict | None = None, sector_id: str | None = None) -> list[dict]:
     cache_key = f"live-impact-news:{_ticker_key(ticker)}"
-    cached = _get_cached_ttl(cache_key, 900)
+    cached = _get_cached_ttl(cache_key, 180)  # 3분 — 뉴스는 실시간
     if cached is not None:
         return cached
 
     company_name = str((info or {}).get("shortName") or (info or {}).get("longName") or ticker).strip()
+    cached_news = _get_cached_ttl(cache_key, 180)  # 3분 — 뉴스 실시간
+    if cached_news is not None:
+        return cached_news
+
     candidates = []
     seen_titles = set()
     for query in _build_stock_news_queries(ticker, info=info, sector_id=sector_id):

@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Factory, Search, X } from "lucide-react";
 import { SECTORS, normalizeWeights } from "@/data/sectors";
 import type { SectorDef } from "@/data/sectors";
-import { searchStocks } from "@/api/client";
+import { searchStocks, fetchChartData, fetchAnalysis, fetchChecklistLive, fetchEarnings, fetchNews } from "@/api/client";
 
 const SectorDetailPage = lazy(() => import("./SectorDetailPage"));
 
@@ -63,7 +63,7 @@ function getEvalCriteria(ticker: string, sectorName: string) {
 /* ───────────────────────── COMPONENT ───────────────────────── */
 
 export default function SectorMindMap() {
-  const [year, setYear] = useState(10);
+  const [year, setYear] = useState(1); // 2026년 기본값
   const [selected, setSelected] = useState<SectorDef | null>(null);
   const [hovered, setHovered] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -146,6 +146,12 @@ export default function SectorMindMap() {
     sectorId: string;
   }>(null);
 
+  // Analysis loading progress
+  const [analysisProgress, setAnalysisProgress] = useState(0);
+  const [analysisStage, setAnalysisStage] = useState("");
+  const [, setAnalysisReady] = useState(false);
+  const analysisAbortRef = useRef(false);
+
   const openStock = useCallback((stock: { ticker: string; name: string; sectorName: string; sectorId?: string; flag?: "KR" | "US" }) => {
     setQuery("");
     setSearchOpen(false);
@@ -153,29 +159,14 @@ export default function SectorMindMap() {
     const resolvedSectorId = (stock as any).sector_id ?? stock.sectorId;
     const resolvedFlag = stock.flag ?? (stock.ticker.endsWith(".KS") || stock.ticker.endsWith(".KQ") ? "KR" : "US");
 
-    // For top-pick stocks that belong to a sector, navigate to sector page
+    // For top-pick stocks, navigate directly to sector page
     const isTopPick = SECTORS.some(s => s.picks.some(p => p.ticker === stock.ticker));
     if (isTopPick && resolvedSectorId) {
-      const criteria = getEvalCriteria(stock.ticker, resolvedSectorName);
-      setEvaluatingStock({
-        ticker: stock.ticker,
-        name: stock.name,
-        sectorName: resolvedSectorName,
-        criteria,
-        sectorId: resolvedSectorId,
-        flag: resolvedFlag as "KR" | "US",
-      });
-      if (navigationTimeoutRef.current !== null) {
-        window.clearTimeout(navigationTimeoutRef.current);
-      }
-      navigationTimeoutRef.current = window.setTimeout(() => {
-        setEvaluatingStock(null);
-        navigate(`/sector/${resolvedSectorId}?stock=${encodeURIComponent(stock.ticker)}`);
-      }, 1400);
+      navigate(`/sector/${resolvedSectorId}?stock=${encodeURIComponent(stock.ticker)}`);
       return;
     }
 
-    // For non-top-pick stocks: show analysis in modal popup
+    // For non-top-pick stocks: show loading screen, pre-fetch data, then show modal
     const criteria = getEvalCriteria(stock.ticker, resolvedSectorName);
     setEvaluatingStock({
       ticker: stock.ticker,
@@ -185,20 +176,51 @@ export default function SectorMindMap() {
       sectorId: resolvedSectorId,
       flag: resolvedFlag as "KR" | "US",
     });
-    if (navigationTimeoutRef.current !== null) {
-      window.clearTimeout(navigationTimeoutRef.current);
-    }
-    navigationTimeoutRef.current = window.setTimeout(() => {
+    setAnalysisProgress(0);
+    setAnalysisStage("기본 정보 수집 중...");
+    setAnalysisReady(false);
+    analysisAbortRef.current = false;
+
+    // Pre-fetch all data with progress tracking
+    const t = stock.ticker;
+    const sectorId = resolvedSectorId || SECTORS[0].id;
+    const steps = [
+      { label: "주가 차트 데이터 수집 중...", weight: 25, fn: () => fetchChartData(t, "3mo") },
+      { label: "기술적 지표 분석 중...", weight: 20, fn: () => fetchAnalysis(t) },
+      { label: "실적 및 재무 데이터 수집 중...", weight: 20, fn: () => fetchEarnings(t) },
+      { label: "실시간 뉴스 수집 및 분석 중...", weight: 15, fn: () => fetchNews(resolvedSectorName).catch(() => []) },
+      { label: "투자 체크리스트 생성 중...", weight: 20, fn: () => fetchChecklistLive(t).catch(() => null) },
+    ];
+
+    let completed = 0;
+    (async () => {
+      for (const step of steps) {
+        if (analysisAbortRef.current) return;
+        setAnalysisStage(step.label);
+        try {
+          await step.fn();
+        } catch {
+          // Continue even if one step fails
+        }
+        completed += step.weight;
+        setAnalysisProgress(Math.min(completed, 99));
+      }
+      if (analysisAbortRef.current) return;
+      setAnalysisProgress(100);
+      setAnalysisStage("분석 완료!");
+
+      // Brief pause at 100% then show results
+      await new Promise(r => setTimeout(r, 500));
+      if (analysisAbortRef.current) return;
+
       setEvaluatingStock(null);
-      // Set URL params for SectorDetailPage to pick up (without navigation)
-      const sectorId = resolvedSectorId || SECTORS[0].id;
+      setAnalysisReady(true);
       setModalStock({
         ticker: stock.ticker,
         name: stock.name,
         flag: resolvedFlag as "KR" | "US",
         sectorId,
       });
-      // Update URL without navigation so SectorDetailPage can read params
       const params = new URLSearchParams({
         stock: stock.ticker,
         name: stock.name,
@@ -206,7 +228,7 @@ export default function SectorMindMap() {
         dynamic: "1",
       });
       window.history.replaceState(null, "", `/sector/${sectorId}?${params.toString()}`);
-    }, 1400);
+    })();
   }, [navigate]);
 
   return (
@@ -450,41 +472,85 @@ export default function SectorMindMap() {
         </div>
 
         {evaluatingStock && (
-          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/45 backdrop-blur-sm px-4">
+          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/55 backdrop-blur-md px-4">
             <div
-              className="w-full max-w-md rounded-3xl border border-white/10 glass px-6 py-6"
-              style={{ boxShadow: "0 24px 80px rgba(0,0,0,0.45)" }}
+              className="w-full max-w-lg rounded-3xl border border-white/10 glass px-8 py-8"
+              style={{ boxShadow: "0 24px 80px rgba(0,0,0,0.55)" }}
             >
-              <p className="text-[11px] uppercase tracking-[0.22em] text-[var(--color-text-muted)]">
-                AI Live Analysis
+              {/* Close button */}
+              <button
+                onClick={() => { analysisAbortRef.current = true; setEvaluatingStock(null); }}
+                className="absolute top-4 right-4 w-8 h-8 rounded-lg flex items-center justify-center text-[var(--color-text-muted)] hover:text-white hover:bg-white/10 transition-all"
+              >
+                <X size={16} />
+              </button>
+
+              <p className="text-[11px] uppercase tracking-[0.22em] text-[var(--color-accent-blue)]">
+                AI Deep Analysis
               </p>
-              <h3 className="text-xl font-bold text-[var(--color-text-primary)] mt-2">
-                {evaluatingStock.name} 분석 중
+              <h3 className="text-2xl font-black text-[var(--color-text-primary)] mt-2">
+                {evaluatingStock.name}
               </h3>
-              <p className="text-sm text-[var(--color-text-secondary)] mt-2">
-                AI 분석을 시작합니다. 종목을 실시간으로 분석해서 알려드리겠습니다.
-              </p>
-              <p className="text-[11px] text-[var(--color-text-muted)] mt-2">
+              <p className="text-sm text-[var(--color-text-muted)] mt-1">
                 {evaluatingStock.ticker} · {evaluatingStock.sectorName}
               </p>
 
-              <div className="mt-5 space-y-2">
-                {evaluatingStock.criteria.map((criterion, index) => (
+              {/* Progress bar */}
+              <div className="mt-6">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs text-[var(--color-text-secondary)] font-medium">{analysisStage}</span>
+                  <span className="text-sm font-black text-[var(--color-accent-blue)]">{analysisProgress}%</span>
+                </div>
+                <div className="h-2.5 rounded-full bg-white/8 overflow-hidden">
                   <div
-                    key={criterion}
-                    className="rounded-xl px-4 py-3 bg-white/5 border border-white/8"
-                    style={{ animation: `fadeInUp 0.35s ease-out ${index * 0.08}s both` }}
-                  >
-                    <p className="text-sm text-[var(--color-text-primary)]">{criterion}</p>
-                  </div>
-                ))}
+                    className="h-full rounded-full transition-all duration-500 ease-out"
+                    style={{
+                      width: `${analysisProgress}%`,
+                      background: analysisProgress >= 100
+                        ? "linear-gradient(90deg, #22c55e, #16a34a)"
+                        : "linear-gradient(90deg, #3b82f6, #8b5cf6)",
+                    }}
+                  />
+                </div>
               </div>
 
-              <div className="mt-5 h-1.5 rounded-full bg-white/8 overflow-hidden">
-                <div
-                  className="h-full rounded-full bg-[linear-gradient(90deg,#3b82f6,#22c55e)]"
-                  style={{ width: "100%", animation: "progressLoad 1.3s ease-out" }}
-                />
+              {/* Analysis steps */}
+              <div className="mt-5 space-y-2">
+                {[
+                  { label: "주가 차트 수집", threshold: 25 },
+                  { label: "기술적 지표 분석", threshold: 45 },
+                  { label: "재무 데이터 분석", threshold: 65 },
+                  { label: "뉴스 수집 및 감성 분석", threshold: 80 },
+                  { label: "투자 체크리스트 생성", threshold: 100 },
+                ].map((step) => {
+                  const done = analysisProgress >= step.threshold;
+                  const active = !done && analysisProgress >= step.threshold - 25;
+                  return (
+                    <div
+                      key={step.label}
+                      className="flex items-center gap-3 rounded-xl px-4 py-2.5 transition-all duration-300"
+                      style={{
+                        background: done ? "rgba(34,197,94,0.08)" : active ? "rgba(59,130,246,0.08)" : "rgba(255,255,255,0.02)",
+                        border: `1px solid ${done ? "rgba(34,197,94,0.2)" : active ? "rgba(59,130,246,0.2)" : "rgba(255,255,255,0.05)"}`,
+                      }}
+                    >
+                      <div className="w-5 h-5 rounded-full flex items-center justify-center shrink-0" style={{
+                        background: done ? "#22c55e" : active ? "#3b82f6" : "rgba(255,255,255,0.1)",
+                      }}>
+                        {done ? (
+                          <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6L5 8.5L9.5 3.5" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                        ) : active ? (
+                          <div className="w-2 h-2 rounded-full bg-white animate-pulse" />
+                        ) : (
+                          <div className="w-2 h-2 rounded-full bg-white/30" />
+                        )}
+                      </div>
+                      <span className={`text-sm ${done ? "text-[#22c55e] font-semibold" : active ? "text-[var(--color-text-primary)] font-medium" : "text-[var(--color-text-muted)]"}`}>
+                        {step.label}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           </div>

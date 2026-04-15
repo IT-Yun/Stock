@@ -205,10 +205,22 @@ def _extract_news_drivers(ticker: str, info: dict | None = None, sector_id: str 
     return results
 
 
+SPAM_KEYWORDS = [
+    "축제", "festival", "관광", "tourism", "날씨", "weather", "맛집", "restaurant",
+    "부동산", "아파트", "분양", "결혼", "wedding", "여행", "travel", "스포츠", "sports",
+    "연예", "celebrity", "드라마", "drama", "게임", "gaming", "recipe", "요리",
+    "lottery", "로또", "점술", "운세", "horoscope", "사건사고", "crime",
+]
+
+
 def _score_live_article_impact(title: str, ticker: str, company_name: str, sector_id: str | None) -> int:
     """Score article relevance. MUST contain company name or ticker to score above threshold."""
     text = (title or "").lower()
     score = 0
+
+    # Reject spam/irrelevant articles immediately
+    if any(spam in text for spam in SPAM_KEYWORDS):
+        return 0
 
     # Hard requirement: article must mention the company or ticker
     company_lower = (company_name or "").lower().strip()

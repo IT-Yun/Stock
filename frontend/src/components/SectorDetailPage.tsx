@@ -542,10 +542,18 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
       )}
 
       {loading ? (
-        <div className="space-y-4">
-          <div className="h-48 bg-[var(--color-bg-card)] rounded-2xl animate-pulse" />
-          <div className="h-32 bg-[var(--color-bg-card)] rounded-2xl animate-pulse" />
-          <div className="h-32 bg-[var(--color-bg-card)] rounded-2xl animate-pulse" />
+        <div className="flex flex-col items-center justify-center py-16 space-y-4">
+          <div className="w-14 h-14 rounded-2xl flex items-center justify-center" style={{ background: `${sectorColor}15`, border: `2px solid ${sectorColor}30` }}>
+            <Activity size={24} style={{ color: sectorColor }} className="animate-pulse" />
+          </div>
+          <div className="text-center">
+            <p className="text-lg font-bold text-[var(--color-text-primary)]">AI 분석 중...</p>
+            <p className="text-sm text-[var(--color-text-muted)] mt-1">{pick.name} ({pick.ticker})</p>
+            <p className="text-xs text-[var(--color-text-muted)] mt-2">차트, 뉴스, 재무, 체크리스트를 종합 분석하고 있습니다</p>
+          </div>
+          <div className="w-48 h-1.5 rounded-full bg-[var(--color-bg-hover)] overflow-hidden">
+            <div className="h-full rounded-full" style={{ background: `linear-gradient(90deg, ${sectorColor}, ${sectorColor}88)`, width: "100%", animation: "progressLoad 2s ease-in-out infinite" }} />
+          </div>
         </div>
       ) : (
         <>

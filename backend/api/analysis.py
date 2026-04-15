@@ -2215,7 +2215,7 @@ def _compute_symbol_trend_snapshot(symbol: str, positive_if: str) -> dict:
 
 
 @router.get("/analysis/{ticker}")
-async def get_analysis(ticker: str) -> AnalysisResult:
+def get_analysis(ticker: str) -> AnalysisResult:
     """Full technical analysis with buy/sell signal for a ticker."""
     cache_key = f"analysis:{_ticker_key(ticker)}"
 
@@ -2252,7 +2252,7 @@ async def get_analysis(ticker: str) -> AnalysisResult:
 
 
 @router.get("/analysis/{ticker}/trading-targets")
-async def get_trading_targets(ticker: str) -> dict:
+def get_trading_targets(ticker: str) -> dict:
     """
     Calculate precise buy/sell/stop targets using multi-indicator analysis.
     Uses: Support/Resistance levels, Fibonacci retracement, RSI zones,
@@ -2616,7 +2616,7 @@ async def get_trading_targets(ticker: str) -> dict:
 
 
 @router.get("/analysis/{ticker}/chart-data")
-async def get_chart_data(ticker: str, period: str = "3mo") -> dict:
+def get_chart_data(ticker: str, period: str = "3mo") -> dict:
     """OHLCV data with ALL indicator overlays inlined per data point."""
     cache_key = f"chart-data:{_ticker_key(ticker)}:{period}"
     cached = _get_best_cached(cache_key, 1800)
@@ -2688,7 +2688,7 @@ async def get_chart_data(ticker: str, period: str = "3mo") -> dict:
 
 
 @router.get("/analysis/{ticker}/earnings")
-async def get_earnings(ticker: str) -> dict:
+def get_earnings(ticker: str) -> dict:
     """Get earnings and valuation data with cached fallbacks.
 
     Avoid depending on yfinance stock.info for Korean stocks because that is the
@@ -2779,7 +2779,7 @@ async def get_earnings(ticker: str) -> dict:
 
 
 @router.get("/analysis/{ticker}/pattern")
-async def get_pattern_analysis(ticker: str) -> dict:
+def get_pattern_analysis(ticker: str) -> dict:
     """
     Historical pattern analysis:
     - Find significant price moves in history
@@ -2978,7 +2978,7 @@ async def get_pattern_analysis(ticker: str) -> dict:
 
 
 @router.get("/analysis/{ticker}/prediction")
-async def get_prediction(ticker: str) -> dict:
+def get_prediction(ticker: str) -> dict:
     """
     Comprehensive 50+ technical indicator analysis with future price prediction.
     Analyses: trend, momentum, volatility, volume, oscillators, pattern, support/resistance.
@@ -3615,7 +3615,7 @@ def _build_ma_reason(titles: list[str], pct: float) -> str:
 
 
 @router.get("/analysis/{ticker}/move-reasons")
-async def get_move_reasons(ticker: str, period: str = "3mo") -> dict:
+def get_move_reasons(ticker: str, period: str = "3mo") -> dict:
     """
     Find significant price moves and search for specific news/reasons for each date.
     For each big move, directly searches Naver & Google News around that date
@@ -4037,7 +4037,7 @@ CHECKLIST_SOURCES = {
 
 
 @router.get("/analysis/{ticker}/checklist-live")
-async def get_checklist_live(ticker: str) -> dict:
+def get_checklist_live(ticker: str) -> dict:
     """
     Return live checklist data with:
     - Real price data & sparklines for each item
@@ -4699,7 +4699,7 @@ async def get_checklist_live(ticker: str) -> dict:
 
 
 @router.get("/analysis/stock-search/{query}")
-async def search_stocks(query: str) -> dict:
+def search_stocks(query: str) -> dict:
     cache_key = f"stock-search:{query.strip().lower()}"
     cached = _get_cached_ttl(cache_key, 600)
     if cached is not None:
@@ -4791,7 +4791,7 @@ async def search_stocks(query: str) -> dict:
 
 
 @router.get("/analysis/sector/{sector_id}/pulse")
-async def get_sector_pulse(sector_id: str) -> dict:
+def get_sector_pulse(sector_id: str) -> dict:
     cache_key = f"sector-pulse:{sector_id}"
     cached = _get_best_cached(cache_key, 600)
     if cached is not None:
@@ -4857,7 +4857,7 @@ async def get_sector_pulse(sector_id: str) -> dict:
 
 
 @router.get("/commodities/history/{symbol}")
-async def get_commodity_history(symbol: str, period: str = "6mo") -> dict:
+def get_commodity_history(symbol: str, period: str = "6mo") -> dict:
     """Get commodity price history for charting."""
     try:
         hist = StockDataService.get_stock_history(symbol, period=period)
@@ -4877,13 +4877,13 @@ async def get_commodity_history(symbol: str, period: str = "6mo") -> dict:
 
 
 @router.get("/analysis/rankings/top-ranked")
-async def get_top_ranked_rankings() -> dict:
+def get_top_ranked_rankings() -> dict:
     """Stable rankings endpoint that does not collide with /analysis/{ticker}."""
-    return await get_top_ranked()
+    return get_top_ranked()
 
 
 @router.get("/analysis/top-ranked")
-async def get_top_ranked() -> dict:
+def get_top_ranked() -> dict:
     """Return top 10 stocks ranked by composite score (cached 10 min).
     Uses cached chart data (from StockDataService) instead of direct yfinance
     to avoid rate limiting on Render."""
@@ -4997,13 +4997,13 @@ async def get_top_ranked() -> dict:
 
 
 @router.get("/commodities")
-async def get_commodities() -> list[CommodityPrice]:
+def get_commodities() -> list[CommodityPrice]:
     """Get all tracked commodity prices."""
     return CommodityDataService.get_commodity_prices()
 
 
 @router.get("/commodities/{sector_name}")
-async def get_sector_commodities(sector_name: str) -> list[CommodityPrice]:
+def get_sector_commodities(sector_name: str) -> list[CommodityPrice]:
     """Get commodities related to a specific sector."""
     return CommodityDataService.get_related_commodities(sector_name)
 
@@ -5124,7 +5124,7 @@ def _assess_macro_impact(title: str, category: str) -> tuple[str, str]:
 
 
 @router.get("/analysis/macro-events")
-async def get_macro_events() -> dict:
+def get_macro_events() -> dict:
     """
     Fetch current geopolitical and macroeconomic events affecting Korean stock market.
     Categorized by type with impact assessment.

@@ -176,9 +176,12 @@ else:
 
 
 if __name__ == "__main__":
+    import os
+    is_render = bool(os.getenv("RENDER"))
     uvicorn.run(
         "main:app",
         host=settings.API_HOST,
         port=settings.API_PORT,
-        reload=True,
+        reload=not is_render,
+        workers=2 if is_render else 1,
     )

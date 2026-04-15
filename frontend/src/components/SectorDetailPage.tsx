@@ -126,80 +126,99 @@ function analyzeFundamentals(earnings: any, patternData: any, checklistLive: any
   color: string;
   reason: string;
 } {
+  // ── PRIMARY: Use checklist score if available (most comprehensive, per-stock analysis) ──
+  // The checklist already evaluates earnings, commodities, sector health, and news per stock
+  if (checklistLive?.summary?.score != null) {
+    const clScore = checklistLive.summary.score as number;
+    const items = checklistLive?.checklist ?? [];
+    const positives = items.filter((c: any) => c.status === "positive").length;
+    const negatives = items.filter((c: any) => c.status === "negative").length;
+    const reasons: string[] = [];
+
+    // Enrich with earnings data if available
+    let earningsBonus = 0;
+    if (earnings && !earnings.error) {
+      if (earnings.revenue_growth != null) {
+        if (earnings.revenue_growth > 0.2) { earningsBonus += 5; reasons.push(`매출 +${(earnings.revenue_growth * 100).toFixed(0)}%`); }
+        else if (earnings.revenue_growth > 0.05) { earningsBonus += 2; reasons.push(`매출 +${(earnings.revenue_growth * 100).toFixed(0)}%`); }
+        else if (earnings.revenue_growth < -0.05) { earningsBonus -= 5; reasons.push(`매출 ${(earnings.revenue_growth * 100).toFixed(0)}%`); }
+      }
+      if (earnings.earnings_growth != null) {
+        if (earnings.earnings_growth > 0.3) earningsBonus += 4;
+        else if (earnings.earnings_growth > 0) earningsBonus += 1;
+        else if (earnings.earnings_growth < -0.1) earningsBonus -= 4;
+      }
+      if (earnings.pe_ratio != null && earnings.forward_pe != null) {
+        if (earnings.forward_pe < earnings.pe_ratio * 0.7) {
+          earningsBonus += 3;
+          reasons.push(`Forward PE ${earnings.forward_pe.toFixed(0)} < Trailing ${earnings.pe_ratio.toFixed(0)}`);
+        } else if (earnings.forward_pe > earnings.pe_ratio * 1.2) {
+          earningsBonus -= 2;
+        }
+      }
+      if (earnings.profit_margin != null) {
+        if (earnings.profit_margin > 0.2) earningsBonus += 2;
+        else if (earnings.profit_margin < 0) { earningsBonus -= 3; reasons.push("순손실 상태"); }
+      }
+    }
+
+    // Pattern analysis bonus
+    if (patternData?.summary) {
+      if (patternData.summary.up_probability > 65) { earningsBonus += 3; reasons.push(`패턴 상승확률 ${patternData.summary.up_probability}%`); }
+      else if (patternData.summary.up_probability < 35) { earningsBonus -= 3; reasons.push(`패턴 상승확률 ${patternData.summary.up_probability}%`); }
+    }
+
+    // Combine: checklist score (primary) + earnings/pattern bonus (secondary)
+    // Checklist score is 0-100; earningsBonus is small adjustment ±15 max
+    const finalScore = Math.round(Math.max(0, Math.min(100, clScore + earningsBonus)));
+
+    if (positives > 0) reasons.push(`핵심지표 ${positives}개 긍정`);
+    if (negatives > 0) reasons.push(`${negatives}개 위험`);
+
+    const v = scoreToVerdict(finalScore);
+    return { score100: finalScore, label: v.label, color: v.color, reason: reasons.join(" · ") };
+  }
+
+  // ── FALLBACK: earnings-only scoring when checklist not loaded yet ──
   if (!earnings || earnings.error) return { score100: 50, label: "데이터 없음", color: "#64748b", reason: "" };
+
   let score = 0;
   let checks = 0;
   const reasons: string[] = [];
 
-  // Revenue growth
   if (earnings.revenue_growth != null) {
     checks++;
     if (earnings.revenue_growth > 0.2) { score += 2; reasons.push(`매출 +${(earnings.revenue_growth * 100).toFixed(0)}%`); }
     else if (earnings.revenue_growth > 0) { score += 1; reasons.push(`매출 +${(earnings.revenue_growth * 100).toFixed(0)}%`); }
     else { score -= 1; reasons.push(`매출 ${(earnings.revenue_growth * 100).toFixed(0)}%`); }
   }
-  // Earnings growth
   if (earnings.earnings_growth != null) {
     checks++;
     if (earnings.earnings_growth > 0.2) score += 2;
     else if (earnings.earnings_growth > 0) score += 1;
     else score -= 1;
   }
-  // Forward PE vs Trailing PE (growth slowing?)
   if (earnings.pe_ratio != null && earnings.forward_pe != null) {
     checks++;
     if (earnings.forward_pe < earnings.pe_ratio * 0.8) { score += 1; reasons.push(`Forward PE ${earnings.forward_pe.toFixed(0)} < Trailing ${earnings.pe_ratio.toFixed(0)}`); }
-    else if (earnings.forward_pe > earnings.pe_ratio) { score -= 1; }
+    else if (earnings.forward_pe > earnings.pe_ratio) score -= 1;
   }
-  // Profit margin
   if (earnings.profit_margin != null) {
     checks++;
     if (earnings.profit_margin > 0.2) score += 1;
     else if (earnings.profit_margin < 0) { score -= 2; reasons.push("순손실 상태"); }
   }
-  // ROE
   if (earnings.roe != null) {
     checks++;
     if (earnings.roe > 0.2) score += 1;
     else if (earnings.roe < 0) score -= 1;
   }
-  // Pattern analysis
   if (patternData?.summary) {
     checks++;
     if (patternData.summary.up_probability > 60) { score += 1; reasons.push(`패턴 상승확률 ${patternData.summary.up_probability}%`); }
     else if (patternData.summary.up_probability < 40) { score -= 1; reasons.push(`패턴 상승확률 ${patternData.summary.up_probability}%`); }
   }
-  // 52-week position
-  if (earnings.fifty_two_week_low && earnings.fifty_two_week_high) {
-    const range = earnings.fifty_two_week_high - earnings.fifty_two_week_low;
-    if (range > 0) {
-      checks++;
-      const pos = (earnings.fifty_two_week_high - (earnings.fifty_two_week_high * 0.95)) / range;
-      if (pos < 0.3) score += 1;
-      else if (pos > 0.9) score -= 1;
-    }
-  }
 
-  // ── Checklist live data: feed key indicator health into scoring ──
-  // High-correlation items (importance >= 50) directly affect fundamentals
-  if (checklistLive?.checklist?.length > 0) {
-    const keyItems = checklistLive.checklist.filter((c: any) => c.importance >= 40);
-    if (keyItems.length > 0) {
-      const positive = keyItems.filter((c: any) => c.status === "positive").length;
-      const negative = keyItems.filter((c: any) => c.status === "negative").length;
-      // Each key item counts as a check, weighted by how many there are
-      checks += 2;
-      if (positive > negative) {
-        score += positive > negative + 1 ? 2 : 1;
-        reasons.push(`핵심지표 ${positive}/${keyItems.length} 긍정`);
-      } else if (negative > positive) {
-        score -= negative > positive + 1 ? 2 : 1;
-        reasons.push(`핵심지표 ${negative}/${keyItems.length} 위험`);
-      }
-    }
-  }
-
-  // Normalize to 0-100 scale
   const norm = checks > 0 ? score / checks : 0;
   const score100 = Math.round(Math.max(0, Math.min(100, (norm + 1) * 50)));
 

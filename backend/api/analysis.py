@@ -700,15 +700,21 @@ def _build_checklist_summary(results: list[dict]) -> dict:
     if not scored_items:
         return {"score": 50, "positives": 0, "negatives": 0, "neutrals": 0, "momentum_notes": []}
 
+    # Use continuous item_score (0-100) weighted by importance for precise scoring
     weighted_total = 0.0
     weighted_score = 0.0
     for item in scored_items:
         weight = max(20, float(item.get("importance", 40)))
-        signal = 1.0 if item["status"] == "positive" else (-1.0 if item["status"] == "negative" else 0.0)
+        if "item_score" in item:
+            # Use continuous 0-100 score for precision
+            weighted_score += float(item["item_score"]) * weight
+        else:
+            # Fallback for commodity items that don't have item_score
+            signal_score = 80.0 if item["status"] == "positive" else (20.0 if item["status"] == "negative" else 50.0)
+            weighted_score += signal_score * weight
         weighted_total += weight
-        weighted_score += signal * weight
 
-    summary_score = round(max(0, min(100, 50 + (weighted_score / weighted_total) * 50))) if weighted_total else 50
+    summary_score = round(max(0, min(100, weighted_score / weighted_total))) if weighted_total else 50
     positives = sum(1 for item in scored_items if item["status"] == "positive")
     negatives = sum(1 for item in scored_items if item["status"] == "negative")
     neutrals = sum(1 for item in scored_items if item["status"] == "neutral")
@@ -1766,21 +1772,43 @@ async def get_earnings(ticker: str) -> dict:
         except Exception:
             pass
 
+        # 3-source fallback: yfinance info → yf quarterly fallback → Naver/Yahoo scraping
+        earnings_fallback = {}
+        try:
+            earnings_fallback = _derive_earnings_fallbacks(stock)
+        except Exception:
+            pass
+
+        alt_data = {}
+        try:
+            alt_data = fetch_fundamentals(ticker)
+        except Exception:
+            pass
+
+        def _epick(info_key: str, fb_key: str):
+            v = info.get(info_key)
+            if v is not None:
+                return v
+            v = earnings_fallback.get(fb_key)
+            if v is not None:
+                return v
+            return alt_data.get(fb_key)
+
         return {
             "ticker": ticker.upper(),
             "market_cap": info.get("marketCap"),
-            "pe_ratio": info.get("trailingPE"),
-            "forward_pe": info.get("forwardPE"),
+            "pe_ratio": _epick("trailingPE", "pe_ratio"),
+            "forward_pe": _epick("forwardPE", "forward_pe"),
             "peg_ratio": info.get("pegRatio"),
-            "price_to_book": info.get("priceToBook"),
-            "revenue_growth": info.get("revenueGrowth"),
-            "earnings_growth": info.get("earningsGrowth"),
-            "profit_margin": info.get("profitMargins"),
-            "operating_margin": info.get("operatingMargins"),
-            "roe": info.get("returnOnEquity"),
+            "price_to_book": _epick("priceToBook", "price_to_book"),
+            "revenue_growth": _epick("revenueGrowth", "revenue_growth"),
+            "earnings_growth": _epick("earningsGrowth", "earnings_growth"),
+            "profit_margin": _epick("profitMargins", "profit_margin"),
+            "operating_margin": _epick("operatingMargins", "operating_margin"),
+            "roe": _epick("returnOnEquity", "roe"),
             "debt_to_equity": info.get("debtToEquity"),
             "free_cash_flow": info.get("freeCashflow"),
-            "dividend_yield": info.get("dividendYield"),
+            "dividend_yield": _epick("dividendYield", "dividend_yield"),
             "beta": info.get("beta"),
             "fifty_two_week_high": info.get("fiftyTwoWeekHigh"),
             "fifty_two_week_low": info.get("fiftyTwoWeekLow"),
@@ -3327,30 +3355,53 @@ async def get_checklist_live(ticker: str) -> dict:
                     except Exception:
                         pass
 
-                    # Graduated scoring: not just pass/fail but with buffer zones
+                    # Graduated scoring: continuous 0-100 per item, not just pass/fail
                     if positive_if == "above":
-                        if val >= threshold:
+                        if threshold > 0:
+                            ratio = val / threshold  # how close to target
+                            if ratio >= 1.5:
+                                item_score = 95  # far exceeds target
+                            elif ratio >= 1.0:
+                                item_score = 70 + int((ratio - 1.0) / 0.5 * 25)  # 70-95
+                            elif ratio >= 0.5:
+                                item_score = 40 + int((ratio - 0.5) / 0.5 * 30)  # 40-70
+                            elif ratio >= 0:
+                                item_score = 20 + int(ratio / 0.5 * 20)  # 20-40
+                            else:
+                                item_score = max(5, 20 + int(ratio * 20))  # negative val
+                        else:
+                            item_score = 70 if val >= threshold else 30
+                        # Status from score
+                        if item_score >= 65:
                             item["status"] = "positive"
-                        elif val < 0:
-                            item["status"] = "negative"
-                        elif threshold > 0 and val < threshold * 0.5:
-                            # Significantly below threshold (less than half) → negative
+                        elif item_score <= 30:
                             item["status"] = "negative"
                         else:
-                            # Between 50%-100% of threshold → neutral (close but not there)
                             item["status"] = "neutral"
                     elif positive_if == "below":
-                        if val <= threshold:
-                            item["status"] = "positive"
-                        elif threshold > 0 and val > threshold * 2.0:
-                            # More than 2x threshold → clearly negative
-                            item["status"] = "negative"
-                        elif threshold > 0 and val > threshold * 1.3:
-                            # 30%-100% above threshold → mild warning (neutral)
-                            item["status"] = "neutral"
+                        if threshold > 0:
+                            ratio = val / threshold
+                            if ratio <= 0.5:
+                                item_score = 95  # far below limit = very good
+                            elif ratio <= 1.0:
+                                item_score = 65 + int((1.0 - ratio) / 0.5 * 30)  # 65-95
+                            elif ratio <= 1.5:
+                                item_score = 35 + int((1.5 - ratio) / 0.5 * 30)  # 35-65
+                            elif ratio <= 2.0:
+                                item_score = 15 + int((2.0 - ratio) / 0.5 * 20)  # 15-35
+                            else:
+                                item_score = max(5, 15 - int((ratio - 2.0) * 5))  # 5-15
                         else:
-                            # Up to 30% above threshold → still neutral
+                            item_score = 70 if val <= threshold else 30
+                        if item_score >= 65:
+                            item["status"] = "positive"
+                        elif item_score <= 30:
+                            item["status"] = "negative"
+                        else:
                             item["status"] = "neutral"
+                    else:
+                        item_score = 50
+                    item["item_score"] = max(0, min(100, item_score))
                     if "margin" in metric or "growth" in metric or metric == "roe" or metric == "dividend_yield":
                         item["value"] = round(val * 100, 1)
                         pct_str = f"{round(val * 100, 1)}%"
@@ -3481,25 +3532,46 @@ async def get_checklist_live(ticker: str) -> dict:
                             trend_dir = "보합"
                             trend_emoji = "flat"
 
-                        # STATUS based on TREND DIRECTION (not just absolute level)
+                        # STATUS + item_score based on TREND DIRECTION
+                        # Convert trend to continuous score (0-100)
                         if positive_if == "up":
-                            # "up is good" — declining trend = danger even if price is still high
-                            if trend_emoji in ("down_fast", "down"):
-                                item["status"] = "negative"  # 하락 추세 = 위험
-                            elif trend_emoji in ("up_fast", "up"):
-                                item["status"] = "positive"
+                            # Positive trend = good → higher score
+                            if short_trend > 3:
+                                c_item_score = 90
+                            elif short_trend > 1:
+                                c_item_score = 65 + int((short_trend - 1) / 2 * 25)
+                            elif short_trend > -0.5:
+                                c_item_score = 45 + int((short_trend + 0.5) / 1.5 * 20)
+                            elif short_trend > -2:
+                                c_item_score = 25 + int((short_trend + 2) / 1.5 * 20)
                             else:
-                                item["status"] = "neutral"
+                                c_item_score = max(10, 25 + int((short_trend + 2) * 5))
                         elif positive_if == "down":
-                            # "down is good" — rising trend = danger
-                            if trend_emoji in ("up_fast", "up"):
-                                item["status"] = "negative"
-                            elif trend_emoji in ("down_fast", "down"):
-                                item["status"] = "positive"
+                            # Negative trend = good → higher score
+                            if short_trend < -3:
+                                c_item_score = 90
+                            elif short_trend < -1:
+                                c_item_score = 65 + int((-1 - short_trend) / 2 * 25)
+                            elif short_trend < 0.5:
+                                c_item_score = 45 + int((0.5 - short_trend) / 1.5 * 20)
+                            elif short_trend < 2:
+                                c_item_score = 25 + int((2 - short_trend) / 1.5 * 20)
                             else:
-                                item["status"] = "neutral"
+                                c_item_score = max(10, 25 - int((short_trend - 2) * 5))
                         elif positive_if == "stable":
-                            item["status"] = "positive" if abs(short_trend) < 2 else "negative"
+                            c_item_score = max(10, 80 - int(abs(short_trend) * 15))
+                        else:
+                            c_item_score = 50
+
+                        c_item_score = max(0, min(100, c_item_score))
+                        item["item_score"] = c_item_score
+
+                        if c_item_score >= 65:
+                            item["status"] = "positive"
+                        elif c_item_score <= 30:
+                            item["status"] = "negative"
+                        else:
+                            item["status"] = "neutral"
 
                         item["value"] = round(change_pct, 1)
                         item["detail"] = f"${round(last_price, 2)} | {trend_dir} (1개월 {'+' if month_change > 0 else ''}{round(month_change, 1)}%)"

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 import yfinance as yf
+from services.runtime_controls import limit_yfinance
 
 try:
     import FinanceDataReader as fdr
@@ -165,8 +166,9 @@ class StockDataService:
 
         # Fallback to yfinance
         try:
-            stock = yf.Ticker(ticker)
-            hist = stock.history(period="2d")
+            with limit_yfinance():
+                stock = yf.Ticker(ticker)
+                hist = stock.history(period="2d")
             if hist.empty:
                 _set_cached(f"info:{ticker}", result)
                 return result
@@ -178,7 +180,8 @@ class StockDataService:
             else:
                 change_percent = 0.0
 
-            info = stock.info
+            with limit_yfinance():
+                info = stock.info
             name = info.get("shortName", info.get("longName", ticker))
 
             result = {
@@ -227,8 +230,9 @@ class StockDataService:
 
         # Fallback to yfinance
         try:
-            stock = yf.Ticker(ticker)
-            hist = stock.history(period=period)
+            with limit_yfinance():
+                stock = yf.Ticker(ticker)
+                hist = stock.history(period=period)
             _set_cached(cache_key, hist)
             if not hist.empty:
                 _save_disk_frame(cache_key, hist)

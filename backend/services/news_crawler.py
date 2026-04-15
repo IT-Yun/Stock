@@ -4,6 +4,7 @@ import requests
 from urllib.parse import quote
 from bs4 import BeautifulSoup
 import feedparser
+from services.runtime_controls import limit_http
 
 from config import settings
 from models.schemas import NewsArticle
@@ -40,7 +41,8 @@ class NewsCrawlerService:
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             }
-            response = requests.get(url, headers=headers, timeout=10)
+            with limit_http():
+                response = requests.get(url, headers=headers, timeout=10)
             response.raise_for_status()
 
             soup = BeautifulSoup(response.text, "html.parser")

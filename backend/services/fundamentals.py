@@ -14,6 +14,7 @@ import re
 import time
 import requests
 from bs4 import BeautifulSoup
+from services.runtime_controls import limit_http
 
 try:
     from curl_cffi.requests import Session as CffiSession
@@ -68,7 +69,8 @@ def _fetch_naver_fundamentals(ticker: str) -> dict:
 
     try:
         url = f"https://finance.naver.com/item/main.naver?code={code}"
-        r = requests.get(url, headers=_NAVER_HEADERS, timeout=10)
+        with limit_http():
+            r = requests.get(url, headers=_NAVER_HEADERS, timeout=10)
         r.raise_for_status()
         soup = BeautifulSoup(r.text, "html.parser")
 
@@ -177,7 +179,8 @@ def _fetch_yahoo_web_fundamentals(ticker: str) -> dict:
         session = CffiSession(impersonate="chrome")
 
         url = f"https://finance.yahoo.com/quote/{ticker}/key-statistics/"
-        r = session.get(url, timeout=15)
+        with limit_http():
+            r = session.get(url, timeout=15)
         if r.status_code != 200:
             return {}
 

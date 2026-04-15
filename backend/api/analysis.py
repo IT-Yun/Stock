@@ -2,16 +2,22 @@ import pandas as pd
 import numpy as np
 import re
 import time
+import json
+import hashlib
+import threading
 import requests
 import yfinance as yf
 from fastapi import APIRouter
 from bs4 import BeautifulSoup
+from pathlib import Path
 from models.schemas import AnalysisResult, TechnicalIndicators, CommodityPrice
 from services.stock_data import StockDataService
 from services.technical_analysis import TechnicalAnalysisService
 from services.commodity_data import CommodityDataService
 from services.news_crawler import NewsCrawlerService
 from services.fundamentals import fetch_fundamentals
+from services.runtime_controls import limit_http, limit_yfinance
+from config import settings
 
 try:
     from curl_cffi.requests import Session as _CffiSessionCheck
@@ -24,6 +30,12 @@ router = APIRouter(prefix="/api", tags=["analysis"])
 
 _ANALYSIS_CACHE: dict[str, tuple[float, object]] = {}
 ANALYSIS_CACHE_TTL = 1800  # 30 min cache — minimize yfinance API calls to avoid rate limiting
+_default_analysis_cache_dir = Path(__file__).resolve().parent.parent.parent / ".cache" / "analysis"
+_render_analysis_cache_root = Path("/var/data/stock-cache/analysis")
+_ANALYSIS_CACHE_DIR = Path(settings.CACHE_DIR) / "analysis" if settings.CACHE_DIR else (_render_analysis_cache_root if _render_analysis_cache_root.parent.exists() else _default_analysis_cache_dir)
+_ANALYSIS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+_SINGLEFLIGHT_LOCK = threading.Lock()
+_SINGLEFLIGHT_EVENTS: dict[str, threading.Event] = {}
 
 
 def _get_cached(key: str):
@@ -42,6 +54,100 @@ def _get_cached_ttl(key: str, ttl: int):
     if cached and time.time() - cached[0] < ttl:
         return cached[1]
     return None
+
+
+def _analysis_cache_path(key: str) -> Path:
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
+    return _ANALYSIS_CACHE_DIR / f"{digest}.json"
+
+
+def _jsonable(value: object):
+    if hasattr(value, "model_dump"):
+        return value.model_dump()
+    return value
+
+
+def _restore_cached(value: object, model_cls=None):
+    if model_cls and isinstance(value, dict):
+        return model_cls(**value)
+    return value
+
+
+def _load_disk_cached(key: str, ttl: int, *, allow_stale: bool = False, model_cls=None):
+    path = _analysis_cache_path(key)
+    if not path.exists():
+        return None
+    if not allow_stale and time.time() - path.stat().st_mtime > ttl:
+        return None
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            payload = json.load(f)
+        return _restore_cached(payload, model_cls=model_cls)
+    except Exception:
+        return None
+
+
+def _save_disk_cached(key: str, value: object):
+    path = _analysis_cache_path(key)
+    try:
+        with path.open("w", encoding="utf-8") as f:
+            json.dump(_jsonable(value), f, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def _get_best_cached(key: str, ttl: int, *, model_cls=None):
+    cached = _get_cached_ttl(key, ttl)
+    if cached is not None:
+        return cached
+    disk = _load_disk_cached(key, ttl, model_cls=model_cls)
+    if disk is not None:
+        _set_cached(key, disk)
+        return disk
+    return None
+
+
+def _run_singleflight(key: str, producer, *, ttl: int, model_cls=None):
+    cached = _get_best_cached(key, ttl, model_cls=model_cls)
+    if cached is not None:
+        return cached
+
+    with _SINGLEFLIGHT_LOCK:
+        event = _SINGLEFLIGHT_EVENTS.get(key)
+        if event is None:
+            event = threading.Event()
+            _SINGLEFLIGHT_EVENTS[key] = event
+            owner = True
+        else:
+            owner = False
+
+    if not owner:
+        event.wait(timeout=30)
+        cached = _get_best_cached(key, ttl, model_cls=model_cls)
+        if cached is not None:
+            return cached
+        stale = _load_disk_cached(key, ttl, allow_stale=True, model_cls=model_cls)
+        if stale is not None:
+            _set_cached(key, stale)
+            return stale
+        return producer()
+
+    try:
+        value = producer()
+        _set_cached(key, value)
+        _save_disk_cached(key, value)
+        return value
+    except Exception:
+        stale = _load_disk_cached(key, ttl, allow_stale=True, model_cls=model_cls)
+        if stale is not None:
+            _set_cached(key, stale)
+            return stale
+        raise
+    finally:
+        with _SINGLEFLIGHT_LOCK:
+            current = _SINGLEFLIGHT_EVENTS.pop(key, None)
+            if current is not None:
+                current.set()
 
 
 ISSUE_KEYWORDS: dict[str, list[str]] = {
@@ -355,7 +461,8 @@ def _search_stock_latest_news(queries: list[str], max_per_query: int = 8) -> lis
         try:
             url = f"https://search.naver.com/search.naver?where=news&query={quote(query)}&sm=tab_opt&sort=1"
             headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-            r = requests.get(url, headers=headers, timeout=8)
+            with limit_http():
+                r = requests.get(url, headers=headers, timeout=8)
             if r.status_code == 200:
                 soup = BeautifulSoup(r.text, "html.parser")
                 for item in soup.select("div.news_area")[:max_per_query]:
@@ -1128,7 +1235,8 @@ def _fetch_stock_industry(ticker: str) -> dict:
         try:
             url = f"https://finance.naver.com/item/main.naver?code={code}"
             headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-            r = requests.get(url, headers=headers, timeout=8)
+            with limit_http():
+                r = requests.get(url, headers=headers, timeout=8)
             if r.status_code == 200:
                 soup = BeautifulSoup(r.text, "html.parser")
                 # 종목명
@@ -1150,7 +1258,8 @@ def _fetch_stock_industry(ticker: str) -> dict:
                     result["industry"] = category_el.get_text(strip=True)
                 # Try 종목 프로필 for more detail
                 profile_url = f"https://finance.naver.com/item/coinfo.naver?code={code}"
-                r2 = requests.get(profile_url, headers=headers, timeout=8)
+                with limit_http():
+                    r2 = requests.get(profile_url, headers=headers, timeout=8)
                 if r2.status_code == 200:
                     soup2 = BeautifulSoup(r2.text, "html.parser")
                     for td in soup2.select("td"):
@@ -1170,8 +1279,9 @@ def _fetch_stock_industry(ticker: str) -> dict:
                 session = CffiSession(impersonate="chrome")
                 r = session.get(f"https://finance.yahoo.com/quote/{ticker}/", timeout=10)
             else:
-                r = requests.get(f"https://finance.yahoo.com/quote/{ticker}/",
-                                 headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+                with limit_http():
+                    r = requests.get(f"https://finance.yahoo.com/quote/{ticker}/",
+                                     headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
             if r.status_code == 200:
                 soup = BeautifulSoup(r.text, "html.parser")
                 # Look for sector/industry in the page
@@ -1790,7 +1900,8 @@ def _get_krx_listing() -> list[dict]:
     rows: list[dict] = []
     try:
         url = "https://kind.krx.co.kr/corpgeneral/corpList.do?method=download&searchType=13"
-        response = requests.get(url, timeout=20)
+        with limit_http():
+            response = requests.get(url, timeout=20)
         html = response.content.decode("euc-kr", errors="ignore")
         soup = BeautifulSoup(html, "html.parser")
         trs = soup.select("table tr")
@@ -2106,35 +2217,38 @@ def _compute_symbol_trend_snapshot(symbol: str, positive_if: str) -> dict:
 @router.get("/analysis/{ticker}")
 async def get_analysis(ticker: str) -> AnalysisResult:
     """Full technical analysis with buy/sell signal for a ticker."""
-    df = StockDataService.get_stock_history(ticker, period="6mo")
+    cache_key = f"analysis:{_ticker_key(ticker)}"
 
-    rsi = TechnicalAnalysisService.calculate_rsi(df)
-    macd_val, macd_signal, _ = TechnicalAnalysisService.calculate_macd(df)
-    bb_upper, bb_middle, bb_lower = TechnicalAnalysisService.calculate_bollinger_bands(df)
-    smas = TechnicalAnalysisService.calculate_sma(df)
-    recommendation, confidence = TechnicalAnalysisService.generate_buy_sell_signal(df)
+    def _produce() -> AnalysisResult:
+        df = StockDataService.get_stock_history(ticker, period="6mo")
 
-    signal_str = recommendation
+        rsi = TechnicalAnalysisService.calculate_rsi(df)
+        macd_val, macd_signal, _ = TechnicalAnalysisService.calculate_macd(df)
+        bb_upper, bb_middle, bb_lower = TechnicalAnalysisService.calculate_bollinger_bands(df)
+        smas = TechnicalAnalysisService.calculate_sma(df)
+        recommendation, confidence = TechnicalAnalysisService.generate_buy_sell_signal(df)
 
-    indicators = TechnicalIndicators(
-        rsi=rsi,
-        macd=macd_val,
-        macd_signal=macd_signal,
-        bollinger_upper=bb_upper,
-        bollinger_middle=bb_middle,
-        bollinger_lower=bb_lower,
-        sma_20=smas.get(20),
-        sma_50=smas.get(50),
-        sma_200=smas.get(200),
-        buy_sell_signal=signal_str,
-    )
+        indicators = TechnicalIndicators(
+            rsi=rsi,
+            macd=macd_val,
+            macd_signal=macd_signal,
+            bollinger_upper=bb_upper,
+            bollinger_middle=bb_middle,
+            bollinger_lower=bb_lower,
+            sma_20=smas.get(20),
+            sma_50=smas.get(50),
+            sma_200=smas.get(200),
+            buy_sell_signal=recommendation,
+        )
 
-    return AnalysisResult(
-        ticker=ticker.upper(),
-        indicators=indicators,
-        recommendation=recommendation,
-        confidence_score=confidence,
-    )
+        return AnalysisResult(
+            ticker=ticker.upper(),
+            indicators=indicators,
+            recommendation=recommendation,
+            confidence_score=confidence,
+        )
+
+    return _run_singleflight(cache_key, _produce, ttl=1800, model_cls=AnalysisResult)
 
 
 @router.get("/analysis/{ticker}/trading-targets")
@@ -2504,9 +2618,17 @@ async def get_trading_targets(ticker: str) -> dict:
 @router.get("/analysis/{ticker}/chart-data")
 async def get_chart_data(ticker: str, period: str = "3mo") -> dict:
     """OHLCV data with ALL indicator overlays inlined per data point."""
+    cache_key = f"chart-data:{_ticker_key(ticker)}:{period}"
+    cached = _get_best_cached(cache_key, 1800)
+    if cached is not None:
+        return cached
+
     df = StockDataService.get_stock_history(ticker, period=period)
 
     if df.empty:
+        stale = _load_disk_cached(cache_key, 1800, allow_stale=True)
+        if stale is not None:
+            return stale
         return {"ticker": ticker, "data": []}
 
     close = df["Close"]
@@ -2559,7 +2681,10 @@ async def get_chart_data(ticker: str, period: str = "3mo") -> dict:
             point[name] = round(float(v), 2) if not pd.isna(v) else None
         data.append(point)
 
-    return {"ticker": ticker.upper(), "data": data}
+    result = {"ticker": ticker.upper(), "data": data}
+    _set_cached(cache_key, result)
+    _save_disk_cached(cache_key, result)
+    return result
 
 
 @router.get("/analysis/{ticker}/earnings")
@@ -2575,12 +2700,14 @@ async def get_earnings(ticker: str) -> dict:
         return cached
 
     try:
-        stock = yf.Ticker(ticker)
+        with limit_yfinance():
+            stock = yf.Ticker(ticker)
         is_krx = ticker.endswith(".KS") or ticker.endswith(".KQ")
         info = {}
         if not is_krx:
             try:
-                info = stock.info or {}
+                with limit_yfinance():
+                    info = stock.info or {}
             except Exception:
                 info = {}
 
@@ -2672,6 +2799,11 @@ async def get_pattern_analysis(ticker: str) -> dict:
     - Compare current setup to historical patterns
     - Return pattern matches with similarity scores
     """
+    cache_key = f"pattern:{_ticker_key(ticker)}"
+    cached = _get_best_cached(cache_key, 43200)
+    if cached is not None:
+        return cached
+
     try:
         # Get 2 years of data for pattern analysis
         df = StockDataService.get_stock_history(ticker, period="2y")
@@ -2835,7 +2967,7 @@ async def get_pattern_analysis(ticker: str) -> dict:
             avg_down = 0
             up_probability = 50
 
-        return {
+        result = {
             "ticker": ticker.upper(),
             "current_setup": current_setup,
             "patterns": patterns[:10],
@@ -2847,7 +2979,13 @@ async def get_pattern_analysis(ticker: str) -> dict:
                 "avg_down_return": round(avg_down, 2),
             },
         }
+        _set_cached(cache_key, result)
+        _save_disk_cached(cache_key, result)
+        return result
     except Exception as e:
+        stale = _load_disk_cached(cache_key, 43200, allow_stale=True)
+        if stale is not None:
+            return stale
         return {"ticker": ticker.upper(), "patterns": [], "current_setup": {}, "events": [], "error": str(e)}
 
 
@@ -2858,6 +2996,11 @@ async def get_prediction(ticker: str) -> dict:
     Analyses: trend, momentum, volatility, volume, oscillators, pattern, support/resistance.
     Returns aggregated scores per category and an overall prediction.
     """
+    cache_key = f"prediction:{_ticker_key(ticker)}"
+    cached = _get_best_cached(cache_key, 3600)
+    if cached is not None:
+        return cached
+
     try:
         df = StockDataService.get_stock_history(ticker, period="1y")
         if df.empty or len(df) < 60:
@@ -3278,7 +3421,7 @@ async def get_prediction(ticker: str) -> dict:
             target_1m = round(price + atr_val * avg_score * 8, 2)
         stop_loss = round(price - atr_val * 2, 2)
 
-        return {
+        result = {
             "ticker": ticker.upper(),
             "price": round(price, 2),
             "prediction": prediction,
@@ -3297,7 +3440,13 @@ async def get_prediction(ticker: str) -> dict:
             "key_indicators": indicators,
             "all_scores": {k: round(v, 2) for k, v in scores.items()},
         }
+        _set_cached(cache_key, result)
+        _save_disk_cached(cache_key, result)
+        return result
     except Exception as e:
+        stale = _load_disk_cached(cache_key, 3600, allow_stale=True)
+        if stale is not None:
+            return stale
         return {"ticker": ticker.upper(), "error": str(e)}
 
 
@@ -3323,7 +3472,8 @@ def _search_news_for_date(query: str, date_str: str) -> list[dict]:
     try:
         url = f"https://search.naver.com/search.naver?where=news&query={quote(query)}&sm=tab_opt&sort=1"
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        r = requests.get(url, headers=headers, timeout=8)
+        with limit_http():
+            r = requests.get(url, headers=headers, timeout=8)
         if r.status_code == 200:
             soup = BeautifulSoup(r.text, "html.parser")
             for item in soup.select("div.news_area")[:8]:
@@ -3499,8 +3649,9 @@ async def get_move_reasons(ticker: str, period: str = "3mo") -> dict:
 
         # Get company name for news search
         try:
-            stock = yf.Ticker(ticker)
-            info = stock.info or {}
+            with limit_yfinance():
+                stock = yf.Ticker(ticker)
+                info = stock.info or {}
             company_name = info.get("shortName", info.get("longName", ticker))
         except Exception:
             company_name = ticker
@@ -3911,7 +4062,7 @@ async def get_checklist_live(ticker: str) -> dict:
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
     cache_key = f"checklist-live:{ticker}"
-    cached = _get_cached_ttl(cache_key, 86400)  # 24 hours for good data
+    cached = _get_best_cached(cache_key, 86400)
     if cached is not None:
         # If it was a rate-limited fallback, only cache 5 min
         if cached.get("rate_limited"):
@@ -3929,10 +4080,12 @@ async def get_checklist_live(ticker: str) -> dict:
         sources = CHECKLIST_SOURCES.get(ticker, CHECKLIST_SOURCES.get(ticker.replace(".KS", "").replace(".KQ", ""), []))
 
         # Fetch stock data — info may be rate limited, history usually works
-        stock = yf.Ticker(ticker)
+        with limit_yfinance():
+            stock = yf.Ticker(ticker)
         info = {}
         try:
-            info = stock.info or {}
+            with limit_yfinance():
+                info = stock.info or {}
         except Exception:
             pass
         # If info is empty/rate-limited, still proceed with history-based analysis
@@ -3990,7 +4143,8 @@ async def get_checklist_live(ticker: str) -> dict:
         # Fetch stock's own 1-year price history for correlation analysis
         stock_hist = pd.DataFrame()
         try:
-            stock_hist = stock.history(period="1y")
+            with limit_yfinance():
+                stock_hist = stock.history(period="1y")
         except Exception:
             pass
 
@@ -4005,7 +4159,7 @@ async def get_checklist_live(ticker: str) -> dict:
             except Exception:
                 return sym, pd.DataFrame()
 
-        with ThreadPoolExecutor(max_workers=6) as executor:
+        with ThreadPoolExecutor(max_workers=3) as executor:
             futures = {executor.submit(fetch_commodity, sym): sym for sym in commodity_symbols}
             for future in as_completed(futures, timeout=20):
                 try:
@@ -4544,6 +4698,7 @@ async def get_checklist_live(ticker: str) -> dict:
         )
         if has_data:
             _set_cached(cache_key, response)
+            _save_disk_cached(cache_key, response)
             # Also save as stale backup for rate limit situations
             _ANALYSIS_CACHE[stale_key] = (time.time(), response)
         else:
@@ -4556,6 +4711,9 @@ async def get_checklist_live(ticker: str) -> dict:
         stale = _ANALYSIS_CACHE.get(stale_key)
         if stale:
             return stale[1]
+        disk_stale = _load_disk_cached(cache_key, 86400, allow_stale=True)
+        if disk_stale is not None:
+            return disk_stale
         return {"ticker": ticker.upper(), "checklist": [], "error": str(e)}
 
 
@@ -4654,7 +4812,7 @@ async def search_stocks(query: str) -> dict:
 @router.get("/analysis/sector/{sector_id}/pulse")
 async def get_sector_pulse(sector_id: str) -> dict:
     cache_key = f"sector-pulse:{sector_id}"
-    cached = _get_cached_ttl(cache_key, 240)
+    cached = _get_best_cached(cache_key, 600)
     if cached is not None:
         return cached
 
@@ -4708,8 +4866,12 @@ async def get_sector_pulse(sector_id: str) -> dict:
             },
         }
         _set_cached(cache_key, response)
+        _save_disk_cached(cache_key, response)
         return response
     except Exception as e:
+        stale = _load_disk_cached(cache_key, 600, allow_stale=True)
+        if stale is not None:
+            return stale
         return {"sector_id": sector_id, "checklist": [], "error": str(e)}
 
 
@@ -4987,7 +5149,7 @@ async def get_macro_events() -> dict:
     Categorized by type with impact assessment.
     """
     cache_key = "macro-events:global"
-    cached = _get_cached_ttl(cache_key, 600)  # 10 min cache
+    cached = _get_best_cached(cache_key, 900)
     if cached is not None:
         return cached
 
@@ -5059,4 +5221,5 @@ async def get_macro_events() -> dict:
     }
 
     _set_cached(cache_key, result)
+    _save_disk_cached(cache_key, result)
     return result

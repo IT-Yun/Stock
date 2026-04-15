@@ -370,18 +370,22 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
 
   // Load ticker-dependent data in sequential phases with progress tracking.
   // Each phase completes before the next starts to avoid overwhelming the backend.
-  const loadTickerData = useCallback(async (t: string) => {
+  // Returns true if essential data (analysis) was loaded successfully.
+  const loadTickerData = useCallback(async (t: string): Promise<boolean> => {
     setLoadError(false);
     setPartialDataWarning(false);
     setLoadProgress(5);
     setLoadStage("차트 데이터 수집 중...");
 
+    let hasAnalysis = false;
+    let hasEarnings = false;
+
     // Phase 1: Chart + Analysis (essential, must succeed)
     setLoadStage("기술적 분석 수행 중...");
     setLoadProgress(15);
     const [analysisRes, earningsRes] = await Promise.allSettled([
-      fetchAnalysis(t).then((d) => { setAnalysis(d); setLoadProgress(25); return d; }),
-      fetchEarnings(t).then((d) => { setEarnings(d); setLoadProgress(35); return d; }),
+      fetchAnalysis(t).then((d) => { setAnalysis(d); setLoadProgress(25); hasAnalysis = Boolean(d); return d; }),
+      fetchEarnings(t).then((d) => { setEarnings(d); setLoadProgress(35); hasEarnings = Boolean(d); return d; }),
     ]);
     if (analysisRes.status === "rejected" && earningsRes.status === "rejected") {
       setPartialDataWarning(true);
@@ -424,6 +428,9 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
 
     setLoadProgress(100);
     setLoadStage("완료!");
+
+    // Return whether we got essential data
+    return hasAnalysis || hasEarnings;
   }, [period]);
 
   // Ticker-dependent data — re-fetches when stock changes or retry
@@ -454,23 +461,32 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
         chartOk = Boolean(data?.length);
       } catch {
         try {
-          await new Promise((r) => setTimeout(r, 1200));
+          await new Promise((r) => setTimeout(r, 1500));
           const retried = await fetchChartData(pick.ticker, period);
           setChartData(retried);
           chartOk = Boolean(retried?.length);
         } catch {
-          setLoadError(true);
+          // Chart failed twice — will check below
         }
       }
       setLoadProgress(10);
       setChartLoading(false);
 
+      // Now load all other data sequentially
+      const hasAnalysisData = await loadTickerData(pick.ticker);
+
+      // ── CRITICAL: Only dismiss loading if we have real data ──
+      // If BOTH chart and analysis are empty → keep loading, show error + retry
+      if (!chartOk && !hasAnalysisData) {
+        setLoadError(true);
+        setLoadStage("서버 응답 대기 중...");
+        setLoadProgress(0);
+        // Auto-retry after 5 seconds
+        setTimeout(() => setRetryCount((c) => c + 1), 5000);
+        return; // Keep loading=true — never show empty screen
+      }
       if (!chartOk) setPartialDataWarning(true);
 
-      // Now load all other data sequentially
-      await loadTickerData(pick.ticker);
-
-      // Only dismiss loading when done
       setLoading(false);
     };
 
@@ -719,19 +735,7 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
         </div>
       )}
 
-      {loadError && !loading && chartData.length === 0 && (
-        <div className="bg-[var(--color-bg-card)] border border-[rgba(239,68,68,0.3)] rounded-2xl p-6 text-center">
-          <p className="text-sm text-[var(--color-text-primary)] font-semibold">데이터를 불러오지 못했습니다</p>
-          <p className="text-xs text-[var(--color-text-muted)] mt-1">서버가 준비 중이거나 네트워크 문제일 수 있습니다</p>
-          <button
-            onClick={() => setRetryCount((c) => c + 1)}
-            className="mt-3 px-5 py-2 rounded-xl text-sm font-bold text-white transition-all"
-            style={{ background: sectorColor }}
-          >
-            다시 시도
-          </button>
-        </div>
-      )}
+      {/* Error state is now shown inside the loading screen — empty data never visible */}
 
       {!loadError && partialDataWarning && (
         <div className="bg-[var(--color-bg-card)] border border-[rgba(234,179,8,0.25)] rounded-2xl px-4 py-3">
@@ -744,22 +748,44 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
       {loading ? (
         <div className="flex flex-col items-center justify-center py-16 space-y-4">
           <div className="w-14 h-14 rounded-2xl flex items-center justify-center" style={{ background: `${sectorColor}15`, border: `2px solid ${sectorColor}30` }}>
-            <Activity size={24} style={{ color: sectorColor }} className="animate-pulse" />
+            <Activity size={24} style={{ color: sectorColor }} className={loadError ? "" : "animate-pulse"} />
           </div>
           <div className="text-center">
-            <p className="text-lg font-bold text-[var(--color-text-primary)]">AI 분석 중... {loadProgress}%</p>
-            <p className="text-sm text-[var(--color-text-muted)] mt-1">{pick.name} ({pick.ticker})</p>
-            <p className="text-xs mt-2" style={{ color: sectorColor }}>{loadStage}</p>
+            {loadError ? (
+              <>
+                <p className="text-lg font-bold text-[var(--color-text-primary)]">데이터 수신 대기 중...</p>
+                <p className="text-sm text-[var(--color-text-muted)] mt-1">{pick.name} ({pick.ticker})</p>
+                <p className="text-xs text-[rgba(234,179,8,0.9)] mt-2">서버가 준비 중입니다. 자동으로 재시도합니다...</p>
+              </>
+            ) : (
+              <>
+                <p className="text-lg font-bold text-[var(--color-text-primary)]">AI 분석 중... {loadProgress}%</p>
+                <p className="text-sm text-[var(--color-text-muted)] mt-1">{pick.name} ({pick.ticker})</p>
+                <p className="text-xs mt-2" style={{ color: sectorColor }}>{loadStage}</p>
+              </>
+            )}
           </div>
-          <div className="w-64 h-2 rounded-full bg-[var(--color-bg-hover)] overflow-hidden">
-            <div className="h-full rounded-full transition-all duration-500 ease-out" style={{ background: `linear-gradient(90deg, ${sectorColor}, ${sectorColor}cc)`, width: `${Math.max(5, loadProgress)}%` }} />
-          </div>
-          <p className="text-[10px] text-[var(--color-text-muted)]">
-            {loadProgress < 30 ? "서버에서 데이터를 가져오고 있습니다..." :
-             loadProgress < 60 ? "기술적 지표를 분석하고 있습니다..." :
-             loadProgress < 85 ? "뉴스와 이벤트를 수집하고 있습니다..." :
-             "체크리스트 최종 검증 중..."}
-          </p>
+          {!loadError && (
+            <div className="w-64 h-2 rounded-full bg-[var(--color-bg-hover)] overflow-hidden">
+              <div className="h-full rounded-full transition-all duration-500 ease-out" style={{ background: `linear-gradient(90deg, ${sectorColor}, ${sectorColor}cc)`, width: `${Math.max(5, loadProgress)}%` }} />
+            </div>
+          )}
+          {loadError ? (
+            <button
+              onClick={() => setRetryCount((c) => c + 1)}
+              className="mt-2 px-5 py-2 rounded-xl text-sm font-bold text-white transition-all"
+              style={{ background: sectorColor }}
+            >
+              지금 다시 시도
+            </button>
+          ) : (
+            <p className="text-[10px] text-[var(--color-text-muted)]">
+              {loadProgress < 30 ? "서버에서 데이터를 가져오고 있습니다..." :
+               loadProgress < 60 ? "기술적 지표를 분석하고 있습니다..." :
+               loadProgress < 85 ? "뉴스와 이벤트를 수집하고 있습니다..." :
+               "체크리스트 최종 검증 중..."}
+            </p>
+          )}
         </div>
       ) : (
         <>

@@ -1,9 +1,11 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, lazy, Suspense } from "react";
 import { useNavigate } from "react-router-dom";
-import { Factory, Search } from "lucide-react";
+import { Factory, Search, X } from "lucide-react";
 import { SECTORS, normalizeWeights } from "@/data/sectors";
 import type { SectorDef } from "@/data/sectors";
 import { searchStocks } from "@/api/client";
+
+const SectorDetailPage = lazy(() => import("./SectorDetailPage"));
 
 /* ───────────────────────── HELPERS ───────────────────────── */
 
@@ -136,11 +138,44 @@ export default function SectorMindMap() {
     }, 220);
   }, [normalizedQuery, query]);
 
+  // Modal state for stock analysis popup
+  const [modalStock, setModalStock] = useState<null | {
+    ticker: string;
+    name: string;
+    flag: "KR" | "US";
+    sectorId: string;
+  }>(null);
+
   const openStock = useCallback((stock: { ticker: string; name: string; sectorName: string; sectorId?: string; flag?: "KR" | "US" }) => {
     setQuery("");
     setSearchOpen(false);
     const resolvedSectorName = (stock as any).sector_name ?? stock.sectorName ?? "실시간 분석";
     const resolvedSectorId = (stock as any).sector_id ?? stock.sectorId;
+    const resolvedFlag = stock.flag ?? (stock.ticker.endsWith(".KS") || stock.ticker.endsWith(".KQ") ? "KR" : "US");
+
+    // For top-pick stocks that belong to a sector, navigate to sector page
+    const isTopPick = SECTORS.some(s => s.picks.some(p => p.ticker === stock.ticker));
+    if (isTopPick && resolvedSectorId) {
+      const criteria = getEvalCriteria(stock.ticker, resolvedSectorName);
+      setEvaluatingStock({
+        ticker: stock.ticker,
+        name: stock.name,
+        sectorName: resolvedSectorName,
+        criteria,
+        sectorId: resolvedSectorId,
+        flag: resolvedFlag as "KR" | "US",
+      });
+      if (navigationTimeoutRef.current !== null) {
+        window.clearTimeout(navigationTimeoutRef.current);
+      }
+      navigationTimeoutRef.current = window.setTimeout(() => {
+        setEvaluatingStock(null);
+        navigate(`/sector/${resolvedSectorId}?stock=${encodeURIComponent(stock.ticker)}`);
+      }, 1400);
+      return;
+    }
+
+    // For non-top-pick stocks: show analysis in modal popup
     const criteria = getEvalCriteria(stock.ticker, resolvedSectorName);
     setEvaluatingStock({
       ticker: stock.ticker,
@@ -148,24 +183,29 @@ export default function SectorMindMap() {
       sectorName: resolvedSectorName,
       criteria,
       sectorId: resolvedSectorId,
-      flag: stock.flag,
+      flag: resolvedFlag as "KR" | "US",
     });
     if (navigationTimeoutRef.current !== null) {
       window.clearTimeout(navigationTimeoutRef.current);
     }
     navigationTimeoutRef.current = window.setTimeout(() => {
       setEvaluatingStock(null);
-      if (resolvedSectorId) {
-        const params = new URLSearchParams({
-          stock: stock.ticker,
-          name: stock.name,
-          flag: stock.flag ?? (stock.ticker.endsWith(".KS") || stock.ticker.endsWith(".KQ") ? "KR" : "US"),
-          dynamic: "1",
-        });
-        navigate(`/sector/${resolvedSectorId}?${params.toString()}`);
-        return;
-      }
-      navigate(`/stock/${encodeURIComponent(stock.ticker)}`);
+      // Set URL params for SectorDetailPage to pick up (without navigation)
+      const sectorId = resolvedSectorId || SECTORS[0].id;
+      setModalStock({
+        ticker: stock.ticker,
+        name: stock.name,
+        flag: resolvedFlag as "KR" | "US",
+        sectorId,
+      });
+      // Update URL without navigation so SectorDetailPage can read params
+      const params = new URLSearchParams({
+        stock: stock.ticker,
+        name: stock.name,
+        flag: resolvedFlag,
+        dynamic: "1",
+      });
+      window.history.replaceState(null, "", `/sector/${sectorId}?${params.toString()}`);
     }, 1400);
   }, [navigate]);
 
@@ -447,6 +487,39 @@ export default function SectorMindMap() {
                 />
               </div>
             </div>
+          </div>
+        )}
+
+        {/* ─── Full-screen Analysis Modal ─── */}
+        {modalStock && (
+          <div className="absolute inset-0 z-50 bg-[var(--color-bg-primary)]" style={{ animation: "fadeInUp 0.3s ease-out" }}>
+            {/* Close button */}
+            <button
+              onClick={() => {
+                setModalStock(null);
+                window.history.replaceState(null, "", "/");
+              }}
+              className="fixed top-4 right-4 z-[60] w-10 h-10 rounded-xl flex items-center justify-center bg-[var(--color-bg-card)] border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-white hover:bg-white/10 transition-all shadow-lg"
+            >
+              <X size={18} />
+            </button>
+            <Suspense fallback={
+              <div className="h-full flex items-center justify-center">
+                <div className="text-center">
+                  <div className="w-12 h-12 rounded-2xl bg-[rgba(59,130,246,0.15)] border border-[rgba(59,130,246,0.3)] flex items-center justify-center mx-auto mb-4" style={{ animation: "breathe 2s ease-in-out infinite" }}>
+                    <Search size={20} className="text-[#3b82f6]" />
+                  </div>
+                  <p className="text-lg font-bold text-[var(--color-text-primary)]">AI 종목 분석 중...</p>
+                  <p className="text-sm text-[var(--color-text-muted)] mt-2">{modalStock.name} ({modalStock.ticker})</p>
+                  <p className="text-xs text-[var(--color-text-muted)] mt-1">회사 정보, 뉴스, 지표를 종합 분석하고 있습니다</p>
+                  <div className="mt-4 w-48 h-1.5 rounded-full bg-white/8 overflow-hidden mx-auto">
+                    <div className="h-full rounded-full bg-[linear-gradient(90deg,#3b82f6,#22c55e)]" style={{ width: "100%", animation: "progressLoad 2s ease-out" }} />
+                  </div>
+                </div>
+              </div>
+            }>
+              <SectorDetailPage />
+            </Suspense>
           </div>
         )}
 

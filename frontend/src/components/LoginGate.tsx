@@ -3,11 +3,23 @@ import { TrendingUp } from "lucide-react";
 
 // 허용된 닉네임 목록 — 여기에 추가/삭제하면 됩니다
 const ALLOWED_NICKNAMES = [
-  "admin",
-  "seungyun",
-  "이승윤",
-  "fan",
-  "test",
+  // 관리자
+  "admin", "seungyun", "이승윤",
+  // 멤버
+  "2차전지 네오", "공학관복사기", "퓨차차",
+  "pk 난 중국이 좋아(cweb)", "pk 미래로", "pk 뿅뿅 네오",
+  "pk ㅇㅇ", "pk_coriny", "pk.", "pknu흥",
+  "pk고고 xx", "pk기타치는 튜브", "pk마블",
+  "pk불나게 일하는 니오", "pk신라젠", "pk연", "pk응애",
+  "pk주릉", "pk주린코린", "pk코인이미래다", "pk하암",
+  "가난뱅이", "개초보", "건배하는 프로도",
+  "내가사면떨어짐", "눈물 흘리는 제이지",
+  "다래락빌런", "도지 이스 굿", "돌집", "모래로지은집",
+  "무지성", "베센트", "비트코이너", "서경", "수대 물고기",
+  "엔비 브컴 암페놀(전cs 주린이)", "원금만 찾게 해줘",
+  "제이지", "좌절하는 제이지", "주린이", "지하수",
+  "차를 사자", "초코바나나", "카피머신 1호 팬", "카피머신 비서",
+  "피카츄", "하트뽀뽀 어피치", "홀인원 강자", ".",
 ];
 
 export default function LoginGate({ children }: { children: React.ReactNode }) {
@@ -16,10 +28,13 @@ export default function LoginGate({ children }: { children: React.ReactNode }) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
 
+  const normalize = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
+  const allowedSet = ALLOWED_NICKNAMES.map(normalize);
+
   // Check if already logged in
   useEffect(() => {
     const saved = localStorage.getItem("stock-nickname");
-    if (saved && ALLOWED_NICKNAMES.includes(saved.toLowerCase())) {
+    if (saved && allowedSet.includes(normalize(saved))) {
       setAuthenticated(true);
     }
     setLoading(false);
@@ -31,8 +46,8 @@ export default function LoginGate({ children }: { children: React.ReactNode }) {
       setError("닉네임을 입력해주세요");
       return;
     }
-    if (ALLOWED_NICKNAMES.includes(trimmed.toLowerCase())) {
-      localStorage.setItem("stock-nickname", trimmed.toLowerCase());
+    if (allowedSet.includes(normalize(trimmed))) {
+      localStorage.setItem("stock-nickname", trimmed);
       setAuthenticated(true);
       setError("");
     } else {

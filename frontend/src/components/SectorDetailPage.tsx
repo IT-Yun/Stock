@@ -353,8 +353,16 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
       track(fetchEarnings(t).then(setEarnings)),
       track(fetchPatternAnalysis(t).then(setPatternData)),
       track(fetchPrediction(t).then(setPrediction)),
-      track(fetchChecklistLive(t).then(setChecklistLive)),
     ];
+    // Checklist is slow — fetch separately with its own retry
+    fetchChecklistLive(t)
+      .then(setChecklistLive)
+      .catch(() => {
+        // Auto-retry checklist once after 3s
+        setTimeout(() => {
+          fetchChecklistLive(t).then(setChecklistLive).catch(() => {});
+        }, 3000);
+      });
     Promise.allSettled(promises).then(() => {
       if (failed >= 3) setLoadError(true);
     });

@@ -640,35 +640,282 @@ def _infer_sector_id_from_profile(ticker: str, info: dict | None = None, quote: 
         return "quantum"
     if any(keyword in text for keyword in ["hydrogen", "fuel cell", "solar", "clean energy", "renewable", "electric vehicle"]):
         return "hydrogen"
-    return None
+    # Default to ai-semi for stocks that don't match any sector keywords
+    # This ensures every stock gets a valid sector_id for frontend routing
+    return "ai-semi"
 
 
 def _build_dynamic_checklist_sources(ticker: str, info: dict | None = None) -> list[dict]:
-    sector_id = _infer_sector_id_from_profile(ticker, info=info)
-    dynamic_sources = [
-        ck("매출 성장률", "earnings_metric", metric="revenue_growth", positive_if="above", threshold=0.05, weight=82, thesis="매출 성장 둔화는 기대 훼손으로 바로 이어질 수 있습니다.", window="향후 1~2분기"),
-        ck("이익률", "earnings_metric", metric="profit_margin", positive_if="above", threshold=0.0, weight=86, thesis="실제 이익률이 기대를 검증하는 첫 번째 포인트입니다.", window="향후 1~2분기"),
-        ck("ROE", "earnings_metric", metric="roe", positive_if="above", threshold=0.08, weight=60, thesis="자본 효율이 유지돼야 멀티플 프리미엄이 지켜집니다.", window="향후 2~4분기"),
-    ]
+    """Build intelligent, stock-specific checklist sources based on industry analysis.
 
-    seen_symbols = set()
-    for candidate in SECTOR_DISCOVERY_UNIVERSE.get(sector_id or "", [])[:4]:
-        symbol = candidate["symbol"]
-        if symbol == _ticker_key(ticker) or symbol in seen_symbols:
+    For any stock not in the pre-built CHECKLIST_SOURCES, this analyzes the company's
+    industry, business type, financial profile, and competitive landscape to generate
+    a tailored checklist similar in quality to hand-crafted ones.
+    """
+    sector_id = _infer_sector_id_from_profile(ticker, info=info)
+    info = info or {}
+    industry = str(info.get("industry") or "").lower()
+    yf_sector = str(info.get("sector") or "").lower()
+    name = str(info.get("shortName") or info.get("longName") or ticker)
+    market_cap = info.get("marketCap") or 0
+    profit_margin = info.get("profitMargins")
+    revenue_growth = info.get("revenueGrowth")
+    is_profitable = profit_margin is not None and profit_margin > 0
+    is_high_growth = revenue_growth is not None and revenue_growth > 0.15
+    is_krx = ticker.endswith(".KS") or ticker.endswith(".KQ")
+
+    dynamic_sources: list[dict] = []
+
+    # ── 1. Core financial metrics (always include, but adjust thresholds by type) ──
+    margin_threshold = 0.15 if is_profitable else 0.0
+    margin_thesis = (
+        f"{name}의 수익성이 유지되는지가 밸류에이션 프리미엄의 핵심입니다."
+        if is_profitable else
+        f"{name}은 아직 적자 상태로, 흑자전환 시점이 주가 방향을 결정합니다."
+    )
+    dynamic_sources.append(
+        ck("영업이익률 추이", "earnings_metric", metric="profit_margin",
+           positive_if="above", threshold=margin_threshold, weight=90,
+           thesis=margin_thesis, window="향후 1~2분기")
+    )
+    dynamic_sources.append(
+        ck("매출 성장률", "earnings_metric", metric="revenue_growth",
+           positive_if="above", threshold=0.05 if not is_high_growth else 0.15, weight=85,
+           thesis=f"{'고성장주인 ' if is_high_growth else ''}{name}의 매출 성장 둔화는 주가 조정의 가장 직접적인 트리거입니다.",
+           window="향후 1~2분기")
+    )
+
+    # ── 2. Industry-specific peers & ETFs ──
+    INDUSTRY_PEERS: dict[str, list[dict]] = {
+        # Tech / Software
+        "software": [
+            {"symbol": "IGV", "label": "소프트웨어 ETF", "why": "소프트웨어 업종 전체 밸류에이션 흐름을 반영합니다."},
+            {"symbol": "QQQ", "label": "빅테크 ETF", "why": "기술주 위험선호 변화가 직접적으로 영향을 줍니다."},
+        ],
+        "internet": [
+            {"symbol": "KWEB", "label": "중국 인터넷 ETF", "why": "글로벌 인터넷 경쟁 구도와 위험선호를 보여줍니다."},
+            {"symbol": "QQQ", "label": "빅테크 ETF", "why": "대형 플랫폼주 위험선호가 밸류에이션을 움직입니다."},
+        ],
+        "semiconductor": [
+            {"symbol": "SOXX", "label": "반도체 ETF", "why": "반도체 업황 전체 기대를 가장 빠르게 반영합니다."},
+            {"symbol": "SMH", "label": "반도체 ETF 2", "why": "대형 반도체 밸류체인 강도를 같이 확인합니다."},
+        ],
+        # Healthcare / Biotech
+        "biotech": [
+            {"symbol": "XBI", "label": "바이오텍 ETF", "why": "바이오 섹터 전체 위험선호와 자금 흐름을 반영합니다."},
+            {"symbol": "IBB", "label": "바이오 대형주 ETF", "why": "대형 바이오 밸류 흐름을 보여줍니다."},
+        ],
+        "pharma": [
+            {"symbol": "XLV", "label": "헬스케어 ETF", "why": "헬스케어 전체 자금 흐름과 방어주 선호를 반영합니다."},
+            {"symbol": "XBI", "label": "바이오텍 ETF", "why": "혁신 의약 기대감 변화를 보여줍니다."},
+        ],
+        "drug": [
+            {"symbol": "XLV", "label": "헬스케어 ETF", "why": "제약 섹터 전체 흐름과 방어적 포지셔닝을 반영합니다."},
+        ],
+        # Financial
+        "bank": [
+            {"symbol": "XLF", "label": "금융 ETF", "why": "금융 섹터 전체 건전성과 자금 흐름을 반영합니다."},
+            {"symbol": "TLT", "label": "장기채 ETF", "why": "금리 방향이 은행 NIM(순이자마진)에 직결됩니다."},
+        ],
+        "insurance": [
+            {"symbol": "XLF", "label": "금융 ETF", "why": "금융 섹터 심리와 금리 환경이 보험사 수익에 영향을 줍니다."},
+        ],
+        "financial": [
+            {"symbol": "XLF", "label": "금융 ETF", "why": "금융 섹터 전체 흐름을 보여줍니다."},
+        ],
+        # Consumer
+        "retail": [
+            {"symbol": "XRT", "label": "소매 ETF", "why": "소매 업종 전체 소비 심리와 마진 트렌드를 반영합니다."},
+            {"symbol": "XLY", "label": "경기소비재 ETF", "why": "소비 경기 사이클을 보여줍니다."},
+        ],
+        "consumer": [
+            {"symbol": "XLY", "label": "경기소비재 ETF", "why": "소비 지출 트렌드와 경기 심리를 반영합니다."},
+        ],
+        "food": [
+            {"symbol": "XLP", "label": "필수소비재 ETF", "why": "방어적 소비재 자금 흐름을 보여줍니다."},
+        ],
+        # Energy
+        "oil": [
+            {"symbol": "CL=F", "label": "WTI 원유", "why": "원유 가격이 에너지 기업 매출과 이익에 직접적으로 영향합니다."},
+            {"symbol": "XLE", "label": "에너지 ETF", "why": "에너지 섹터 전체 흐름을 보여줍니다."},
+        ],
+        "energy": [
+            {"symbol": "XLE", "label": "에너지 ETF", "why": "에너지 섹터 위험선호와 유가 연동을 반영합니다."},
+            {"symbol": "CL=F", "label": "WTI 원유", "why": "원유 가격 추세가 에너지 기업 실적에 직결됩니다."},
+        ],
+        "utility": [
+            {"symbol": "XLU", "label": "유틸리티 ETF", "why": "전력/유틸리티 업종 자금 흐름과 금리 민감도를 반영합니다."},
+        ],
+        # Industrial / Materials
+        "auto": [
+            {"symbol": "CARZ", "label": "자동차 ETF", "why": "글로벌 자동차 수요와 EV 트렌드를 반영합니다."},
+            {"symbol": "HG=F", "label": "구리", "why": "산업 수요 기대치의 보조 지표입니다."},
+        ],
+        "steel": [
+            {"symbol": "SLX", "label": "철강 ETF", "why": "글로벌 철강 수급과 산업 심리를 반영합니다."},
+            {"symbol": "HG=F", "label": "구리", "why": "산업 금속 수요 트렌드를 보여줍니다."},
+        ],
+        "chemical": [
+            {"symbol": "XLB", "label": "소재 ETF", "why": "소재 섹터 전체 사이클을 반영합니다."},
+        ],
+        "construction": [
+            {"symbol": "XHB", "label": "주택건설 ETF", "why": "건설/주택 경기를 반영합니다."},
+        ],
+        # Aerospace / Defense
+        "aerospace": [
+            {"symbol": "ITA", "label": "방산 ETF", "why": "방산/항공 섹터 전체 흐름을 반영합니다."},
+        ],
+        "defense": [
+            {"symbol": "ITA", "label": "방산 ETF", "why": "방산 예산과 수주 기대를 반영합니다."},
+        ],
+        # Telecom / Media
+        "telecom": [
+            {"symbol": "XLC", "label": "통신서비스 ETF", "why": "통신/미디어 섹터 자금 흐름을 반영합니다."},
+        ],
+        "entertainment": [
+            {"symbol": "XLC", "label": "통신서비스 ETF", "why": "미디어/엔터 섹터 전체 심리를 반영합니다."},
+        ],
+        # Real Estate
+        "reit": [
+            {"symbol": "VNQ", "label": "리츠 ETF", "why": "부동산/리츠 전체 자금 흐름과 금리 민감도를 반영합니다."},
+            {"symbol": "TLT", "label": "장기채 ETF", "why": "금리 방향이 리츠 밸류에이션에 직결됩니다."},
+        ],
+        "real estate": [
+            {"symbol": "VNQ", "label": "리츠 ETF", "why": "부동산 전체 흐름을 보여줍니다."},
+        ],
+    }
+
+    # Match industry keywords to peer lists
+    matched_peers: list[dict] = []
+    for keyword, peers in INDUSTRY_PEERS.items():
+        if keyword in industry or keyword in yf_sector:
+            matched_peers.extend(peers)
+            break
+
+    # Fallback: use yfinance sector to pick a broad ETF
+    if not matched_peers:
+        SECTOR_ETF_MAP = {
+            "technology": [{"symbol": "XLK", "label": "기술 ETF", "why": "기술 섹터 전체 밸류에이션 흐름을 반영합니다."}],
+            "healthcare": [{"symbol": "XLV", "label": "헬스케어 ETF", "why": "헬스케어 섹터 전체 자금 흐름을 반영합니다."}],
+            "financial": [{"symbol": "XLF", "label": "금융 ETF", "why": "금융 섹터 심리를 반영합니다."}],
+            "consumer cyclical": [{"symbol": "XLY", "label": "경기소비재 ETF", "why": "소비 경기를 반영합니다."}],
+            "consumer defensive": [{"symbol": "XLP", "label": "필수소비재 ETF", "why": "방어적 소비 흐름을 반영합니다."}],
+            "industrials": [{"symbol": "XLI", "label": "산업재 ETF", "why": "산업/제조 경기를 반영합니다."}],
+            "basic materials": [{"symbol": "XLB", "label": "소재 ETF", "why": "소재 사이클을 반영합니다."}],
+            "communication": [{"symbol": "XLC", "label": "통신서비스 ETF", "why": "통신/미디어 심리를 반영합니다."}],
+            "energy": [{"symbol": "XLE", "label": "에너지 ETF", "why": "에너지 섹터 흐름을 반영합니다."}],
+            "utilities": [{"symbol": "XLU", "label": "유틸리티 ETF", "why": "유틸리티 자금 흐름을 반영합니다."}],
+            "real estate": [{"symbol": "VNQ", "label": "리츠 ETF", "why": "부동산 흐름을 반영합니다."}],
+        }
+        for sec_key, etfs in SECTOR_ETF_MAP.items():
+            if sec_key in yf_sector:
+                matched_peers.extend(etfs)
+                break
+
+    # Add matched sector/industry peers
+    seen_symbols = {_ticker_key(ticker)}
+    for peer in matched_peers[:3]:
+        sym = peer["symbol"]
+        if sym in seen_symbols:
             continue
-        seen_symbols.add(symbol)
-        positive_if = "down" if any(keyword in candidate["label"] for keyword in ["백금", "천연가스"]) else "up"
+        seen_symbols.add(sym)
         dynamic_sources.append(
-            ck(
-                candidate["label"],
-                "commodity",
-                symbol=symbol,
-                positive_if=positive_if,
-                weight=68,
-                thesis=candidate["why"],
-                window="향후 1~3개월",
-            )
+            ck(peer["label"], "commodity", symbol=sym, positive_if="up",
+               weight=75, thesis=peer["why"], window="향후 1~3개월")
         )
+
+    # ── 3. Macro/currency sensitivity ──
+    if is_krx:
+        dynamic_sources.append(
+            ck("환율 (USD/KRW)", "commodity", symbol="KRW=X", positive_if="up",
+               weight=65, thesis=f"원화 약세는 {name}의 수출 실적에 유리하고, 원화 강세는 외국인 자금 유입에 긍정적입니다.",
+               window="향후 1~3개월")
+        )
+        dynamic_sources.append(
+            ck("KOSPI 흐름", "commodity", symbol="^KS11", positive_if="up",
+               weight=55, thesis="한국 시장 전체 심리가 개별 종목 수급에 영향을 줍니다.",
+               window="향후 1~2개월")
+        )
+    else:
+        # US stocks: add VIX as risk gauge
+        dynamic_sources.append(
+            ck("시장 공포지수 (VIX)", "commodity", symbol="^VIX", positive_if="down",
+               weight=50, thesis="VIX 급등은 시장 전체 매도 압력을 높여 개별 종목에도 영향을 줍니다.",
+               window="향후 1~2개월")
+        )
+
+    # ── 4. Business-type specific metrics ──
+    if is_high_growth and not is_profitable:
+        # Pre-profit growth stock
+        dynamic_sources.append(
+            ck("현금 소진율 점검", "earnings_metric", metric="roe",
+               positive_if="above", threshold=-0.3, weight=78,
+               thesis=f"{name}은 성장 단계 기업으로, 자금 소진 속도가 주가 방어의 핵심입니다.",
+               window="향후 2~4분기")
+        )
+    elif is_profitable:
+        # Profitable company
+        dynamic_sources.append(
+            ck("자본 효율성 (ROE)", "earnings_metric", metric="roe",
+               positive_if="above", threshold=0.12, weight=65,
+               thesis=f"{name}의 자본 효율이 유지되어야 현재 밸류에이션 프리미엄이 정당화됩니다.",
+               window="향후 2~4분기")
+        )
+
+    # Add valuation check for large caps
+    if market_cap > 10_000_000_000:  # >$10B
+        dynamic_sources.append(
+            ck("밸류 부담 점검 (P/B)", "earnings_metric", metric="price_to_book",
+               positive_if="below", threshold=30.0, weight=45,
+               thesis="밸류에이션이 과도하면 좋은 실적에서도 주가 조정 폭이 커질 수 있습니다.",
+               window="향후 1~2개월")
+        )
+
+    # ── 5. Industry-relevant commodities ──
+    INDUSTRY_COMMODITIES = {
+        "semiconductor": [("HG=F", "구리 가격", "up", "반도체 수요와 IT 인프라 확장의 보조 지표입니다.")],
+        "auto": [("CL=F", "원유 가격", "down", "유가 상승은 자동차 수요를 둔화시킬 수 있습니다."), ("LIT", "리튬 ETF", "up", "EV 배터리 원자재 가격이 마진에 영향을 줍니다.")],
+        "steel": [("HG=F", "구리 가격", "up", "산업 금속 수요의 전반적 트렌드를 반영합니다.")],
+        "mining": [("GC=F", "금 가격", "up", "금/귀금속 가격 추세가 광업 수익에 직결됩니다.")],
+        "airline": [("CL=F", "원유 가격", "down", "유가 하락은 항공사 연료비 절감으로 이어집니다.")],
+        "shipping": [("CL=F", "원유 가격", "down", "연료비가 해운사 수익의 핵심 변수입니다.")],
+        "food": [("DBA", "농산물 ETF", "down", "원자재 가격이 식품 기업의 원가에 영향을 줍니다.")],
+        "chemical": [("CL=F", "원유 가격", "down", "나프타 가격이 화학 기업 원가에 직결됩니다.")],
+        "construction": [("WOOD", "목재 ETF", "down", "건설 자재 가격이 마진에 영향을 줍니다.")],
+        "battery": [("LIT", "리튬 ETF", "up", "리튬 가격이 배터리 산업 전체 수급을 반영합니다.")],
+        "electric vehicle": [("LIT", "리튬 ETF", "up", "배터리 원자재 가격과 EV 수요를 반영합니다.")],
+        "gold": [("GC=F", "금 선물", "up", "금 가격이 관련 기업 수익에 직접적으로 영향합니다.")],
+        "oil": [("CL=F", "WTI 원유", "up", "원유 가격이 매출과 이익에 직결됩니다."), ("NG=F", "천연가스", "up", "가스 가격도 에너지 기업 수익에 영향을 줍니다.")],
+        "natural gas": [("NG=F", "천연가스", "up", "가스 가격이 직접적인 수익 드라이버입니다.")],
+        "solar": [("TAN", "태양광 ETF", "up", "태양광 업종 전체 심리를 반영합니다.")],
+        "uranium": [("URA", "우라늄 ETF", "up", "우라늄 가격 추세가 원전 관련주에 직접적입니다.")],
+        "nuclear": [("URA", "우라늄 ETF", "up", "우라늄 수급이 원전 산업 전체에 영향을 줍니다.")],
+    }
+
+    for ind_key, commodities in INDUSTRY_COMMODITIES.items():
+        if ind_key in industry:
+            for sym, label, pos_if, thesis in commodities:
+                if sym not in seen_symbols:
+                    seen_symbols.add(sym)
+                    dynamic_sources.append(
+                        ck(label, "commodity", symbol=sym, positive_if=pos_if,
+                           weight=68, thesis=thesis, window="향후 1~3개월")
+                    )
+            break
+
+    # ── 6. Fallback: add sector discovery universe items if nothing matched ──
+    if len(dynamic_sources) < 5:
+        for candidate in SECTOR_DISCOVERY_UNIVERSE.get(sector_id or "", [])[:3]:
+            symbol = candidate["symbol"]
+            if symbol in seen_symbols:
+                continue
+            seen_symbols.add(symbol)
+            positive_if = "down" if any(kw in candidate["label"] for kw in ["백금", "천연가스"]) else "up"
+            dynamic_sources.append(
+                ck(candidate["label"], "commodity", symbol=symbol, positive_if=positive_if,
+                   weight=68, thesis=candidate["why"], window="향후 1~3개월")
+            )
+
     return dynamic_sources
 
 

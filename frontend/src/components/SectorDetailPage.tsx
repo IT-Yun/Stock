@@ -321,6 +321,18 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
     chartP.finally(() => { setChartLoading(false); setLoading(false); });
   }, [pick.ticker, period]);
 
+  // Auto-refresh: silently update data every 60 seconds for real-time feel
+  useEffect(() => {
+    const t = pick.ticker;
+    const intervalId = window.setInterval(() => {
+      // Silently refresh without showing loading state
+      fetchAnalysis(t).then(setAnalysis).catch(() => {});
+      fetchChartData(t, period).then(setChartData).catch(() => {});
+      fetchChecklistLive(t).then(setChecklistLive).catch(() => {});
+    }, 60_000);
+    return () => window.clearInterval(intervalId);
+  }, [pick.ticker, period]);
+
   const latestPrice = chartData.length > 0 ? chartData[chartData.length - 1].close : null;
   const chartVerdict = analyzeChart(analysis, chartData);
   const fundVerdict = analyzeFundamentals(earnings, patternData, checklistLive);
@@ -344,6 +356,44 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
     const top = all.slice(0, 15);
     top.sort((a, b) => a.date.localeCompare(b.date));
     return top;
+  }, [chartData]);
+
+  // Buy/Sell signal detection from technical indicators
+  const buySellSignals = useMemo(() => {
+    if (chartData.length < 10) return [];
+    const signals: { date: string; close: number; type: "buy" | "sell"; reason: string }[] = [];
+    for (let i = 1; i < chartData.length; i++) {
+      const cur = chartData[i];
+      const prev = chartData[i - 1];
+      const reasons: string[] = [];
+      let buyScore = 0;
+      let sellScore = 0;
+      // RSI signals
+      if (cur.rsi != null && prev.rsi != null) {
+        if (prev.rsi < 30 && cur.rsi >= 30) { buyScore += 2; reasons.push("RSI 과매도 탈출"); }
+        if (prev.rsi < 70 && cur.rsi >= 70) { sellScore += 2; reasons.push("RSI 과매수 진입"); }
+      }
+      // MACD crossover
+      if (cur.macd != null && cur.macd_signal != null && prev.macd != null && prev.macd_signal != null) {
+        if (prev.macd <= prev.macd_signal && cur.macd > cur.macd_signal) { buyScore += 2; reasons.push("MACD 골든크로스"); }
+        if (prev.macd >= prev.macd_signal && cur.macd < cur.macd_signal) { sellScore += 2; reasons.push("MACD 데드크로스"); }
+      }
+      // Bollinger band touch
+      if (cur.bollinger_lower != null && cur.close <= cur.bollinger_lower && prev.close > (prev.bollinger_lower ?? prev.close)) {
+        buyScore += 1; reasons.push("볼린저 하단 터치");
+      }
+      if (cur.bollinger_upper != null && cur.close >= cur.bollinger_upper && prev.close < (prev.bollinger_upper ?? prev.close)) {
+        sellScore += 1; reasons.push("볼린저 상단 터치");
+      }
+      // SMA crossover (20/50)
+      if (cur.sma_20 != null && cur.sma_50 != null && prev.sma_20 != null && prev.sma_50 != null) {
+        if (prev.sma_20 <= prev.sma_50 && cur.sma_20 > cur.sma_50) { buyScore += 1; reasons.push("SMA 20/50 골든크로스"); }
+        if (prev.sma_20 >= prev.sma_50 && cur.sma_20 < cur.sma_50) { sellScore += 1; reasons.push("SMA 20/50 데드크로스"); }
+      }
+      if (buyScore >= 2) signals.push({ date: cur.date, close: cur.close, type: "buy", reason: reasons.join(" + ") });
+      else if (sellScore >= 2) signals.push({ date: cur.date, close: cur.close, type: "sell", reason: reasons.join(" + ") });
+    }
+    return signals;
   }, [chartData]);
 
   // Match move reasons to chart big moves
@@ -544,12 +594,24 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                       if (!d) return null;
                       const moveInfo = findMoveReason(d.date);
                       const bigMove = bigMoves.find((m) => m.date === d.date);
+                      const signal = buySellSignals.find((s) => s.date === d.date);
                       return (
                         <div className="bg-[var(--color-bg-secondary)] border border-[var(--color-border)] rounded-xl p-3.5 shadow-2xl max-w-[340px]" style={{ backdropFilter: "blur(8px)" }}>
                           <div className="flex items-center justify-between mb-1">
                             <p className="text-[10px] text-[var(--color-text-muted)]">{d.date}</p>
                             <p className="text-sm font-bold text-[var(--color-text-primary)]">{currency}{d.close?.toLocaleString()}</p>
                           </div>
+                          {signal && (
+                            <div className="mt-1 mb-2 px-3 py-2 rounded-lg" style={{
+                              background: signal.type === "buy" ? "rgba(59,130,246,0.12)" : "rgba(249,115,22,0.12)",
+                              border: `1.5px solid ${signal.type === "buy" ? "rgba(59,130,246,0.4)" : "rgba(249,115,22,0.4)"}`
+                            }}>
+                              <p className="text-xs font-black" style={{ color: signal.type === "buy" ? "#3b82f6" : "#f97316" }}>
+                                {signal.type === "buy" ? "▲ 매수 시그널" : "▼ 매도 시그널"}
+                              </p>
+                              <p className="text-[10px] text-[var(--color-text-secondary)] mt-0.5">{signal.reason}</p>
+                            </div>
+                          )}
                           {bigMove && (
                             <div className="mt-2 pt-2 border-t border-[var(--color-border)]">
                               <div className="flex items-center gap-2 mb-2">
@@ -594,7 +656,7 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                     if (!dp) return null;
                     return (
                       <ReferenceDot
-                        key={i}
+                        key={`move-${i}`}
                         x={m.date}
                         y={dp.close}
                         r={Math.abs(m.pctChange) > 5 ? 8 : 6}
@@ -606,6 +668,20 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                       />
                     );
                   })}
+                  {/* Buy/Sell signal markers */}
+                  {buySellSignals.map((sig, i) => (
+                    <ReferenceDot
+                      key={`sig-${i}`}
+                      x={sig.date}
+                      y={sig.close}
+                      r={10}
+                      fill={sig.type === "buy" ? "#3b82f6" : "#f97316"}
+                      stroke="#fff"
+                      strokeWidth={2.5}
+                      style={{ cursor: "pointer", filter: `drop-shadow(0 0 8px ${sig.type === "buy" ? "rgba(59,130,246,0.8)" : "rgba(249,115,22,0.8)"})` }}
+                      label={{ value: sig.type === "buy" ? "▲매수" : "▼매도", position: sig.type === "buy" ? "bottom" : "top", fontSize: 9, fill: sig.type === "buy" ? "#3b82f6" : "#f97316", fontWeight: 900 }}
+                    />
+                  ))}
                 </ComposedChart>
               </ResponsiveContainer>
               </div>

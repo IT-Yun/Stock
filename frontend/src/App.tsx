@@ -16,7 +16,15 @@ function StockRedirect() {
     return <Navigate to={`/sector/${sector.id}?stock=${encodeURIComponent(decoded)}`} replace />;
   }
 
-  return <Navigate to="/" replace />;
+  // For stocks not in any sector's top picks, use first sector as container with dynamic mode
+  const flag = decoded.endsWith(".KS") || decoded.endsWith(".KQ") ? "KR" : "US";
+  const params = new URLSearchParams({
+    stock: decoded,
+    name: decoded,
+    flag,
+    dynamic: "1",
+  });
+  return <Navigate to={`/sector/${SECTORS[0].id}?${params.toString()}`} replace />;
 }
 
 export default function App() {

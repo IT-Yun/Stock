@@ -457,13 +457,7 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
   const overall = scoreToVerdict(overallScore100);
   const momentumNotes = checklistLive?.summary?.momentum_notes?.length
     ? checklistLive.summary.momentum_notes
-    : meta.momentum.map((m) => ({
-        title: typeof m === "string" ? m : m.title,
-        detail: typeof m === "string" ? "" : m.detail,
-        expected_condition: typeof m === "string" ? "" : m.condition,
-        window: "향후 1~3개월",
-        status: "neutral",
-      }));
+    : null; // null = still loading, don't show stale static data
   const liveImpactNews = checklistLive?.summary?.live_impact_news?.length
     ? checklistLive.summary.live_impact_news
     : [];
@@ -724,7 +718,7 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
             </div>
           </div>
 
-          {/* ═══ EXPECTATION — 기대감 ═══ */}
+          {/* ═══ EXPECTATION — 기대감 (실시간 뉴스 기반) ═══ */}
           <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-2xl p-5">
             <div className="flex items-center gap-2 mb-3">
               <div className="w-8 h-8 rounded-xl flex items-center justify-center" style={{ background: `${sectorColor}18`, border: `1px solid ${sectorColor}25` }}>
@@ -732,37 +726,52 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
               </div>
               <div>
                 <h3 className="text-sm font-bold text-[var(--color-text-primary)]">현재 주가 기대감</h3>
-                <p className="text-[10px] text-[var(--color-text-muted)]">지금 주가를 밀고 있는 기대와 깨지는 조건</p>
+                <p className="text-[10px] text-[var(--color-text-muted)]">최신 뉴스 기반 실시간 분석 — 지금 주가를 밀고 있는 기대와 깨지는 조건</p>
               </div>
             </div>
-            <div className="grid grid-cols-1 gap-2">
-              {momentumNotes.map((m: any, i: number) => (
-                <div
-                  key={i}
-                  className="px-4 py-3 rounded-xl transition-colors"
-                  style={{
-                    background: m.status === "negative" ? "rgba(239,68,68,0.08)" : `${sectorColor}08`,
-                    border: `1px solid ${m.status === "negative" ? "rgba(239,68,68,0.2)" : `${sectorColor}15`}`,
-                  }}
-                >
-                  <div className="flex items-start gap-3">
-                    <div
-                      className="w-2 h-2 rounded-full animate-pulse mt-1.5"
-                      style={{
-                        background: m.status === "negative" ? "#ef4444" : sectorColor,
-                        boxShadow: `0 0 8px ${m.status === "negative" ? "rgba(239,68,68,0.6)" : `${sectorColor}60`}`,
-                      }}
-                    />
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-semibold text-[var(--color-text-primary)]">{m.title}</p>
-                      {m.detail && <p className="text-xs text-[var(--color-text-secondary)] mt-1">{m.detail}</p>}
-                      {m.expected_condition && <p className="text-[11px] text-[var(--color-text-muted)] mt-1">유지 조건: {m.expected_condition}</p>}
-                      <p className="text-[10px] text-[var(--color-text-muted)] mt-1">유효 구간: {m.window ?? "향후 1~3개월"}</p>
+            {!momentumNotes ? (
+              <div className="px-4 py-6 text-center">
+                <div className="w-8 h-8 rounded-full mx-auto mb-2 flex items-center justify-center" style={{ background: `${sectorColor}15` }}>
+                  <Zap size={14} style={{ color: sectorColor }} className="animate-pulse" />
+                </div>
+                <p className="text-xs text-[var(--color-text-muted)] animate-pulse">최신 뉴스를 분석하여 기대감을 생성 중...</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-2">
+                {momentumNotes.map((m: any, i: number) => (
+                  <div
+                    key={i}
+                    className="px-4 py-3 rounded-xl transition-colors"
+                    style={{
+                      background: m.status === "negative" ? "rgba(239,68,68,0.08)" : `${sectorColor}08`,
+                      border: `1px solid ${m.status === "negative" ? "rgba(239,68,68,0.2)" : `${sectorColor}15`}`,
+                    }}
+                  >
+                    <div className="flex items-start gap-3">
+                      <div
+                        className="w-2 h-2 rounded-full mt-1.5 shrink-0"
+                        style={{
+                          background: m.status === "negative" ? "#ef4444" : m.status === "positive" ? "#22c55e" : sectorColor,
+                          boxShadow: `0 0 8px ${m.status === "negative" ? "rgba(239,68,68,0.6)" : m.status === "positive" ? "rgba(34,197,94,0.6)" : `${sectorColor}60`}`,
+                        }}
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-semibold text-[var(--color-text-primary)]">{m.title}</p>
+                        {m.detail && <p className="text-xs text-[var(--color-text-secondary)] mt-1 leading-relaxed">{m.detail}</p>}
+                        {m.expected_condition && (
+                          <div className="mt-2 px-3 py-2 rounded-lg bg-[var(--color-bg-hover)]">
+                            <p className="text-[11px] text-[var(--color-text-muted)]">
+                              <span className="font-bold text-[var(--color-text-secondary)]">깨지는 조건:</span> {m.expected_condition}
+                            </p>
+                          </div>
+                        )}
+                        {m.window && <p className="text-[10px] text-[var(--color-text-muted)] mt-1">유효 구간: {m.window}</p>}
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* ═══ 실시간 뉴스 — 호재/악재 분류 ═══ */}

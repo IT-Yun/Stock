@@ -26,18 +26,32 @@ def _warmup_cache():
 
         # Phase 2: pre-fetch checklist for all top-pick stocks (heaviest API usage)
         # This prevents rate limiting during normal usage
-        from api.analysis import TOP_PICK_SECTOR_MAP, get_checklist_live
+        # Phase 2: pre-fetch chart + analysis for top picks (lighter than checklist)
+        from api.analysis import TOP_PICK_SECTOR_MAP, _ANALYSIS_CACHE, _ticker_key
+        import yfinance as yf_warmup
         tickers = list(TOP_PICK_SECTOR_MAP.keys())
-        print(f"[WARMUP] Phase 2: pre-loading {len(tickers)} top-pick checklists...")
+        print(f"[WARMUP] Phase 2: pre-loading {len(tickers)} top-pick stock data...")
         for i, ticker in enumerate(tickers):
             try:
-                import asyncio
-                asyncio.get_event_loop().run_until_complete(get_checklist_live(ticker))
-                print(f"[WARMUP]   ({i+1}/{len(tickers)}) {ticker} OK")
+                stock = yf_warmup.Ticker(ticker)
+                info = stock.info or {}
+                hist = stock.history(period="3mo")
+                if info and len(info) > 3:
+                    # Cache basic info
+                    from services.stock_data import _set_cached as stock_cache
+                    stock_cache(f"info:{ticker}", {
+                        "ticker": ticker,
+                        "name": info.get("shortName", ticker),
+                        "price": round(float(hist["Close"].iloc[-1]), 2) if not hist.empty else 0,
+                        "change_percent": round(((float(hist["Close"].iloc[-1]) - float(hist["Close"].iloc[-2])) / float(hist["Close"].iloc[-2]) * 100), 2) if len(hist) >= 2 else 0,
+                    })
+                    print(f"[WARMUP]   ({i+1}/{len(tickers)}) {ticker} OK")
+                else:
+                    print(f"[WARMUP]   ({i+1}/{len(tickers)}) {ticker} SKIP (no info)")
             except Exception as e:
                 print(f"[WARMUP]   ({i+1}/{len(tickers)}) {ticker} SKIP: {e}")
-            _t.sleep(2)  # 2초 간격 — rate limit 방지
-        print("[WARMUP] Phase 2 done — all checklists cached for 24h.")
+            _t.sleep(1)  # 1초 간격
+        print("[WARMUP] Phase 2 done.")
     except Exception as e:
         print(f"[WARMUP] Partial failure (non-fatal): {e}")
 

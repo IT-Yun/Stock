@@ -206,51 +206,97 @@ def _extract_news_drivers(ticker: str, info: dict | None = None, sector_id: str 
 
 
 def _score_live_article_impact(title: str, ticker: str, company_name: str, sector_id: str | None) -> int:
+    """Score article relevance. MUST contain company name or ticker to score above threshold."""
     text = (title or "").lower()
     score = 0
-    if company_name and company_name.lower() in text:
-        score += 4
+
+    # Hard requirement: article must mention the company or ticker
+    company_lower = (company_name or "").lower().strip()
     ticker_base = _ticker_key(ticker).replace(".KS", "").replace(".KQ", "").lower()
-    if ticker_base and ticker_base in text:
+
+    # Build name variants for matching
+    name_variants = [company_lower]
+    # For Korean companies, try shorter name (e.g., "삼성전자" from "SamsungElec")
+    if company_lower:
+        # Split on spaces, try each part that's >= 2 chars
+        for part in company_lower.split():
+            if len(part) >= 2:
+                name_variants.append(part)
+
+    has_company_mention = any(variant in text for variant in name_variants if variant)
+    has_ticker_mention = bool(ticker_base) and ticker_base in text
+
+    if not has_company_mention and not has_ticker_mention:
+        return 0  # Completely irrelevant — reject immediately
+
+    if has_company_mention:
+        score += 6
+    if has_ticker_mention:
+        score += 4
+
+    # Bonus for actionable content
+    if any(word in text for word in ["실적", "매출", "영업이익", "earnings", "revenue", "profit", "가이던스", "guidance"]):
         score += 3
-    for label, keywords in NEWS_DRIVER_KEYWORDS.items():
-        hits = sum(1 for keyword in keywords if keyword in text)
-        score += hits * 2
-        if label in {"고객사/공급", "실적/가이던스", "정책/규제", "가격/업황"} and hits:
-            score += 2
-    sector_boost = {
-        "ai-semi": ["hbm", "dram", "nand", "gpu", "nvidia", "cows", "cowos", "foundry", "수출규제", "인증"],
-        "robotics": ["robot", "automation", "smart factory", "수주", "도입", "양산"],
-        "smr-nuclear": ["uranium", "smr", "nuclear", "전기요금", "원전", "수주"],
-        "cybersec": ["breach", "outage", "contract", "security", "장애", "보안사고"],
-        "space": ["launch", "satellite", "contract", "regulator", "발사", "수주"],
-        "biotech": ["approval", "trial", "prescription", "fda", "승인", "임상"],
-        "quantum": ["roadmap", "qubit", "partnership", "양자", "로드맵"],
-        "hydrogen": ["subsidy", "fuel cell", "power deal", "보조금", "연료전지", "수주"],
-    }.get(sector_id or "", [])
-    score += sum(2 for keyword in sector_boost if keyword in text)
-    if any(word in text for word in ["miss", "slumps", "falls", "delay", "probe", "lawsuit", "부진", "하락", "지연", "규제", "리콜"]):
+    if any(word in text for word in ["승인", "approval", "수주", "contract", "deal", "계약", "납품"]):
+        score += 3
+    if any(word in text for word in ["하락", "부진", "miss", "falls", "delay", "지연", "리콜", "규제", "소송"]):
         score += 2
-    if any(word in text for word in ["beat", "surge", "approval", "deal", "contract", "record", "호실적", "수주", "계약", "승인"]):
+    if any(word in text for word in ["상승", "호실적", "beat", "surge", "record", "신고가", "목표가"]):
         score += 2
+
     return score
 
 
+POSITIVE_KEYWORDS = ["상승", "호실적", "beat", "surge", "record", "신고가", "목표가", "수혜", "호재",
+                     "승인", "approval", "수주", "contract", "deal", "계약", "긍정", "확대", "성장",
+                     "상향", "upgrade", "outperform", "매수", "돌파", "최고", "흑자", "개선"]
+NEGATIVE_KEYWORDS = ["하락", "부진", "miss", "falls", "slump", "delay", "지연", "리콜", "규제",
+                     "소송", "lawsuit", "probe", "악재", "우려", "하향", "downgrade", "매도",
+                     "적자", "감소", "축소", "실패", "위험", "이탈", "sell", "warning"]
+
+
 def _explain_live_article_impact(title: str, ticker: str, sector_id: str | None) -> tuple[str, str]:
+    """Generate a SPECIFIC explanation based on actual article title content."""
+    text = (title or "").lower()
+
+    # Determine sentiment
+    pos_hits = [kw for kw in POSITIVE_KEYWORDS if kw in text]
+    neg_hits = [kw for kw in NEGATIVE_KEYWORDS if kw in text]
+
+    if len(pos_hits) > len(neg_hits):
+        direction = "positive"
+    elif len(neg_hits) > len(pos_hits):
+        direction = "negative"
+    else:
+        direction = "neutral"
+
+    # Classify the issue type
     label = _classify_news_driver(title)
-    if label == "고객사/공급":
-        return "공급/고객사 이슈", "납품, 인증, 고객사 확대 기사라면 실제 매출 반영 전에 기대감을 크게 움직일 수 있습니다."
-    if label == "정책/규제":
-        return "정책/규제 이슈", "정책이나 규제 변화는 실적보다 먼저 밸류에이션에 반영되는 경우가 많습니다."
-    if label == "가격/업황":
-        return "업황/가격 이슈", "가격 방향이나 업황 변화는 사이클 피크아웃과 회복 기대를 먼저 흔듭니다."
-    if label == "실적/가이던스":
-        return "실적/가이던스 이슈", "실적과 가이던스 기사는 컨센서스와 기대치를 바로 재조정하게 만듭니다."
-    if label == "HBM/메모리":
-        return "HBM/메모리 이슈", "메모리와 HBM 기사는 반도체 체인 기대를 직접 건드리는 핵심 재료입니다."
-    if label == "AI CAPEX":
-        return "AI 투자 이슈", "대형 고객 투자 확대·축소 뉴스는 수요 기대에 직접 연결됩니다."
-    return "핵심 이슈", "반복 노출되는 핵심 재료로 판단돼 단기 주가에 영향이 클 가능성이 있습니다."
+
+    # Build explanation from actual title content
+    title_clean = title.strip()
+    if direction == "positive":
+        if "실적" in text or "매출" in text or "영업이익" in text or "earnings" in text:
+            explanation = f"호재 — {title_clean}. 실적 개선/호실적 기대는 주가 상승 압력으로 작용합니다."
+        elif "승인" in text or "approval" in text or "수주" in text or "계약" in text:
+            explanation = f"호재 — {title_clean}. 신규 수주/승인은 매출 성장 가시성을 높여줍니다."
+        elif "상향" in text or "upgrade" in text or "목표가" in text:
+            explanation = f"호재 — {title_clean}. 애널리스트 투자의견 상향은 시장 기대치를 높입니다."
+        else:
+            explanation = f"호재 — {title_clean}. 주가에 긍정적 영향이 예상됩니다."
+    elif direction == "negative":
+        if "실적" in text or "부진" in text or "miss" in text:
+            explanation = f"악재 — {title_clean}. 실적 부진은 밸류에이션 하향 조정의 직접적 원인입니다."
+        elif "규제" in text or "소송" in text or "probe" in text:
+            explanation = f"악재 — {title_clean}. 규제/법적 리스크는 불확실성을 키워 주가를 압박합니다."
+        elif "하향" in text or "downgrade" in text:
+            explanation = f"악재 — {title_clean}. 투자의견 하향은 매도 압력을 높입니다."
+        else:
+            explanation = f"악재 — {title_clean}. 주가에 부정적 영향이 우려됩니다."
+    else:
+        explanation = f"중립 — {title_clean}. 방향성 판단이 필요하며, 후속 뉴스를 주시해야 합니다."
+
+    return label, explanation
 
 
 def _extract_live_impact_news(ticker: str, info: dict | None = None, sector_id: str | None = None) -> list[dict]:
@@ -273,12 +319,18 @@ def _extract_live_impact_news(ticker: str, info: dict | None = None, sector_id: 
                 if score < 6:
                     continue
                 issue_label, explanation = _explain_live_article_impact(title, ticker, sector_id)
+                # Determine sentiment direction
+                title_lower = title.lower()
+                pos_count = sum(1 for kw in POSITIVE_KEYWORDS if kw in title_lower)
+                neg_count = sum(1 for kw in NEGATIVE_KEYWORDS if kw in title_lower)
+                impact_direction = "positive" if pos_count > neg_count else "negative" if neg_count > pos_count else "neutral"
                 candidates.append({
                     "title": title,
                     "source": getattr(article, "source", None),
                     "published_at": getattr(article, "published_at", None),
                     "url": getattr(article, "url", None),
                     "impact_score": score,
+                    "impact_direction": impact_direction,
                     "issue_label": issue_label,
                     "explanation": explanation,
                 })
@@ -286,16 +338,7 @@ def _extract_live_impact_news(ticker: str, info: dict | None = None, sector_id: 
             pass
 
     candidates.sort(key=lambda item: item["impact_score"], reverse=True)
-    top = []
-    used_labels = set()
-    for candidate in candidates:
-        label = candidate["issue_label"]
-        if label in used_labels and len(top) >= 1:
-            continue
-        used_labels.add(label)
-        top.append(candidate)
-        if len(top) >= 2:
-            break
+    top = candidates[:5]  # Take top 5 most impactful articles
     _set_cached(cache_key, top)
     return top
 

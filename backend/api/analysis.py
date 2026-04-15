@@ -13,6 +13,12 @@ from services.commodity_data import CommodityDataService
 from services.news_crawler import NewsCrawlerService
 from services.fundamentals import fetch_fundamentals
 
+try:
+    from curl_cffi.requests import Session as _CffiSessionCheck
+    _cffi_available = True
+except ImportError:
+    _cffi_available = False
+
 router = APIRouter(prefix="/api", tags=["analysis"])
 
 
@@ -895,9 +901,9 @@ def _infer_sector_id_from_profile(ticker: str, info: dict | None = None, quote: 
     ]
     text = " ".join(text_parts).lower()
 
-    if any(keyword in text for keyword in ["semiconductor", "chip", "foundry", "memory", "gpu", "electronics"]):
+    if any(keyword in text for keyword in ["semiconductor", "chip", "foundry", "memory", "gpu"]):
         return "ai-semi"
-    if any(keyword in text for keyword in ["robot", "automation", "auto manufacturer", "machinery", "industrial"]):
+    if any(keyword in text for keyword in ["robot", "automation", "auto manufacturer", "machinery"]):
         return "robotics"
     if any(keyword in text for keyword in ["uranium", "nuclear", "utility", "power generation"]):
         return "smr-nuclear"
@@ -907,13 +913,176 @@ def _infer_sector_id_from_profile(ticker: str, info: dict | None = None, quote: 
         return "space"
     if any(keyword in text for keyword in ["biotech", "drug", "pharma", "healthcare", "genomics", "life sciences"]):
         return "biotech"
-    if any(keyword in text for keyword in ["quantum", "superconduct", "cloud computing"]):
+    if any(keyword in text for keyword in ["quantum", "superconduct"]):
         return "quantum"
-    if any(keyword in text for keyword in ["hydrogen", "fuel cell", "solar", "clean energy", "renewable", "electric vehicle"]):
+    if any(keyword in text for keyword in ["hydrogen", "fuel cell", "solar", "clean energy", "renewable"]):
         return "hydrogen"
-    # Default to ai-semi for stocks that don't match any sector keywords
-    # This ensures every stock gets a valid sector_id for frontend routing
-    return "ai-semi"
+    # Additional sectors — don't misclassify as ai-semi
+    if any(keyword in text for keyword in ["battery", "lithium", "cathode", "anode", "electrolyte",
+                                            "2차전지", "배터리", "양극재", "음극재", "전해질",
+                                            "에코프로", "엘앤에프", "포스코퓨처엠",
+                                            "삼성sdi", "lg에너지", "sk온", "에너지솔루션",
+                                            "electrical equipment"]):
+        return "battery"
+    if any(keyword in text for keyword in ["electric vehicle", "ev ", "자동차", "auto", "motor",
+                                            "운송장비", "차량", "automobile"]):
+        return "ev"
+    if any(keyword in text for keyword in ["chemical", "specialty chemical", "화학", "석유화학",
+                                            "정밀화학", "기초화학"]):
+        return "chemical"
+    if any(keyword in text for keyword in ["steel", "metal", "mining", "철강", "광업", "금속",
+                                            "비철금속", "철강금속"]):
+        return "materials"
+    if any(keyword in text for keyword in ["bank", "insurance", "financial", "은행", "보험", "증권",
+                                            "금융", "캐피탈", "저축은행"]):
+        return "financial"
+    if any(keyword in text for keyword in ["전기전자", "display", "디스플레이", "반도체장비"]):
+        return "ai-semi"
+    if any(keyword in text for keyword in ["electronics", "consumer electronics"]):
+        return "ai-semi"
+    if any(keyword in text for keyword in ["software", "cloud", "saas", "platform", "internet",
+                                            "소프트웨어", "it서비스", "게임"]):
+        return "software"
+    if any(keyword in text for keyword in ["food", "beverage", "consumer", "retail", "식품",
+                                            "유통", "음식료", "생활용품"]):
+        return "consumer"
+    if any(keyword in text for keyword in ["construction", "engineering", "건설", "엔지니어링",
+                                            "건설업"]):
+        return "construction"
+    if any(keyword in text for keyword in ["shipping", "logistics", "transportation", "해운",
+                                            "물류", "운수", "항공"]):
+        return "logistics"
+    if any(keyword in text for keyword in ["telecom", "communication", "통신", "미디어",
+                                            "방송", "광고"]):
+        return "telecom"
+    if any(keyword in text for keyword in ["의약품", "의료", "바이오", "제약", "헬스케어"]):
+        return "biotech"
+    if any(keyword in text for keyword in ["유틸리티", "전력", "가스", "수도"]):
+        return "smr-nuclear"
+    # Last resort: search news headlines to determine industry
+    try:
+        company_name = ""
+        for field in ["shortName", "longName"]:
+            v = payload.get(field)
+            if v:
+                company_name = str(v)
+                break
+        if not company_name and ticker:
+            company_name = ticker.split(".")[0]
+        if company_name:
+            from services.news_crawler import NewsCrawlerService
+            articles = NewsCrawlerService.crawl_google_news_rss(company_name, lang="ko")[:5]
+            news_text = " ".join(getattr(a, "title", "") or "" for a in articles).lower()
+            if any(kw in news_text for kw in ["배터리", "2차전지", "양극재", "리튬", "전지"]):
+                return "battery"
+            if any(kw in news_text for kw in ["반도체", "chip", "hbm", "메모리", "파운드리"]):
+                return "ai-semi"
+            if any(kw in news_text for kw in ["바이오", "임상", "신약", "의약"]):
+                return "biotech"
+            if any(kw in news_text for kw in ["자동차", "ev", "전기차"]):
+                return "ev"
+            if any(kw in news_text for kw in ["로봇", "자동화", "robot"]):
+                return "robotics"
+            if any(kw in news_text for kw in ["원전", "우라늄", "smr", "원자력"]):
+                return "smr-nuclear"
+            if any(kw in news_text for kw in ["보안", "사이버", "security"]):
+                return "cybersec"
+            if any(kw in news_text for kw in ["수소", "연료전지", "태양광", "풍력"]):
+                return "hydrogen"
+            if any(kw in news_text for kw in ["화학", "석유화학", "정유"]):
+                return "chemical"
+    except Exception:
+        pass
+
+    # Default: None (will use generic checklist, NOT misclassify as semiconductor)
+    return None
+
+
+_INDUSTRY_CACHE: dict[str, tuple[float, dict]] = {}
+
+
+def _fetch_stock_industry(ticker: str) -> dict:
+    """
+    Actively fetch industry/sector info for a stock when yfinance is empty.
+    Korean stocks: scrape Naver Finance for 업종, 종목명, 시가총액.
+    US stocks: scrape Yahoo Finance summary page.
+    Returns dict with keys: industry, sector, name, market_cap.
+    """
+    cache_key = f"industry:{ticker}"
+    cached = _INDUSTRY_CACHE.get(cache_key)
+    if cached and time.time() - cached[0] < 86400:  # 24h cache
+        return cached[1]
+
+    result: dict = {}
+    is_krx = ticker.endswith(".KS") or ticker.endswith(".KQ")
+
+    if is_krx:
+        code = ticker.split(".")[0]
+        try:
+            url = f"https://finance.naver.com/item/main.naver?code={code}"
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+            r = requests.get(url, headers=headers, timeout=8)
+            if r.status_code == 200:
+                soup = BeautifulSoup(r.text, "html.parser")
+                # 종목명
+                name_el = soup.select_one("div.wrap_company h2 a")
+                if name_el:
+                    result["name"] = name_el.get_text(strip=True)
+                # 업종 (sector category)
+                blind_els = soup.select("div.section div.sub_section")
+                for section in blind_els:
+                    text = section.get_text()
+                    if "업종" in text:
+                        a_tag = section.select_one("a")
+                        if a_tag:
+                            result["industry"] = a_tag.get_text(strip=True)
+                            break
+                # Also check the "belongs to" category link
+                category_el = soup.select_one("div.trade_compare em a")
+                if category_el:
+                    result["industry"] = category_el.get_text(strip=True)
+                # Try 종목 프로필 for more detail
+                profile_url = f"https://finance.naver.com/item/coinfo.naver?code={code}"
+                r2 = requests.get(profile_url, headers=headers, timeout=8)
+                if r2.status_code == 200:
+                    soup2 = BeautifulSoup(r2.text, "html.parser")
+                    for td in soup2.select("td"):
+                        t = td.get_text(strip=True)
+                        if "업종" in t:
+                            next_td = td.find_next_sibling("td")
+                            if next_td:
+                                result["industry"] = next_td.get_text(strip=True)
+                                break
+        except Exception:
+            pass
+    else:
+        # US stocks: try Yahoo Finance summary
+        try:
+            if _cffi_available:
+                from curl_cffi.requests import Session as CffiSession
+                session = CffiSession(impersonate="chrome")
+                r = session.get(f"https://finance.yahoo.com/quote/{ticker}/", timeout=10)
+            else:
+                r = requests.get(f"https://finance.yahoo.com/quote/{ticker}/",
+                                 headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+            if r.status_code == 200:
+                soup = BeautifulSoup(r.text, "html.parser")
+                # Look for sector/industry in the page
+                for span in soup.select("span"):
+                    text = span.get_text(strip=True)
+                    if text in ("Sector", "Industry"):
+                        next_span = span.find_next("span")
+                        if next_span:
+                            if text == "Sector":
+                                result["sector"] = next_span.get_text(strip=True)
+                            else:
+                                result["industry"] = next_span.get_text(strip=True)
+        except Exception:
+            pass
+
+    if result:
+        _INDUSTRY_CACHE[cache_key] = (time.time(), result)
+    return result
 
 
 def _build_dynamic_checklist_sources(ticker: str, info: dict | None = None) -> list[dict]:
@@ -922,12 +1091,35 @@ def _build_dynamic_checklist_sources(ticker: str, info: dict | None = None) -> l
     For any stock not in the pre-built CHECKLIST_SOURCES, this analyzes the company's
     industry, business type, financial profile, and competitive landscape to generate
     a tailored checklist similar in quality to hand-crafted ones.
+
+    If yfinance info is empty (rate limited), actively fetches industry from
+    Naver Finance (Korean) or Yahoo Finance (US) to ensure correct classification.
     """
-    sector_id = _infer_sector_id_from_profile(ticker, info=info)
     info = info or {}
-    industry = str(info.get("industry") or "").lower()
+
+    # If yfinance info is empty, actively search for industry info
+    industry_raw = str(info.get("industry") or "").lower()
     yf_sector = str(info.get("sector") or "").lower()
     name = str(info.get("shortName") or info.get("longName") or ticker)
+
+    if not industry_raw and not yf_sector:
+        # yfinance failed — actively fetch from Naver/Yahoo
+        fetched = _fetch_stock_industry(ticker)
+        if fetched:
+            industry_raw = str(fetched.get("industry") or "").lower()
+            yf_sector = str(fetched.get("sector") or "").lower()
+            if fetched.get("name") and name == ticker:
+                name = fetched["name"]
+            # Merge into info for downstream use
+            if not info.get("industry"):
+                info["industry"] = fetched.get("industry", "")
+            if not info.get("sector"):
+                info["sector"] = fetched.get("sector", "")
+            if not info.get("shortName"):
+                info["shortName"] = fetched.get("name", ticker)
+
+    sector_id = _infer_sector_id_from_profile(ticker, info=info)
+    industry = industry_raw
     market_cap = info.get("marketCap") or 0
     profit_margin = info.get("profitMargins")
     revenue_growth = info.get("revenueGrowth")
@@ -937,24 +1129,148 @@ def _build_dynamic_checklist_sources(ticker: str, info: dict | None = None) -> l
 
     dynamic_sources: list[dict] = []
 
-    # ── 1. Core financial metrics (always include, but adjust thresholds by type) ──
-    margin_threshold = 0.15 if is_profitable else 0.0
-    margin_thesis = (
-        f"{name}의 수익성이 유지되는지가 밸류에이션 프리미엄의 핵심입니다."
-        if is_profitable else
-        f"{name}은 아직 적자 상태로, 흑자전환 시점이 주가 방향을 결정합니다."
-    )
-    dynamic_sources.append(
-        ck("영업이익률 추이", "earnings_metric", metric="profit_margin",
-           positive_if="above", threshold=margin_threshold, weight=90,
-           thesis=margin_thesis, window="향후 1~2분기")
-    )
-    dynamic_sources.append(
-        ck("매출 성장률", "earnings_metric", metric="revenue_growth",
-           positive_if="above", threshold=0.05 if not is_high_growth else 0.15, weight=85,
-           thesis=f"{'고성장주인 ' if is_high_growth else ''}{name}의 매출 성장 둔화는 주가 조정의 가장 직접적인 트리거입니다.",
-           window="향후 1~2분기")
-    )
+    # ── Sector-specific tailored checklists (like pre-built, per stock) ──
+    SECTOR_CHECKLISTS: dict[str, list[dict]] = {
+        "battery": [
+            ck(f"{name} 매출 성장률", "earnings_metric", metric="revenue_growth",
+               positive_if="above", threshold=0.1, weight=90,
+               thesis=f"{name}의 양극재/배터리 소재 출하량이 매출 성장에 직결됩니다. EV 수요 둔화 시 가장 먼저 타격.", window="향후 1~2분기"),
+            ck(f"{name} 영업이익률", "earnings_metric", metric="operating_margin",
+               positive_if="above", threshold=0.05, weight=92,
+               thesis=f"리튬 가격 하락기에 {name}의 마진 방어가 밸류에이션의 핵심입니다.", window="향후 1~2분기"),
+            ck("리튬 가격 (LIT)", "commodity", symbol="LIT", positive_if="up", weight=88,
+               thesis=f"리튬 가격은 {name}의 양극재 ASP와 직접 연동됩니다. 가격 하락 = 매출 감소.", window="향후 1~3개월"),
+            ck("EV 판매 추이 (DRIV)", "commodity", symbol="DRIV", positive_if="up", weight=78,
+               thesis="글로벌 EV 판매 기대가 꺾이면 배터리 소재 수요도 함께 줄어듭니다.", window="향후 1~3개월"),
+            ck("경쟁사/고객사 (LG에너지솔루션)", "commodity", symbol="373220.KS", positive_if="up", weight=65,
+               thesis="LG에너지솔루션 등 고객사 주가는 배터리 밸류체인 기대를 선반영합니다.", window="향후 1~3개월"),
+            ck(f"{name} ROE", "earnings_metric", metric="roe",
+               positive_if="above", threshold=0.05, weight=60,
+               thesis=f"적자 탈출 여부가 {name} 주가 방향을 결정합니다.", window="향후 2~4분기"),
+        ],
+        "ev": [
+            ck(f"{name} 매출 성장률", "earnings_metric", metric="revenue_growth",
+               positive_if="above", threshold=0.08, weight=88,
+               thesis=f"{name}의 차량 인도량/매출 성장 둔화가 확인되면 기대감이 먼저 무너집니다.", window="향후 1~2분기"),
+            ck(f"{name} 이익률", "earnings_metric", metric="profit_margin",
+               positive_if="above", threshold=0.05, weight=92,
+               thesis=f"{name}의 마진 방향이 주가를 가장 크게 좌우합니다.", window="향후 1~2분기"),
+            ck("배터리 원가 (리튬 ETF)", "commodity", symbol="LIT", positive_if="down", weight=75,
+               thesis="리튬 가격 하락은 배터리 원가 절감으로 마진 개선에 유리합니다.", window="향후 1~3개월"),
+            ck("EV 섹터 심리 (DRIV)", "commodity", symbol="DRIV", positive_if="up", weight=72,
+               thesis="EV 밸류체인 심리가 꺾이면 개별주 프리미엄도 같이 압축됩니다.", window="향후 1~3개월"),
+            ck("원유 가격", "commodity", symbol="CL=F", positive_if="up", weight=55,
+               thesis="유가 상승은 EV 전환 기대를 높이지만, 소비심리는 약화시킬 수 있습니다.", window="향후 1~3개월"),
+        ],
+        "chemical": [
+            ck(f"{name} 매출 성장률", "earnings_metric", metric="revenue_growth",
+               positive_if="above", threshold=0.05, weight=82,
+               thesis=f"화학 업황 턴어라운드가 {name} 매출 성장으로 이어지는지가 핵심입니다.", window="향후 1~2분기"),
+            ck(f"{name} 영업이익률", "earnings_metric", metric="operating_margin",
+               positive_if="above", threshold=0.08, weight=90,
+               thesis=f"나프타/원료 가격과 제품 스프레드가 {name}의 마진을 결정합니다.", window="향후 1~2분기"),
+            ck("원유 가격 (나프타 원가)", "commodity", symbol="CL=F", positive_if="down", weight=78,
+               thesis="유가 하락은 화학 기업의 원료비 절감으로 직결됩니다.", window="향후 1~3개월"),
+            ck("소재 섹터 (XLB)", "commodity", symbol="XLB", positive_if="up", weight=65,
+               thesis="소재 섹터 전체 사이클이 개별 화학주에 직접적으로 영향을 줍니다.", window="향후 1~3개월"),
+        ],
+        "materials": [
+            ck(f"{name} 매출 성장률", "earnings_metric", metric="revenue_growth",
+               positive_if="above", threshold=0.05, weight=85,
+               thesis=f"글로벌 산업 수요 회복이 {name} 매출에 직결됩니다.", window="향후 1~2분기"),
+            ck(f"{name} 영업이익률", "earnings_metric", metric="operating_margin",
+               positive_if="above", threshold=0.08, weight=88,
+               thesis=f"원자재 가격과 수요 사이클이 {name}의 마진을 결정합니다.", window="향후 1~2분기"),
+            ck("구리 가격", "commodity", symbol="HG=F", positive_if="up", weight=75,
+               thesis="산업 금속 수요의 전반적 트렌드를 반영합니다.", window="향후 1~3개월"),
+            ck("소재 ETF (XLB)", "commodity", symbol="XLB", positive_if="up", weight=68,
+               thesis="소재 섹터 전체 자금 흐름과 사이클을 보여줍니다.", window="향후 1~3개월"),
+        ],
+        "financial": [
+            ck(f"{name} 이익률", "earnings_metric", metric="profit_margin",
+               positive_if="above", threshold=0.15, weight=88,
+               thesis=f"금리 환경과 건전성이 {name}의 수익성을 결정합니다.", window="향후 1~2분기"),
+            ck(f"{name} ROE", "earnings_metric", metric="roe",
+               positive_if="above", threshold=0.08, weight=85,
+               thesis=f"금융주는 ROE가 자본 효율성의 핵심 지표입니다.", window="향후 2~4분기"),
+            ck("금융 ETF (XLF)", "commodity", symbol="XLF", positive_if="up", weight=78,
+               thesis="금융 섹터 전체 심리와 금리 기대를 반영합니다.", window="향후 1~3개월"),
+            ck("장기채 (TLT)", "commodity", symbol="TLT", positive_if="down", weight=72,
+               thesis="금리 상승(채권 하락)은 은행 NIM에 유리하지만, 건전성에 부담을 줄 수 있습니다.", window="향후 1~3개월"),
+        ],
+        "software": [
+            ck(f"{name} 매출 성장률", "earnings_metric", metric="revenue_growth",
+               positive_if="above", threshold=0.15, weight=90,
+               thesis=f"SaaS/소프트웨어 기업에서 매출 성장 둔화는 멀티플 압축의 직접 트리거입니다.", window="향후 1~2분기"),
+            ck(f"{name} 이익률", "earnings_metric", metric="profit_margin",
+               positive_if="above", threshold=0.1, weight=85,
+               thesis=f"{name}의 수익성 개선이 밸류에이션 프리미엄 유지의 핵심입니다.", window="향후 1~2분기"),
+            ck("소프트웨어 ETF (IGV)", "commodity", symbol="IGV", positive_if="up", weight=75,
+               thesis="소프트웨어 업종 전체 밸류에이션 흐름을 반영합니다.", window="향후 1~3개월"),
+            ck("빅테크 심리 (QQQ)", "commodity", symbol="QQQ", positive_if="up", weight=65,
+               thesis="기술주 위험선호 변화가 직접적으로 영향을 줍니다.", window="향후 1~3개월"),
+        ],
+        "consumer": [
+            ck(f"{name} 매출 성장률", "earnings_metric", metric="revenue_growth",
+               positive_if="above", threshold=0.05, weight=85,
+               thesis=f"소비재 기업은 매출 성장이 시장 점유율 유지의 핵심입니다.", window="향후 1~2분기"),
+            ck(f"{name} 이익률", "earnings_metric", metric="profit_margin",
+               positive_if="above", threshold=0.08, weight=88,
+               thesis=f"원가 상승 압박 속에서 마진 방어가 주가 방향을 결정합니다.", window="향후 1~2분기"),
+            ck("경기소비재 ETF (XLY)", "commodity", symbol="XLY", positive_if="up", weight=72,
+               thesis="소비 경기 사이클이 개별 소비재 기업에 직접적으로 영향합니다.", window="향후 1~3개월"),
+        ],
+        "construction": [
+            ck(f"{name} 매출 성장률", "earnings_metric", metric="revenue_growth",
+               positive_if="above", threshold=0.05, weight=85,
+               thesis=f"수주 잔고와 착공 실적이 {name} 매출로 직결됩니다.", window="향후 1~2분기"),
+            ck(f"{name} 영업이익률", "earnings_metric", metric="operating_margin",
+               positive_if="above", threshold=0.06, weight=88,
+               thesis=f"원자재 가격과 공사 수익성이 마진을 결정합니다.", window="향후 1~2분기"),
+            ck("주택건설 ETF (XHB)", "commodity", symbol="XHB", positive_if="up", weight=72,
+               thesis="건설/주택 경기 전체 흐름을 반영합니다.", window="향후 1~3개월"),
+        ],
+        "logistics": [
+            ck(f"{name} 매출 성장률", "earnings_metric", metric="revenue_growth",
+               positive_if="above", threshold=0.05, weight=85,
+               thesis=f"물동량 회복이 {name} 매출 성장에 직결됩니다.", window="향후 1~2분기"),
+            ck("원유 가격", "commodity", symbol="CL=F", positive_if="down", weight=78,
+               thesis="연료비가 해운/물류 기업 수익의 핵심 변수입니다.", window="향후 1~3개월"),
+        ],
+        "telecom": [
+            ck(f"{name} 매출 성장률", "earnings_metric", metric="revenue_growth",
+               positive_if="above", threshold=0.03, weight=80,
+               thesis=f"통신 기업은 안정적 매출 성장 유지가 핵심입니다.", window="향후 1~2분기"),
+            ck(f"{name} 배당수익률", "earnings_metric", metric="dividend_yield",
+               positive_if="above", threshold=0.03, weight=75,
+               thesis=f"통신주는 배당 매력이 밸류에이션의 핵심 요소입니다.", window="향후 2~4분기"),
+            ck("통신서비스 ETF (XLC)", "commodity", symbol="XLC", positive_if="up", weight=65,
+               thesis="통신/미디어 섹터 전체 심리를 반영합니다.", window="향후 1~3개월"),
+        ],
+    }
+
+    # Use sector-specific tailored checklist if available
+    if sector_id and sector_id in SECTOR_CHECKLISTS:
+        dynamic_sources = list(SECTOR_CHECKLISTS[sector_id])
+    else:
+        # Generic: core financial metrics
+        margin_threshold = 0.15 if is_profitable else 0.0
+        margin_thesis = (
+            f"{name}의 수익성이 유지되는지가 밸류에이션 프리미엄의 핵심입니다."
+            if is_profitable else
+            f"{name}은 아직 적자 상태로, 흑자전환 시점이 주가 방향을 결정합니다."
+        )
+        dynamic_sources.append(
+            ck(f"{name} 영업이익률", "earnings_metric", metric="profit_margin",
+               positive_if="above", threshold=margin_threshold, weight=90,
+               thesis=margin_thesis, window="향후 1~2분기")
+        )
+        dynamic_sources.append(
+            ck(f"{name} 매출 성장률", "earnings_metric", metric="revenue_growth",
+               positive_if="above", threshold=0.05 if not is_high_growth else 0.15, weight=85,
+               thesis=f"{'고성장주인 ' if is_high_growth else ''}{name}의 매출 성장 둔화는 주가 조정의 가장 직접적인 트리거입니다.",
+               window="향후 1~2분기")
+        )
 
     # ── 2. Industry-specific peers & ETFs ──
     INDUSTRY_PEERS: dict[str, list[dict]] = {
@@ -1026,8 +1342,27 @@ def _build_dynamic_checklist_sources(ticker: str, info: dict | None = None) -> l
             {"symbol": "SLX", "label": "철강 ETF", "why": "글로벌 철강 수급과 산업 심리를 반영합니다."},
             {"symbol": "HG=F", "label": "구리", "why": "산업 금속 수요 트렌드를 보여줍니다."},
         ],
+        "battery": [
+            {"symbol": "LIT", "label": "리튬/배터리 ETF", "why": "2차전지 밸류체인 전체 심리와 리튬 수급을 반영합니다."},
+            {"symbol": "BATT", "label": "배터리 테크 ETF", "why": "배터리 기술주 전체 자금 흐름을 보여줍니다."},
+        ],
+        "electric vehicle": [
+            {"symbol": "LIT", "label": "리튬/배터리 ETF", "why": "EV 배터리 원자재 가격과 수요를 반영합니다."},
+            {"symbol": "DRIV", "label": "EV/자율주행 ETF", "why": "EV 섹터 전체 기대감 변화를 보여줍니다."},
+        ],
+        "ev": [
+            {"symbol": "LIT", "label": "리튬/배터리 ETF", "why": "배터리 원자재 가격이 EV 밸류체인 마진에 직결됩니다."},
+            {"symbol": "DRIV", "label": "EV/자율주행 ETF", "why": "EV 밸류체인 전체 심리를 반영합니다."},
+        ],
+        "cathode": [
+            {"symbol": "LIT", "label": "리튬/배터리 ETF", "why": "양극재 기업은 리튬 가격과 EV 배터리 수요에 직접 연동됩니다."},
+        ],
         "chemical": [
             {"symbol": "XLB", "label": "소재 ETF", "why": "소재 섹터 전체 사이클을 반영합니다."},
+        ],
+        "materials": [
+            {"symbol": "XLB", "label": "소재 ETF", "why": "소재/금속 섹터 사이클을 반영합니다."},
+            {"symbol": "HG=F", "label": "구리", "why": "산업 금속 수요의 전반적 트렌드를 보여줍니다."},
         ],
         "construction": [
             {"symbol": "XHB", "label": "주택건설 ETF", "why": "건설/주택 경기를 반영합니다."},
@@ -1057,9 +1392,20 @@ def _build_dynamic_checklist_sources(ticker: str, info: dict | None = None) -> l
     }
 
     # Match industry keywords to peer lists
+    # Also use sector_id for matching (handles Korean stocks where yfinance info is empty)
     matched_peers: list[dict] = []
+    # Map sector_id to industry keyword for matching
+    SECTOR_TO_INDUSTRY = {
+        "ai-semi": "semiconductor", "robotics": "auto", "smr-nuclear": "utility",
+        "cybersec": "software", "space": "aerospace", "biotech": "biotech",
+        "quantum": "software", "hydrogen": "energy", "battery": "battery",
+        "ev": "electric vehicle", "chemical": "chemical", "materials": "steel",
+        "financial": "financial", "software": "software", "consumer": "consumer",
+        "construction": "construction", "logistics": "shipping", "telecom": "telecom",
+    }
+    sector_industry = SECTOR_TO_INDUSTRY.get(sector_id or "", "")
     for keyword, peers in INDUSTRY_PEERS.items():
-        if keyword in industry or keyword in yf_sector:
+        if keyword in industry or keyword in yf_sector or keyword == sector_industry:
             matched_peers.extend(peers)
             break
 
@@ -1164,7 +1510,7 @@ def _build_dynamic_checklist_sources(ticker: str, info: dict | None = None) -> l
     }
 
     for ind_key, commodities in INDUSTRY_COMMODITIES.items():
-        if ind_key in industry:
+        if ind_key in industry or ind_key == sector_industry:
             for sym, label, pos_if, thesis in commodities:
                 if sym not in seen_symbols:
                     seen_symbols.add(sym)
@@ -1187,7 +1533,17 @@ def _build_dynamic_checklist_sources(ticker: str, info: dict | None = None) -> l
                    weight=68, thesis=candidate["why"], window="향후 1~3개월")
             )
 
-    return dynamic_sources
+    # Dedup: remove duplicate commodity symbols (sector template + generic may overlap)
+    seen_syms: set[str] = set()
+    deduped: list[dict] = []
+    for src in dynamic_sources:
+        if src["type"] == "commodity":
+            sym = src.get("symbol", "")
+            if sym in seen_syms:
+                continue
+            seen_syms.add(sym)
+        deduped.append(src)
+    return deduped
 
 
 def _compute_return_correlation(base_hist: pd.DataFrame, compare_hist: pd.DataFrame) -> tuple[float, float, float]:

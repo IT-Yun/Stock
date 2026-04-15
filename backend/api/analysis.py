@@ -11,6 +11,7 @@ from services.stock_data import StockDataService
 from services.technical_analysis import TechnicalAnalysisService
 from services.commodity_data import CommodityDataService
 from services.news_crawler import NewsCrawlerService
+from services.fundamentals import fetch_fundamentals
 
 router = APIRouter(prefix="/api", tags=["analysis"])
 
@@ -387,9 +388,12 @@ def _extract_live_impact_news(ticker: str, info: dict | None = None, sector_id: 
 def _derive_earnings_fallbacks(stock: yf.Ticker) -> dict:
     fallback = {
         "revenue_growth": None,
+        "earnings_growth": None,
         "profit_margin": None,
         "operating_margin": None,
         "roe": None,
+        "price_to_book": None,
+        "pe_ratio": None,
     }
     try:
         qf = stock.quarterly_financials
@@ -401,6 +405,12 @@ def _derive_earnings_fallbacks(stock: yf.Ticker) -> dict:
             prev_rev = qf.loc["Total Revenue", cols[1]]
             if not pd.isna(cur_rev) and not pd.isna(prev_rev) and float(prev_rev) != 0:
                 fallback["revenue_growth"] = (float(cur_rev) - float(prev_rev)) / abs(float(prev_rev))
+        # Earnings (net income) growth
+        if len(cols) >= 2 and "Net Income" in qf.index:
+            cur_ni = qf.loc["Net Income", cols[0]]
+            prev_ni = qf.loc["Net Income", cols[1]]
+            if not pd.isna(cur_ni) and not pd.isna(prev_ni) and float(prev_ni) != 0:
+                fallback["earnings_growth"] = (float(cur_ni) - float(prev_ni)) / abs(float(prev_ni))
         if "Total Revenue" in qf.index:
             cur_rev = qf.loc["Total Revenue", cols[0]]
             if not pd.isna(cur_rev) and float(cur_rev) != 0:
@@ -408,6 +418,39 @@ def _derive_earnings_fallbacks(stock: yf.Ticker) -> dict:
                     fallback["profit_margin"] = float(qf.loc["Net Income", cols[0]]) / float(cur_rev)
                 if "Operating Income" in qf.index and not pd.isna(qf.loc["Operating Income", cols[0]]):
                     fallback["operating_margin"] = float(qf.loc["Operating Income", cols[0]]) / float(cur_rev)
+
+        # TTM P/E from quarterly net income + balance sheet shares
+        if "Net Income" in qf.index:
+            ni_vals = []
+            for c in cols[:4]:  # last 4 quarters
+                v = qf.loc["Net Income", c]
+                if not pd.isna(v):
+                    ni_vals.append(float(v))
+            if len(ni_vals) >= 2:  # at least 2 quarters
+                ttm_ni = sum(ni_vals)
+                if ttm_ni > 0:
+                    try:
+                        bs = stock.balance_sheet
+                        hist = stock.history(period="5d")
+                        if bs is not None and not bs.empty and not hist.empty:
+                            shares_row = next((r for r in ["Ordinary Shares Number", "Share Issued"] if r in bs.index), None)
+                            if shares_row:
+                                shares = float(bs.loc[shares_row].dropna().values[0])
+                                price = float(hist["Close"].iloc[-1])
+                                eps = ttm_ni / shares
+                                if eps > 0:
+                                    fallback["pe_ratio"] = round(price / eps, 2)
+                            # P/B while we have bs loaded
+                            eq_row = next((r for r in ["Stockholders Equity", "Total Equity Gross Minority Interest", "Common Stock Equity"] if r in bs.index), None)
+                            if eq_row and shares_row:
+                                equity = float(bs.loc[eq_row].dropna().values[0])
+                                shares = float(bs.loc[shares_row].dropna().values[0])
+                                price = float(hist["Close"].iloc[-1])
+                                if equity > 0 and shares > 0:
+                                    bvps = equity / shares
+                                    fallback["price_to_book"] = round(price / bvps, 2)
+                    except Exception:
+                        pass
     except Exception:
         pass
 
@@ -2685,20 +2728,44 @@ async def get_checklist_live(ticker: str) -> dict:
         sector_id = _infer_sector_id_from_profile(ticker, info=info)
         if not sources:
             sources = _build_dynamic_checklist_sources(ticker, info=info)
+        # Always try to derive earnings from quarterly_financials,
+        # even when stock.info is rate-limited (quarterly_financials often still works)
         try:
-            earnings_fallback = _derive_earnings_fallbacks(stock) if info_available else {}
+            earnings_fallback = _derive_earnings_fallbacks(stock)
         except Exception:
             earnings_fallback = {}
+        # Build earnings_data from 3 sources (priority order):
+        #   1. yfinance stock.info (fastest, but rate-limited on servers)
+        #   2. yfinance quarterly_financials computed fallback
+        #   3. Alternative sources: Naver Finance (KR) / Yahoo web scraping (US)
+        alt_data = {}
+        try:
+            alt_data = fetch_fundamentals(ticker)
+        except Exception:
+            pass
+
+        def _pick(info_key: str, fb_key: str, alt_key: str | None = None):
+            """Pick first non-None value from info → yf fallback → alt source."""
+            v = info.get(info_key)
+            if v is not None:
+                return v
+            v = earnings_fallback.get(fb_key)
+            if v is not None:
+                return v
+            if alt_key:
+                return alt_data.get(alt_key)
+            return alt_data.get(fb_key)
+
         earnings_data = {
-            "revenue_growth": info.get("revenueGrowth") if info.get("revenueGrowth") is not None else earnings_fallback.get("revenue_growth"),
-            "earnings_growth": info.get("earningsGrowth"),
-            "profit_margin": info.get("profitMargins") if info.get("profitMargins") is not None else earnings_fallback.get("profit_margin"),
-            "operating_margin": info.get("operatingMargins") if info.get("operatingMargins") is not None else earnings_fallback.get("operating_margin"),
-            "roe": info.get("returnOnEquity") if info.get("returnOnEquity") is not None else earnings_fallback.get("roe"),
-            "dividend_yield": info.get("dividendYield"),
-            "price_to_book": info.get("priceToBook"),
-            "pe_ratio": info.get("trailingPE"),
-            "forward_pe": info.get("forwardPE"),
+            "revenue_growth": _pick("revenueGrowth", "revenue_growth"),
+            "earnings_growth": _pick("earningsGrowth", "earnings_growth"),
+            "profit_margin": _pick("profitMargins", "profit_margin"),
+            "operating_margin": _pick("operatingMargins", "operating_margin"),
+            "roe": _pick("returnOnEquity", "roe"),
+            "dividend_yield": _pick("dividendYield", "dividend_yield"),
+            "price_to_book": _pick("priceToBook", "price_to_book"),
+            "pe_ratio": _pick("trailingPE", "pe_ratio"),
+            "forward_pe": _pick("forwardPE", "forward_pe"),
         }
 
         # Fetch stock's own 1-year price history for correlation analysis
@@ -2989,7 +3056,23 @@ async def get_checklist_live(ticker: str) -> dict:
                     item["source"] = f"Yahoo Finance ({ticker})" + (" + 뉴스 잠정실적" if preliminary_earnings.get("found") else "")
                     item["importance"] = src.get("weight", metadata["weight"])
                 else:
-                    item["detail"] = "데이터 없음"
+                    # Provide meaningful fallback for legitimately missing data
+                    if metric == "pe_ratio":
+                        item["detail"] = "적자 구간 (P/E 산출 불가)"
+                        item["status"] = "negative"
+                        item["value"] = None
+                        item["importance"] = src.get("weight", metadata["weight"])
+                    elif metric == "dividend_yield":
+                        item["detail"] = "무배당 (0%)"
+                        item["value"] = 0
+                        item["status"] = "neutral"
+                        item["importance"] = src.get("weight", metadata["weight"])
+                    elif metric == "price_to_book":
+                        item["detail"] = "데이터 조회 실패"
+                        item["importance"] = src.get("weight", metadata["weight"])
+                    else:
+                        item["detail"] = "데이터 조회 실패"
+                        item["importance"] = src.get("weight", metadata["weight"])
 
             elif src["type"] == "commodity":
                 try:
@@ -3121,9 +3204,19 @@ async def get_checklist_live(ticker: str) -> dict:
             "checklist": results,
             "summary": summary,
         }
-        _set_cached(cache_key, response)
-        # Also save as stale backup for rate limit situations
-        _ANALYSIS_CACHE[stale_key] = (time.time(), response)
+        # Only cache for 24h if we have good data; bad data gets 5min cache
+        has_data = any(
+            item.get("detail") not in ("데이터 없음", "조회 실패", "")
+            for item in results
+            if item.get("detail")
+        )
+        if has_data:
+            _set_cached(cache_key, response)
+            # Also save as stale backup for rate limit situations
+            _ANALYSIS_CACHE[stale_key] = (time.time(), response)
+        else:
+            # Bad/empty result — cache only 5 min so we retry soon
+            _ANALYSIS_CACHE[cache_key] = (time.time() - 86400 + 300, response)
         return response
 
     except Exception as e:

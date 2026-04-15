@@ -10,8 +10,23 @@ import type {
 
 const api = axios.create({
   baseURL: "/api",
-  timeout: 30000,
+  timeout: 60000, // 60s timeout for slow endpoints like checklist-live
 });
+
+// Auto-retry on failure (network errors, timeouts, 5xx)
+api.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const config = error.config;
+    if (!config || config._retryCount >= 2) return Promise.reject(error);
+    const status = error.response?.status;
+    const isRetryable = !status || status >= 500 || error.code === "ECONNABORTED";
+    if (!isRetryable) return Promise.reject(error);
+    config._retryCount = (config._retryCount || 0) + 1;
+    await new Promise((r) => setTimeout(r, 1000 * config._retryCount));
+    return api(config);
+  }
+);
 
 type ChartApiResponse = {
   ticker: string;

@@ -1,44 +1,38 @@
 export interface Stock {
   ticker: string;
   name: string;
+  sector?: string;
   price: number;
-  change: number;
-  changePercent: number;
-  volume: number;
-  marketCap: number;
+  change_percent: number;
 }
 
 export interface Sector {
   name: string;
   description: string;
   stocks: Stock[];
-  relatedCommodities: string[];
+  relatedCommodities?: string[];
 }
 
 export interface TechnicalIndicators {
   rsi: number;
-  rsiSignal: string;
-  macdLine: number;
-  macdSignal: number;
-  macdHistogram: number;
-  macdInterpretation: string;
-  sma20: number;
-  sma50: number;
-  sma200: number;
-  smaTrend: string;
-  bollingerUpper: number;
-  bollingerMiddle: number;
-  bollingerLower: number;
-  bollingerPosition: string;
+  macd: number;
+  macd_signal: number;
+  bollinger_upper: number;
+  bollinger_middle: number;
+  bollinger_lower: number;
+  sma_20: number;
+  sma_50: number;
+  sma_200: number | null;
+  buy_sell_signal: string;
 }
 
 export interface AnalysisResult {
   ticker: string;
-  name: string;
-  recommendation: "strong_buy" | "buy" | "hold" | "sell" | "strong_sell";
-  confidence: number;
+  name?: string;
+  recommendation: string;
+  confidence_score: number;
   indicators: TechnicalIndicators;
-  summary: string;
+  summary?: string;
 }
 
 export interface ChartDataPoint {
@@ -48,16 +42,16 @@ export interface ChartDataPoint {
   low: number;
   close: number;
   volume: number;
-  sma20?: number;
-  sma50?: number;
-  sma200?: number;
-  bollingerUpper?: number;
-  bollingerMiddle?: number;
-  bollingerLower?: number;
+  sma_20?: number;
+  sma_50?: number;
+  sma_200?: number;
+  bollinger_upper?: number;
+  bollinger_middle?: number;
+  bollinger_lower?: number;
   rsi?: number;
-  macdLine?: number;
-  macdSignal?: number;
-  macdHistogram?: number;
+  macd?: number;
+  macd_signal?: number;
+  macd_histogram?: number;
 }
 
 export interface NewsArticle {
@@ -70,9 +64,9 @@ export interface NewsArticle {
 
 export interface CommodityPrice {
   name: string;
-  nameKo: string;
+  nameKo?: string;
   price: number;
   change: number;
   changePercent: number;
-  unit: string;
+  unit?: string;
 }

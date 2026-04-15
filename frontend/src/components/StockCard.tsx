@@ -2,10 +2,10 @@ import { Link } from "react-router-dom";
 import { LineChart, Line, ResponsiveContainer } from "recharts";
 import type { Stock } from "@/types";
 
-// Generate simple sparkline mock data based on current price/change
-function generateSparkline(price: number, change: number) {
+function generateSparkline(price: number, changePct: number) {
   const points = 20;
   const data = [];
+  const change = price * (changePct / 100);
   const startPrice = price - change;
   for (let i = 0; i < points; i++) {
     const progress = i / (points - 1);
@@ -20,8 +20,11 @@ interface StockCardProps {
 }
 
 export default function StockCard({ stock }: StockCardProps) {
-  const isPositive = stock.changePercent >= 0;
-  const sparkData = generateSparkline(stock.price, stock.change);
+  const pct = stock.change_percent ?? 0;
+  const isPositive = pct >= 0;
+  const sparkData = generateSparkline(stock.price, pct);
+  const isKRX = stock.ticker.endsWith(".KS") || stock.ticker.endsWith(".KQ");
+  const currency = isKRX ? "₩" : "$";
 
   return (
     <Link
@@ -53,7 +56,7 @@ export default function StockCard({ stock }: StockCardProps) {
       </div>
       <div className="flex items-end justify-between">
         <p className="text-lg font-bold text-[var(--color-text-primary)]">
-          ${stock.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          {currency}{stock.price.toLocaleString(undefined, { minimumFractionDigits: isKRX ? 0 : 2, maximumFractionDigits: isKRX ? 0 : 2 })}
         </p>
         <p
           className={`text-sm font-semibold ${
@@ -61,7 +64,7 @@ export default function StockCard({ stock }: StockCardProps) {
           }`}
         >
           {isPositive ? "+" : ""}
-          {stock.changePercent.toFixed(2)}%
+          {pct.toFixed(2)}%
         </p>
       </div>
     </Link>

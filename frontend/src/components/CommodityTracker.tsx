@@ -48,9 +48,11 @@ export default function CommodityTracker({ relatedCommodities }: CommodityTracke
     <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-xl p-5">
       <h3 className="text-lg font-bold mb-4">원자재 시세</h3>
       <div className="space-y-1">
-        {commodities.map((c) => {
-          const isPositive = c.changePercent >= 0;
-          const isRelated = relatedCommodities?.includes(c.name) || relatedCommodities?.includes(c.nameKo);
+        {commodities.map((c: any) => {
+          const pct = c.change_percent ?? c.changePercent ?? 0;
+          const isPositive = pct >= 0;
+          const displayName = c.nameKo ?? c.name;
+          const isRelated = relatedCommodities?.includes(c.name) || relatedCommodities?.includes(displayName);
           return (
             <div
               key={c.name}
@@ -65,12 +67,12 @@ export default function CommodityTracker({ relatedCommodities }: CommodityTracke
                   <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent-blue)]" />
                 )}
                 <span className="text-sm font-medium text-[var(--color-text-primary)]">
-                  {c.nameKo}
+                  {displayName}
                 </span>
               </div>
               <div className="flex items-center gap-3">
                 <span className="text-sm font-mono text-[var(--color-text-secondary)]">
-                  {c.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {c.unit}
+                  {c.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {c.unit ?? ""}
                 </span>
                 <span
                   className={`text-xs font-semibold min-w-[60px] text-right ${
@@ -80,7 +82,7 @@ export default function CommodityTracker({ relatedCommodities }: CommodityTracke
                   }`}
                 >
                   {isPositive ? "+" : ""}
-                  {c.changePercent.toFixed(2)}%
+                  {pct.toFixed(2)}%
                 </span>
               </div>
             </div>

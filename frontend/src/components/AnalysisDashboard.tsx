@@ -65,6 +65,7 @@ export default function AnalysisDashboard({ ticker }: AnalysisDashboardProps) {
   const recColor = recommendationColors[analysis.recommendation] ?? "var(--color-text-primary)";
   const recLabel = recommendationLabels[analysis.recommendation] ?? analysis.recommendation;
   const ind = analysis.indicators;
+  const confidence = analysis.confidence_score;
 
   return (
     <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-xl p-5 space-y-5">
@@ -80,13 +81,13 @@ export default function AnalysisDashboard({ ticker }: AnalysisDashboardProps) {
         </span>
         <div className="flex-1">
           <p className="text-xs text-[var(--color-text-muted)] mb-1">
-            신뢰도 {(analysis.confidence * 100).toFixed(0)}%
+            신뢰도 {confidence.toFixed(0)}%
           </p>
           <div className="w-full bg-[var(--color-bg-hover)] rounded-full h-2.5">
             <div
               className="h-2.5 rounded-full transition-all"
               style={{
-                width: `${analysis.confidence * 100}%`,
+                width: `${confidence}%`,
                 backgroundColor: recColor,
               }}
             />
@@ -94,32 +95,32 @@ export default function AnalysisDashboard({ ticker }: AnalysisDashboardProps) {
         </div>
       </div>
 
-      {/* Summary */}
+      {/* Signal */}
       <p className="text-sm text-[var(--color-text-secondary)]">
-        {analysis.summary}
+        시그널: {ind.buy_sell_signal}
       </p>
 
       {/* Indicators breakdown */}
       <div className="space-y-3">
         <IndicatorRow
           label="RSI"
-          value={ind.rsi.toFixed(1)}
-          interpretation={ind.rsiSignal}
+          value={ind.rsi?.toFixed(1) ?? "N/A"}
+          interpretation={ind.rsi > 70 ? "과매수" : ind.rsi < 30 ? "과매도" : "중립"}
         />
         <IndicatorRow
           label="MACD"
-          value={`${ind.macdLine.toFixed(2)} / ${ind.macdSignal.toFixed(2)}`}
-          interpretation={ind.macdInterpretation}
+          value={`${ind.macd?.toFixed(2) ?? "N/A"} / ${ind.macd_signal?.toFixed(2) ?? "N/A"}`}
+          interpretation={ind.macd > ind.macd_signal ? "상승 모멘텀" : "하락 모멘텀"}
         />
         <IndicatorRow
           label="볼린저 밴드"
-          value={`${ind.bollingerLower.toFixed(1)} - ${ind.bollingerUpper.toFixed(1)}`}
-          interpretation={ind.bollingerPosition}
+          value={`${ind.bollinger_lower?.toFixed(1) ?? "?"} - ${ind.bollinger_upper?.toFixed(1) ?? "?"}`}
+          interpretation={`중심: ${ind.bollinger_middle?.toFixed(1) ?? "?"}`}
         />
         <IndicatorRow
-          label="이동평균 추세"
-          value={`SMA20: ${ind.sma20.toFixed(1)}`}
-          interpretation={ind.smaTrend}
+          label="이동평균"
+          value={`SMA20: ${ind.sma_20?.toFixed(1) ?? "N/A"}`}
+          interpretation={`SMA50: ${ind.sma_50?.toFixed(1) ?? "N/A"}`}
         />
       </div>
     </div>

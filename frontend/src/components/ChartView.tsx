@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import {
   ComposedChart,
-  Bar,
   Line,
   Area,
   XAxis,
@@ -9,13 +8,17 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  LineChart,
-  ReferenceLine,
+  Bar,
 } from "recharts";
 import { fetchChartData } from "@/api/client";
 import type { ChartDataPoint } from "@/types";
 
-const periods = ["1M", "3M", "6M", "1Y"] as const;
+const periods = [
+  { label: "1개월", value: "1mo" },
+  { label: "3개월", value: "3mo" },
+  { label: "6개월", value: "6mo" },
+  { label: "1년", value: "1y" },
+] as const;
 
 interface ChartViewProps {
   ticker: string;
@@ -23,7 +26,7 @@ interface ChartViewProps {
 
 export default function ChartView({ ticker }: ChartViewProps) {
   const [data, setData] = useState<ChartDataPoint[]>([]);
-  const [period, setPeriod] = useState<string>("6M");
+  const [period, setPeriod] = useState<string>("3mo");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -63,20 +66,20 @@ export default function ChartView({ ticker }: ChartViewProps) {
         <span className="text-sm text-[var(--color-text-secondary)]">기간:</span>
         {periods.map((p) => (
           <button
-            key={p}
-            onClick={() => setPeriod(p)}
+            key={p.value}
+            onClick={() => setPeriod(p.value)}
             className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
-              period === p
+              period === p.value
                 ? "bg-[var(--color-accent-blue)] text-white"
                 : "bg-[var(--color-bg-hover)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
             }`}
           >
-            {p}
+            {p.label}
           </button>
         ))}
       </div>
 
-      {/* Main price chart with Bollinger Bands and SMAs */}
+      {/* Main price chart */}
       <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-xl p-4">
         <h3 className="text-sm font-semibold text-[var(--color-text-secondary)] mb-3">
           주가 차트
@@ -106,124 +109,35 @@ export default function ChartView({ ticker }: ChartViewProps) {
                   open: "시가",
                   high: "고가",
                   low: "저가",
-                  sma20: "SMA 20",
-                  sma50: "SMA 50",
-                  sma200: "SMA 200",
-                  bollingerUpper: "볼린저 상단",
-                  bollingerLower: "볼린저 하단",
                 };
-                return [value.toFixed(2), labels[name] ?? name];
+                return [value.toLocaleString(undefined, { maximumFractionDigits: 2 }), labels[name] ?? name];
               }}
             />
-            {/* Bollinger Bands */}
+            {/* Price area */}
             <Area
               type="monotone"
-              dataKey="bollingerUpper"
-              stroke="none"
+              dataKey="close"
+              stroke="var(--color-accent-blue)"
               fill="var(--color-accent-blue)"
-              fillOpacity={0.05}
-            />
-            <Area
-              type="monotone"
-              dataKey="bollingerLower"
-              stroke="none"
-              fill="var(--color-bg-primary)"
-              fillOpacity={1}
-            />
-            {/* Candlestick approximation: bar from low to high */}
-            <Bar
-              dataKey="low"
-              fill="transparent"
-              stackId="candle"
-            />
-            <Bar
-              dataKey={(d: ChartDataPoint) => d.high - d.low}
-              stackId="candle"
-              fill="var(--color-text-muted)"
-              fillOpacity={0.3}
-              barSize={2}
+              fillOpacity={0.08}
+              strokeWidth={2}
             />
             {/* Close price line */}
             <Line
               type="monotone"
               dataKey="close"
-              stroke="var(--color-text-primary)"
+              stroke="var(--color-accent-blue)"
               strokeWidth={2}
               dot={false}
-            />
-            {/* SMA lines */}
-            <Line
-              type="monotone"
-              dataKey="sma20"
-              stroke="#f59e0b"
-              strokeWidth={1}
-              dot={false}
-              strokeDasharray="2 2"
-            />
-            <Line
-              type="monotone"
-              dataKey="sma50"
-              stroke="#8b5cf6"
-              strokeWidth={1}
-              dot={false}
-              strokeDasharray="4 2"
-            />
-            <Line
-              type="monotone"
-              dataKey="sma200"
-              stroke="#ec4899"
-              strokeWidth={1}
-              dot={false}
-              strokeDasharray="6 2"
             />
           </ComposedChart>
         </ResponsiveContainer>
       </div>
 
-      {/* RSI Chart */}
+      {/* Volume chart */}
       <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-xl p-4">
         <h3 className="text-sm font-semibold text-[var(--color-text-secondary)] mb-3">
-          RSI
-        </h3>
-        <ResponsiveContainer width="100%" height={120}>
-          <LineChart data={data}>
-            <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
-            <XAxis
-              dataKey="date"
-              tick={{ fill: "var(--color-text-muted)", fontSize: 10 }}
-              tickFormatter={(v: string) => v.slice(5)}
-            />
-            <YAxis
-              domain={[0, 100]}
-              ticks={[30, 50, 70]}
-              tick={{ fill: "var(--color-text-muted)", fontSize: 10 }}
-            />
-            <Tooltip
-              contentStyle={{
-                backgroundColor: "var(--color-bg-secondary)",
-                border: "1px solid var(--color-border)",
-                borderRadius: 8,
-                color: "var(--color-text-primary)",
-              }}
-              formatter={(value: number) => [value.toFixed(1), "RSI"]}
-            />
-            <ReferenceLine y={70} stroke="var(--color-accent-red)" strokeDasharray="3 3" />
-            <ReferenceLine y={30} stroke="var(--color-accent-green)" strokeDasharray="3 3" />
-            <Line
-              type="monotone"
-              dataKey="rsi"
-              stroke="var(--color-accent-blue)"
-              strokeWidth={1.5}
-              dot={false}
-            />
-          </LineChart>
-        </ResponsiveContainer>
-      </div>
-
-      {/* MACD Chart */}
-      <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-xl p-4">
-        <h3 className="text-sm font-semibold text-[var(--color-text-secondary)] mb-3">
-          MACD
+          거래량
         </h3>
         <ResponsiveContainer width="100%" height={120}>
           <ComposedChart data={data}>
@@ -235,6 +149,7 @@ export default function ChartView({ ticker }: ChartViewProps) {
             />
             <YAxis
               tick={{ fill: "var(--color-text-muted)", fontSize: 10 }}
+              tickFormatter={(v: number) => `${(v / 1e6).toFixed(0)}M`}
             />
             <Tooltip
               contentStyle={{
@@ -243,27 +158,13 @@ export default function ChartView({ ticker }: ChartViewProps) {
                 borderRadius: 8,
                 color: "var(--color-text-primary)",
               }}
+              formatter={(value: number) => [value.toLocaleString(), "거래량"]}
             />
-            <ReferenceLine y={0} stroke="var(--color-text-muted)" />
             <Bar
-              dataKey="macdHistogram"
+              dataKey="volume"
               fill="var(--color-accent-blue)"
-              fillOpacity={0.5}
+              fillOpacity={0.4}
               barSize={3}
-            />
-            <Line
-              type="monotone"
-              dataKey="macdLine"
-              stroke="var(--color-accent-blue)"
-              strokeWidth={1.5}
-              dot={false}
-            />
-            <Line
-              type="monotone"
-              dataKey="macdSignal"
-              stroke="var(--color-accent-red)"
-              strokeWidth={1.5}
-              dot={false}
             />
           </ComposedChart>
         </ResponsiveContainer>

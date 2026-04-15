@@ -10,7 +10,7 @@ import type {
 
 const api = axios.create({
   baseURL: "/api",
-  timeout: 15000,
+  timeout: 30000,
 });
 
 export async function fetchSectors(): Promise<Sector[]> {
@@ -30,13 +30,13 @@ export async function fetchAnalysis(ticker: string): Promise<AnalysisResult> {
 
 export async function fetchChartData(
   ticker: string,
-  period: string = "6M"
+  period: string = "6mo"
 ): Promise<ChartDataPoint[]> {
-  const res = await api.get<ChartDataPoint[]>(
-    `/chart/${encodeURIComponent(ticker)}`,
+  const res = await api.get<{ ticker: string; data: ChartDataPoint[] }>(
+    `/analysis/${encodeURIComponent(ticker)}/chart-data`,
     { params: { period } }
   );
-  return res.data;
+  return res.data.data;
 }
 
 export async function fetchNews(sectorName: string): Promise<NewsArticle[]> {
@@ -52,8 +52,41 @@ export async function fetchCommodities(): Promise<CommodityPrice[]> {
 }
 
 export async function searchNews(keyword: string): Promise<NewsArticle[]> {
-  const res = await api.get<NewsArticle[]>("/news/search", {
-    params: { keyword },
-  });
+  const res = await api.get<NewsArticle[]>(
+    `/news/search/${encodeURIComponent(keyword)}`
+  );
+  return res.data;
+}
+
+export async function fetchEarnings(ticker: string): Promise<any> {
+  const res = await api.get(`/analysis/${encodeURIComponent(ticker)}/earnings`);
+  return res.data;
+}
+
+export async function fetchPatternAnalysis(ticker: string): Promise<any> {
+  const res = await api.get(`/analysis/${encodeURIComponent(ticker)}/pattern`);
+  return res.data;
+}
+
+export async function fetchCommodityHistory(symbol: string, period: string = "6mo"): Promise<{ date: string; close: number }[]> {
+  const res = await api.get<{ symbol: string; data: { date: string; close: number }[] }>(
+    `/commodities/history/${encodeURIComponent(symbol)}`,
+    { params: { period } }
+  );
+  return res.data.data;
+}
+
+export async function fetchPrediction(ticker: string): Promise<any> {
+  const res = await api.get(`/analysis/${encodeURIComponent(ticker)}/prediction`);
+  return res.data;
+}
+
+export async function fetchMoveReasons(ticker: string, period: string = "3mo"): Promise<any> {
+  const res = await api.get(`/analysis/${encodeURIComponent(ticker)}/move-reasons`, { params: { period } });
+  return res.data;
+}
+
+export async function fetchChecklistLive(ticker: string): Promise<any> {
+  const res = await api.get(`/analysis/${encodeURIComponent(ticker)}/checklist-live`);
   return res.data;
 }

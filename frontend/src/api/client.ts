@@ -1,4 +1,5 @@
 import axios from "axios";
+import { SECTORS } from "@/data/sectors";
 import type {
   AnalysisResult,
   ChartDataPoint,
@@ -12,6 +13,86 @@ const api = axios.create({
   baseURL: "/api",
   timeout: 60000, // 60s timeout for slow endpoints like checklist-live
 });
+
+const inflightRequests = new Map<string, Promise<any>>();
+const responseCachePrefix = "stock-api-cache:";
+const responseCacheTtlMs = 1000 * 60 * 60 * 6;
+
+function buildRequestKey(url: string, params?: unknown) {
+  return `${url}::${JSON.stringify(params ?? null)}`;
+}
+
+function readResponseCache<T>(key: string): T | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(`${responseCachePrefix}${key}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { ts: number; data: T };
+    if (!parsed || typeof parsed.ts !== "number") return null;
+    if (Date.now() - parsed.ts > responseCacheTtlMs) return parsed.data ?? null;
+    return parsed.data ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function writeResponseCache<T>(key: string, data: T) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(
+      `${responseCachePrefix}${key}`,
+      JSON.stringify({ ts: Date.now(), data })
+    );
+  } catch {
+    // Ignore quota/storage errors and keep runtime behavior intact.
+  }
+}
+
+function buildStaticTopRankedFallback() {
+  const rankings = SECTORS.flatMap((sector) =>
+    sector.picks.map((pick, index) => ({
+      ticker: pick.ticker,
+      name: pick.name,
+      price: 0,
+      change_1m: null,
+      score: Math.max(55, 90 - index * 6),
+      rsi: null,
+      sector_id: sector.id,
+      sector_name: sector.name,
+      flag: pick.flag,
+      source: "static-fallback",
+    }))
+  ).slice(0, 10);
+
+  return { rankings };
+}
+
+function dedupedGet<T>(url: string, config?: { params?: unknown; timeout?: number }): Promise<{ data: T }> {
+  const key = buildRequestKey(url, config?.params);
+  const existing = inflightRequests.get(key);
+  if (existing) {
+    return existing;
+  }
+
+  const request = api
+    .get<T>(url, config)
+    .then((response) => {
+      writeResponseCache(key, response.data);
+      return response;
+    })
+    .catch((error) => {
+      const fallback = readResponseCache<T>(key);
+      if (fallback !== null) {
+        return { data: fallback };
+      }
+      throw error;
+    })
+    .finally(() => {
+      inflightRequests.delete(key);
+    });
+  inflightRequests.set(key, request);
+  return request;
+}
 
 // Attach auth header to every request
 api.interceptors.request.use((config) => {
@@ -51,17 +132,17 @@ type ChartApiResponse = {
 };
 
 export async function fetchSectors(): Promise<Sector[]> {
-  const res = await api.get<Sector[]>("/sectors");
+  const res = await dedupedGet<Sector[]>("/sectors");
   return res.data;
 }
 
 export async function fetchSectorStocks(sectorName: string): Promise<Stock[]> {
-  const res = await api.get<Stock[]>(`/sectors/${encodeURIComponent(sectorName)}/stocks`);
+  const res = await dedupedGet<Stock[]>(`/sectors/${encodeURIComponent(sectorName)}/stocks`);
   return res.data;
 }
 
 export async function fetchAnalysis(ticker: string): Promise<AnalysisResult> {
-  const res = await api.get<AnalysisResult>(`/analysis/${encodeURIComponent(ticker)}`);
+  const res = await dedupedGet<AnalysisResult>(`/analysis/${encodeURIComponent(ticker)}`);
   return res.data;
 }
 
@@ -69,7 +150,7 @@ export async function fetchChartData(
   ticker: string,
   period: string = "6mo"
 ): Promise<ChartDataPoint[]> {
-  const res = await api.get<ChartApiResponse>(
+  const res = await dedupedGet<ChartApiResponse>(
     `/analysis/${encodeURIComponent(ticker)}/chart-data`,
     { params: { period } }
   );
@@ -95,27 +176,27 @@ export async function fetchChartData(
 }
 
 export async function fetchNews(sectorName: string): Promise<NewsArticle[]> {
-  const res = await api.get<NewsArticle[]>(`/news/${encodeURIComponent(sectorName)}`);
+  const res = await dedupedGet<NewsArticle[]>(`/news/${encodeURIComponent(sectorName)}`);
   return res.data;
 }
 
 export async function fetchCommodities(): Promise<CommodityPrice[]> {
-  const res = await api.get<CommodityPrice[]>("/commodities");
+  const res = await dedupedGet<CommodityPrice[]>("/commodities");
   return res.data;
 }
 
 export async function searchNews(keyword: string): Promise<NewsArticle[]> {
-  const res = await api.get<NewsArticle[]>(`/news/search/${encodeURIComponent(keyword)}`);
+  const res = await dedupedGet<NewsArticle[]>(`/news/search/${encodeURIComponent(keyword)}`);
   return res.data;
 }
 
 export async function fetchEarnings(ticker: string): Promise<any> {
-  const res = await api.get(`/analysis/${encodeURIComponent(ticker)}/earnings`);
+  const res = await dedupedGet(`/analysis/${encodeURIComponent(ticker)}/earnings`);
   return res.data;
 }
 
 export async function fetchPatternAnalysis(ticker: string): Promise<any> {
-  const res = await api.get(`/analysis/${encodeURIComponent(ticker)}/pattern`);
+  const res = await dedupedGet(`/analysis/${encodeURIComponent(ticker)}/pattern`);
   return res.data;
 }
 
@@ -123,7 +204,7 @@ export async function fetchCommodityHistory(
   symbol: string,
   period: string = "6mo"
 ): Promise<{ date: string; close: number }[]> {
-  const res = await api.get<{ symbol: string; data: { date: string; close: number }[] }>(
+  const res = await dedupedGet<{ symbol: string; data: { date: string; close: number }[] }>(
     `/commodities/history/${encodeURIComponent(symbol)}`,
     { params: { period } }
   );
@@ -131,45 +212,59 @@ export async function fetchCommodityHistory(
 }
 
 export async function fetchPrediction(ticker: string): Promise<any> {
-  const res = await api.get(`/analysis/${encodeURIComponent(ticker)}/prediction`);
+  const res = await dedupedGet(`/analysis/${encodeURIComponent(ticker)}/prediction`);
   return res.data;
 }
 
 export async function fetchMoveReasons(ticker: string, period: string = "3mo"): Promise<any> {
-  const res = await api.get(`/analysis/${encodeURIComponent(ticker)}/move-reasons`, {
+  const res = await dedupedGet(`/analysis/${encodeURIComponent(ticker)}/move-reasons`, {
     params: { period },
   });
   return res.data;
 }
 
 export async function fetchChecklistLive(ticker: string): Promise<any> {
-  const res = await api.get(`/analysis/${encodeURIComponent(ticker)}/checklist-live`, {
+  const res = await dedupedGet(`/analysis/${encodeURIComponent(ticker)}/checklist-live`, {
     timeout: 90000, // 90s — checklist is the slowest endpoint
   });
   return res.data;
 }
 
 export async function fetchSectorPulse(sectorId: string): Promise<any> {
-  const res = await api.get(`/analysis/sector/${encodeURIComponent(sectorId)}/pulse`);
+  const res = await dedupedGet(`/analysis/sector/${encodeURIComponent(sectorId)}/pulse`);
   return res.data;
 }
 
 export async function searchStocks(query: string): Promise<any> {
-  const res = await api.get(`/analysis/stock-search/${encodeURIComponent(query)}`);
+  const res = await dedupedGet(`/analysis/stock-search/${encodeURIComponent(query)}`);
   return res.data;
 }
 
 export async function fetchTopRanked(): Promise<any> {
-  const res = await api.get("/analysis/top-ranked");
-  return res.data;
+  try {
+    const res = await dedupedGet("/sectors/top-ranked");
+    const payload = res.data as any;
+    if (payload?.rankings?.length) {
+      return payload;
+    }
+  } catch {
+    // Fall through to cached/static fallback below.
+  }
+
+  const cached = readResponseCache<any>(buildRequestKey("/sectors/top-ranked"));
+  if (cached?.rankings?.length) {
+    return cached;
+  }
+
+  return buildStaticTopRankedFallback();
 }
 
 export async function fetchTradingTargets(ticker: string): Promise<any> {
-  const res = await api.get(`/analysis/${encodeURIComponent(ticker)}/trading-targets`);
+  const res = await dedupedGet(`/analysis/${encodeURIComponent(ticker)}/trading-targets`);
   return res.data;
 }
 
 export async function fetchMacroEvents(): Promise<any> {
-  const res = await api.get("/analysis/macro-events");
+  const res = await dedupedGet("/analysis/macro-events");
   return res.data;
 }

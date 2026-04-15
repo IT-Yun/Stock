@@ -364,10 +364,12 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
   const [chartLoading, setChartLoading] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
+  const [partialDataWarning, setPartialDataWarning] = useState(false);
 
   // Load all ticker-dependent data with error tracking
   const loadTickerData = useCallback((t: string) => {
     setLoadError(false);
+    setPartialDataWarning(false);
     let failed = 0;
     const track = (p: Promise<any>) => p.catch(() => { failed++; });
     const promises = [
@@ -388,6 +390,7 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
       });
     Promise.allSettled(promises).then(() => {
       if (failed >= 3) setLoadError(true);
+      else if (failed > 0) setPartialDataWarning(true);
     });
     // Macro events — global, fetch once
     fetchMacroEvents().then(setMacroEvents).catch(() => {});
@@ -411,7 +414,14 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
     setChartLoading(true);
     setLoadError(false);
     const t = pick.ticker;
-    const chartP = fetchChartData(t, period).then(setChartData).catch(() => setLoadError(true));
+    const chartP = fetchChartData(t, period)
+      .then((data) => {
+        setChartData(data);
+        if (data?.length) {
+          setPartialDataWarning(false);
+        }
+      })
+      .catch(() => setLoadError(true));
     fetchMoveReasons(t, period).then(setMoveReasons).catch(() => {});
     chartP.finally(() => { setChartLoading(false); setLoading(false); });
   }, [pick.ticker, period, retryCount]);
@@ -669,6 +679,14 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
           >
             다시 시도
           </button>
+        </div>
+      )}
+
+      {!loadError && partialDataWarning && (
+        <div className="bg-[var(--color-bg-card)] border border-[rgba(234,179,8,0.25)] rounded-2xl px-4 py-3">
+          <p className="text-xs text-[var(--color-text-secondary)]">
+            일부 실시간 소스 응답이 지연되어 최근 정상 캐시 데이터를 함께 표시하고 있습니다.
+          </p>
         </div>
       )}
 

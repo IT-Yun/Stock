@@ -5,6 +5,20 @@ from services.stock_data import StockDataService
 router = APIRouter(prefix="/api", tags=["sectors"])
 
 
+@router.get("/rankings/top-ranked")
+async def get_top_ranked_rankings() -> dict:
+    """Non-conflicting top-ranked endpoint for the homepage."""
+    from api.analysis import get_top_ranked
+    return await get_top_ranked()
+
+
+@router.get("/sectors/top-ranked")
+async def get_top_ranked_under_sectors() -> dict:
+    """Stable rankings endpoint under the working /sectors namespace."""
+    from api.analysis import get_top_ranked
+    return await get_top_ranked()
+
+
 @router.get("/sectors")
 async def list_sectors() -> list[Sector]:
     """List all sectors with top 3 stocks each."""

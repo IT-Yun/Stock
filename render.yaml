@@ -2,11 +2,18 @@ services:
   - type: web
     name: stock-analyzer
     runtime: python
+    plan: starter
     buildCommand: bash build.sh
-    startCommand: cd backend && python main.py
+    startCommand: cd backend && uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}
+    disk:
+      name: stock-cache
+      mountPath: /var/data
+      sizeGB: 5
     envVars:
       - key: PYTHON_VERSION
         value: "3.11"
       - key: NODE_VERSION
         value: "20"
+      - key: CACHE_DIR
+        value: /var/data/stock-cache
     healthCheckPath: /health

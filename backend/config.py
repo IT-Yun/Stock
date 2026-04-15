@@ -18,6 +18,7 @@ class Settings:
     NEWS_SOURCES: list[str] = os.getenv(
         "NEWS_SOURCES", "naver,google"
     ).split(",")
+    CACHE_DIR: str = os.getenv("CACHE_DIR", "")
 
 
 settings = Settings()

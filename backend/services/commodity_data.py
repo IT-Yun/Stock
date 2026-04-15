@@ -1,6 +1,6 @@
 import time
-import yfinance as yf
 from models.schemas import CommodityPrice
+from services.stock_data import StockDataService
 
 
 COMMODITIES = {
@@ -36,8 +36,7 @@ def _fetch_single(name: str, info: dict) -> CommodityPrice | None:
         return cached[1]
 
     try:
-        ticker = yf.Ticker(info["symbol"])
-        hist = ticker.history(period="2d")
+        hist = StockDataService.get_stock_history(info["symbol"], period="5d")
         if hist.empty:
             return None
 

@@ -78,8 +78,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
 
 def _warmup_cache():
-    """Pre-fetch ALL data at startup so yfinance calls are minimized during usage."""
-    import time as _t
+    """Warm only the high-value shared caches at startup.
+
+    Avoid aggressive per-ticker warmup here. On cold boot that burst can trigger
+    external provider rate limits before real users even load the page.
+    """
     try:
         from services.stock_data import StockDataService
         from services.commodity_data import CommodityDataService
@@ -87,35 +90,6 @@ def _warmup_cache():
         StockDataService.get_all_sectors()
         CommodityDataService.get_commodity_prices()
         print("[WARMUP] Phase 1 done.")
-
-        # Phase 2: pre-fetch checklist for all top-pick stocks (heaviest API usage)
-        # This prevents rate limiting during normal usage
-        # Phase 2: pre-fetch chart + analysis for top picks (lighter than checklist)
-        from api.analysis import TOP_PICK_SECTOR_MAP, _ANALYSIS_CACHE, _ticker_key
-        import yfinance as yf_warmup
-        tickers = list(TOP_PICK_SECTOR_MAP.keys())
-        print(f"[WARMUP] Phase 2: pre-loading {len(tickers)} top-pick stock data...")
-        for i, ticker in enumerate(tickers):
-            try:
-                stock = yf_warmup.Ticker(ticker)
-                info = stock.info or {}
-                hist = stock.history(period="3mo")
-                if info and len(info) > 3:
-                    # Cache basic info
-                    from services.stock_data import _set_cached as stock_cache
-                    stock_cache(f"info:{ticker}", {
-                        "ticker": ticker,
-                        "name": info.get("shortName", ticker),
-                        "price": round(float(hist["Close"].iloc[-1]), 2) if not hist.empty else 0,
-                        "change_percent": round(((float(hist["Close"].iloc[-1]) - float(hist["Close"].iloc[-2])) / float(hist["Close"].iloc[-2]) * 100), 2) if len(hist) >= 2 else 0,
-                    })
-                    print(f"[WARMUP]   ({i+1}/{len(tickers)}) {ticker} OK")
-                else:
-                    print(f"[WARMUP]   ({i+1}/{len(tickers)}) {ticker} SKIP (no info)")
-            except Exception as e:
-                print(f"[WARMUP]   ({i+1}/{len(tickers)}) {ticker} SKIP: {e}")
-            _t.sleep(1)  # 1초 간격
-        print("[WARMUP] Phase 2 done.")
     except Exception as e:
         print(f"[WARMUP] Partial failure (non-fatal): {e}")
 

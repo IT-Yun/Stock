@@ -973,6 +973,23 @@ def _ticker_key(ticker: str) -> str:
     return normalized
 
 
+def _load_top_pick_name_map() -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    try:
+        for sector in StockDataService._load_sectors():
+            for stock in sector.get("stocks", []):
+                ticker = _ticker_key(stock.get("ticker", ""))
+                name = str(stock.get("name", "")).strip()
+                if ticker and name:
+                    mapping[ticker] = name
+    except Exception:
+        pass
+    return mapping
+
+
+TOP_PICK_NAME_MAP = _load_top_pick_name_map()
+
+
 def _infer_sector_id_from_profile(ticker: str, info: dict | None = None, quote: dict | None = None) -> str | None:
     normalized = _ticker_key(ticker)
     if normalized in TOP_PICK_SECTOR_MAP:
@@ -2547,10 +2564,25 @@ async def get_chart_data(ticker: str, period: str = "3mo") -> dict:
 
 @router.get("/analysis/{ticker}/earnings")
 async def get_earnings(ticker: str) -> dict:
-    """Get earnings data (quarterly EPS, revenue) from yfinance."""
+    """Get earnings and valuation data with cached fallbacks.
+
+    Avoid depending on yfinance stock.info for Korean stocks because that is the
+    most common rate-limit failure path in production.
+    """
+    cache_key = f"earnings:{_ticker_key(ticker)}"
+    cached = _get_cached_ttl(cache_key, 1800)
+    if cached is not None:
+        return cached
+
     try:
         stock = yf.Ticker(ticker)
-        info = stock.info or {}
+        is_krx = ticker.endswith(".KS") or ticker.endswith(".KQ")
+        info = {}
+        if not is_krx:
+            try:
+                info = stock.info or {}
+            except Exception:
+                info = {}
 
         # Quarterly earnings
         quarterly_earnings = []
@@ -2604,7 +2636,7 @@ async def get_earnings(ticker: str) -> dict:
                 return v
             return alt_data.get(fb_key)
 
-        return {
+        result = {
             "ticker": ticker.upper(),
             "market_cap": info.get("marketCap"),
             "pe_ratio": _epick("trailingPE", "pe_ratio"),
@@ -2625,6 +2657,8 @@ async def get_earnings(ticker: str) -> dict:
             "quarterly_earnings": quarterly_earnings,
             "quarterly_revenue": quarterly_revenue,
         }
+        _set_cached(cache_key, result)
+        return result
     except Exception as e:
         return {"ticker": ticker.upper(), "error": str(e)}
 
@@ -4683,8 +4717,7 @@ async def get_sector_pulse(sector_id: str) -> dict:
 async def get_commodity_history(symbol: str, period: str = "6mo") -> dict:
     """Get commodity price history for charting."""
     try:
-        ticker = yf.Ticker(symbol)
-        hist = ticker.history(period=period)
+        hist = StockDataService.get_stock_history(symbol, period=period)
         if hist.empty:
             return {"symbol": symbol, "data": []}
 
@@ -4698,6 +4731,12 @@ async def get_commodity_history(symbol: str, period: str = "6mo") -> dict:
         return {"symbol": symbol, "data": data}
     except Exception:
         return {"symbol": symbol, "data": []}
+
+
+@router.get("/analysis/rankings/top-ranked")
+async def get_top_ranked_rankings() -> dict:
+    """Stable rankings endpoint that does not collide with /analysis/{ticker}."""
+    return await get_top_ranked()
 
 
 @router.get("/analysis/top-ranked")
@@ -4723,7 +4762,7 @@ async def get_top_ranked() -> dict:
                 return None
 
             price = float(hist["Close"].iloc[-1])
-            name = ticker  # default
+            name = TOP_PICK_NAME_MAP.get(_ticker_key(ticker), ticker)
 
             # Try to get name from cached info (warmup stores this)
             info_cached = _ANALYSIS_CACHE.get(f"info:{ticker}")
@@ -4738,16 +4777,6 @@ async def get_top_ranked() -> dict:
                 sc_data = stock_cached[1]
                 if isinstance(sc_data, dict) and sc_data.get("name"):
                     name = sc_data["name"]
-
-            # If still default, quick yfinance attempt (with short timeout)
-            if name == ticker:
-                try:
-                    import yfinance as yf_quick
-                    stock_obj = yf_quick.Ticker(ticker)
-                    info = stock_obj.info or {}
-                    name = info.get("shortName") or info.get("longName") or ticker
-                except Exception:
-                    pass
 
             score = 50  # base
             rsi = None

@@ -294,8 +294,27 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
   const [period, setPeriod] = useState<string>("3mo");
   const [loading, setLoading] = useState(true);
   const [chartLoading, setChartLoading] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+  const [retryCount, setRetryCount] = useState(0);
 
-  // Ticker-dependent data — only re-fetches when stock changes (not on period change)
+  // Load all ticker-dependent data with error tracking
+  const loadTickerData = useCallback((t: string) => {
+    setLoadError(false);
+    let failed = 0;
+    const track = (p: Promise<any>) => p.catch(() => { failed++; });
+    const promises = [
+      track(fetchAnalysis(t).then(setAnalysis)),
+      track(fetchEarnings(t).then(setEarnings)),
+      track(fetchPatternAnalysis(t).then(setPatternData)),
+      track(fetchPrediction(t).then(setPrediction)),
+      track(fetchChecklistLive(t).then(setChecklistLive)),
+    ];
+    Promise.allSettled(promises).then(() => {
+      if (failed >= 3) setLoadError(true);
+    });
+  }, []);
+
+  // Ticker-dependent data — re-fetches when stock changes or retry
   useEffect(() => {
     setLoading(true);
     setAnalysis(null);
@@ -303,33 +322,27 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
     setPatternData(null);
     setPrediction(null);
     setChecklistLive(null);
+    loadTickerData(pick.ticker);
+  }, [pick.ticker, retryCount, loadTickerData]);
 
-    const t = pick.ticker;
-    fetchAnalysis(t).then(setAnalysis).catch(() => {});
-    fetchEarnings(t).then(setEarnings).catch(() => {});
-    fetchPatternAnalysis(t).then(setPatternData).catch(() => {});
-    fetchPrediction(t).then(setPrediction).catch(() => {});
-    fetchChecklistLive(t).then(setChecklistLive).catch(() => {});
-  }, [pick.ticker]);
-
-  // Period-dependent data — re-fetches on period OR ticker change (chart + move reasons only)
+  // Period-dependent data
   useEffect(() => {
     setChartLoading(true);
+    setLoadError(false);
     const t = pick.ticker;
-    const chartP = fetchChartData(t, period).then(setChartData).catch(() => {});
+    const chartP = fetchChartData(t, period).then(setChartData).catch(() => setLoadError(true));
     fetchMoveReasons(t, period).then(setMoveReasons).catch(() => {});
     chartP.finally(() => { setChartLoading(false); setLoading(false); });
-  }, [pick.ticker, period]);
+  }, [pick.ticker, period, retryCount]);
 
-  // Auto-refresh: silently update data every 60 seconds for real-time feel
+  // Auto-refresh every 90s (longer interval for server stability)
   useEffect(() => {
     const t = pick.ticker;
     const intervalId = window.setInterval(() => {
-      // Silently refresh without showing loading state
       fetchAnalysis(t).then(setAnalysis).catch(() => {});
       fetchChartData(t, period).then(setChartData).catch(() => {});
       fetchChecklistLive(t).then(setChecklistLive).catch(() => {});
-    }, 60_000);
+    }, 90_000);
     return () => window.clearInterval(intervalId);
   }, [pick.ticker, period]);
 
@@ -511,6 +524,20 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {loadError && !loading && chartData.length === 0 && (
+        <div className="bg-[var(--color-bg-card)] border border-[rgba(239,68,68,0.3)] rounded-2xl p-6 text-center">
+          <p className="text-sm text-[var(--color-text-primary)] font-semibold">데이터를 불러오지 못했습니다</p>
+          <p className="text-xs text-[var(--color-text-muted)] mt-1">서버가 준비 중이거나 네트워크 문제일 수 있습니다</p>
+          <button
+            onClick={() => setRetryCount((c) => c + 1)}
+            className="mt-3 px-5 py-2 rounded-xl text-sm font-bold text-white transition-all"
+            style={{ background: sectorColor }}
+          >
+            다시 시도
+          </button>
         </div>
       )}
 

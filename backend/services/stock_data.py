@@ -17,7 +17,7 @@ from config import settings
 
 # Simple in-memory cache: {key: (timestamp, data)}
 _cache: dict[str, tuple[float, object]] = {}
-CACHE_TTL = 300  # 5 minutes
+CACHE_TTL = 600  # 10 minutes — longer TTL to reduce API calls on free tier
 
 
 def _get_cached(key: str):

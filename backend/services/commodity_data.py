@@ -26,7 +26,7 @@ SECTOR_COMMODITY_MAP = {
 # Cache for commodity prices
 _commodity_cache: dict[str, tuple[float, CommodityPrice]] = {}
 _all_cache: tuple[float, list[CommodityPrice]] | None = None
-CACHE_TTL = 180  # 3 minutes for commodity data (faster refresh)
+CACHE_TTL = 600  # 10 minutes — reduce API calls on free tier
 
 
 def _fetch_single(name: str, info: dict) -> CommodityPrice | None:

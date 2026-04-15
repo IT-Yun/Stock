@@ -16,7 +16,7 @@ router = APIRouter(prefix="/api", tags=["analysis"])
 
 
 _ANALYSIS_CACHE: dict[str, tuple[float, object]] = {}
-ANALYSIS_CACHE_TTL = 300
+ANALYSIS_CACHE_TTL = 600  # 10 min cache
 
 
 def _get_cached(key: str):

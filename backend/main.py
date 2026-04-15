@@ -1,3 +1,6 @@
+import asyncio
+import threading
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -9,10 +12,46 @@ import uvicorn
 from config import settings
 from api import sectors_router, analysis_router, news_router
 
+
+def _warmup_cache():
+    """Pre-fetch popular data so first requests are fast."""
+    try:
+        from services.stock_data import StockDataService
+        from services.commodity_data import CommodityDataService
+        print("[WARMUP] Loading sectors + commodity data...")
+        StockDataService.get_all_sectors()
+        CommodityDataService.get_commodity_prices()
+        print("[WARMUP] Done — cache is hot.")
+    except Exception as e:
+        print(f"[WARMUP] Partial failure (non-fatal): {e}")
+
+
+def _keep_alive():
+    """Ping ourselves every 10 min to prevent Render free tier spin-down."""
+    import time
+    import requests as req
+    port = settings.API_PORT
+    while True:
+        time.sleep(600)
+        try:
+            req.get(f"http://127.0.0.1:{port}/health", timeout=5)
+        except Exception:
+            pass
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: warm cache in background thread (non-blocking)
+    threading.Thread(target=_warmup_cache, daemon=True).start()
+    threading.Thread(target=_keep_alive, daemon=True).start()
+    yield
+
+
 app = FastAPI(
     title="Stock Analysis API",
     description="Local stock analysis platform with technical indicators, news, and commodity data",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(

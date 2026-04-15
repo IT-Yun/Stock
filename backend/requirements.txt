@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+yfinance
+pandas
+numpy
+requests
+beautifulsoup4
+feedparser
+pydantic
+python-dotenv

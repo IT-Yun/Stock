@@ -94,11 +94,11 @@ function dedupedGet<T>(url: string, config?: { params?: unknown; timeout?: numbe
   return request;
 }
 
-// Attach auth header to every request
+// Attach auth header to every request (URI-encode to avoid non-ASCII header errors)
 api.interceptors.request.use((config) => {
   const nickname = localStorage.getItem("stock-nickname");
   if (nickname) {
-    config.headers["X-Auth-Nickname"] = nickname;
+    config.headers["X-Auth-Nickname"] = encodeURIComponent(nickname);
   }
   return config;
 });
@@ -239,17 +239,21 @@ export async function fetchTopRanked(): Promise<any> {
     const res = await dedupedGet("/sectors/top-ranked");
     const payload = res.data as any;
     if (payload?.rankings?.length) {
+      console.log(`[TOP-RANKED] API returned ${payload.rankings.length} stocks (analyzed: ${payload.total_analyzed})`);
       return payload;
     }
-  } catch {
-    // Fall through to cached/static fallback below.
+    console.warn("[TOP-RANKED] API returned empty rankings, trying cache");
+  } catch (e) {
+    console.warn("[TOP-RANKED] API failed, trying cache:", e);
   }
 
   const cached = readResponseCache<any>(buildRequestKey("/sectors/top-ranked"));
   if (cached?.rankings?.length) {
+    console.log("[TOP-RANKED] Using cached data");
     return cached;
   }
 
+  console.log("[TOP-RANKED] Using static fallback");
   return buildStaticTopRankedFallback();
 }
 

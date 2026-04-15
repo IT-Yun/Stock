@@ -65,7 +65,7 @@ class CommodityDataService:
 
     @staticmethod
     def get_commodity_prices() -> list[CommodityPrice]:
-        """Fetch prices for all tracked commodities (cached 3 min)."""
+        """Fetch prices for all tracked commodities (cached 30 min)."""
         global _all_cache
         if _all_cache and time.time() - _all_cache[0] < CACHE_TTL:
             return _all_cache[1]

@@ -183,7 +183,7 @@ class StockDataService:
 
     FinanceDataReader is faster and more reliable for KRX stocks.
     yfinance is used as fallback and for US stocks when FDR is unavailable.
-    All results are cached for 5 minutes to avoid API rate limits.
+    All results are cached for 30 minutes to avoid API rate limits.
     """
 
     @staticmethod

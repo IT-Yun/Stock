@@ -368,37 +368,14 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
   const [retryCount, setRetryCount] = useState(0);
   const [partialDataWarning, setPartialDataWarning] = useState(false);
 
-  // Load ticker-dependent data in sequential phases with progress tracking.
-  // Each phase completes before the next starts to avoid overwhelming the backend.
-  // Returns true if essential data (analysis) was loaded successfully.
-  // Load non-essential data in background (doesn't block loading screen)
-  const loadBackgroundData = useCallback((t: string) => {
-    // Pattern + Prediction + Targets
-    Promise.allSettled([
-      fetchPatternAnalysis(t).then((d) => setPatternData(d)),
-      fetchPrediction(t).then((d) => setPrediction(d)),
-      fetchTradingTargets(t).then((d) => setTradingTargets(d)),
-    ]).then(() => {
-      // Move reasons + Macro
-      return Promise.allSettled([
-        fetchMoveReasons(t, period).then((d) => setMoveReasons(d)),
-        fetchMacroEvents().then((d) => setMacroEvents(d)),
-      ]);
-    }).then(() => {
-      // Checklist (slowest — fetch last, with retry)
-      return fetchChecklistLive(t).then((cl) => setChecklistLive(cl)).catch(() => {
-        return new Promise((r) => setTimeout(r, 2000)).then(() =>
-          fetchChecklistLive(t).then((cl2) => setChecklistLive(cl2)).catch(() => {})
-        );
-      });
-    });
-  }, [period]);
-
-  // Ticker-dependent data — re-fetches when stock changes or retry
+  // Ticker-dependent data — re-fetches when stock changes, period changes, or retry
   useEffect(() => {
+    let cancelled = false;
+
     setLoading(true);
     setLoadProgress(0);
     setLoadStage("데이터 준비 중...");
+    setLoadError(false);
     setAnalysis(null);
     setEarnings(null);
     setPatternData(null);
@@ -406,73 +383,139 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
     setChecklistLive(null);
     setTradingTargets(null);
     setShowTargetReasons(null);
+    setMoveReasons(null);
+    setMacroEvents(null);
 
-    const loadAll = async () => {
+    const ticker = pick.ticker;
+    console.log(`[LOAD] Starting data load for ${ticker} (retry=${retryCount})`);
+
+    // ── Helper: safe fetch that NEVER throws ──
+    async function safeFetch<T>(label: string, fn: () => Promise<T>): Promise<T | null> {
+      try {
+        const result = await fn();
+        console.log(`[LOAD] ${label} OK`, typeof result === "object" && result ? "✓" : result);
+        return result;
+      } catch (err) {
+        console.error(`[LOAD] ${label} FAILED`, err);
+        return null;
+      }
+    }
+
+    // ── Phase 1: Essential data (chart + analysis + earnings) ──
+    async function loadEssentials() {
       setChartLoading(true);
-      setLoadError(false);
-
-      // ── Phase 1: Chart + Analysis + Earnings (essential — all in parallel) ──
       setLoadStage("주가 차트 & 분석 데이터 로딩 중...");
       setLoadProgress(10);
 
-      let chartOk = false;
-      let hasAnalysis = false;
-      let hasEarnings = false;
-
-      await Promise.allSettled([
-        fetchChartData(pick.ticker, period).then((data) => {
-          setChartData(data);
-          chartOk = Boolean(data?.length);
-          setLoadProgress(30);
-          return data;
-        }),
-        fetchAnalysis(pick.ticker).then((d) => {
-          setAnalysis(d);
-          hasAnalysis = Boolean(d);
-          setLoadProgress(50);
-          return d;
-        }),
-        fetchEarnings(pick.ticker).then((d) => {
-          setEarnings(d);
-          hasEarnings = Boolean(d);
-          setLoadProgress(60);
-          return d;
-        }),
+      const [chartResult, analysisResult, earningsResult] = await Promise.all([
+        safeFetch("chart-data", () => fetchChartData(ticker, period)),
+        safeFetch("analysis", () => fetchAnalysis(ticker)),
+        safeFetch("earnings", () => fetchEarnings(ticker)),
       ]);
+
+      if (cancelled) return false;
+
+      // Set whatever data we got
+      if (chartResult) setChartData(chartResult);
+      if (analysisResult) setAnalysis(analysisResult);
+      if (earningsResult) setEarnings(earningsResult);
+
       setChartLoading(false);
+      setLoadProgress(60);
 
-      // If chart failed, retry once
+      const chartOk = Array.isArray(chartResult) && chartResult.length > 0;
+      const hasAnalysis = analysisResult != null && typeof analysisResult === "object";
+      const hasEarnings = earningsResult != null && typeof earningsResult === "object";
+
+      console.log(`[LOAD] Essential results — chart:${chartOk} analysis:${hasAnalysis} earnings:${hasEarnings}`);
+
+      // If chart failed, one retry
       if (!chartOk) {
-        try {
-          await new Promise((r) => setTimeout(r, 1500));
-          const retried = await fetchChartData(pick.ticker, period);
-          setChartData(retried);
-          chartOk = Boolean(retried?.length);
-        } catch { /* give up on chart */ }
+        console.log("[LOAD] Chart retry...");
+        await new Promise((r) => setTimeout(r, 1500));
+        const retry = await safeFetch("chart-retry", () => fetchChartData(ticker, period));
+        if (!cancelled && retry && Array.isArray(retry) && retry.length > 0) {
+          setChartData(retry);
+          return true; // chart retry succeeded
+        }
       }
 
-      const hasEssentialData = chartOk || hasAnalysis || hasEarnings;
+      return chartOk || hasAnalysis || hasEarnings;
+    }
 
-      // ── CRITICAL: Only dismiss loading if we have ANY real data ──
-      if (!hasEssentialData) {
+    // ── Phase 2: Background data (never blocks loading) ──
+    function loadBackground() {
+      const bg = (label: string, fn: () => Promise<any>, setter: (d: any) => void) =>
+        safeFetch(label, fn).then((d) => { if (!cancelled && d) setter(d); });
+
+      // Batch 1
+      Promise.allSettled([
+        bg("pattern", () => fetchPatternAnalysis(ticker), setPatternData),
+        bg("prediction", () => fetchPrediction(ticker), setPrediction),
+        bg("targets", () => fetchTradingTargets(ticker), setTradingTargets),
+      ]).then(() => {
+        if (cancelled) return;
+        // Batch 2
+        return Promise.allSettled([
+          bg("move-reasons", () => fetchMoveReasons(ticker, period), setMoveReasons),
+          bg("macro", () => fetchMacroEvents(), setMacroEvents),
+        ]);
+      }).then(() => {
+        if (cancelled) return;
+        // Batch 3: Checklist (slowest)
+        return bg("checklist", () => fetchChecklistLive(ticker), setChecklistLive);
+      });
+    }
+
+    // ── Main execution ──
+    loadEssentials()
+      .then((hasData) => {
+        if (cancelled) return;
+
+        if (hasData) {
+          console.log("[LOAD] ✓ Essential data loaded — showing page");
+          setLoadProgress(100);
+          setLoadStage("완료!");
+          setLoading(false);
+          loadBackground();
+        } else if (retryCount < 3) {
+          console.warn(`[LOAD] ✗ No essential data — auto-retry ${retryCount + 1}/3 in 5s`);
+          setLoadError(true);
+          setLoadStage("서버 응답 대기 중...");
+          setLoadProgress(0);
+          setTimeout(() => { if (!cancelled) setRetryCount((c) => c + 1); }, 5000);
+        } else {
+          console.warn("[LOAD] ✗ Max retries reached — showing error");
+          setLoadError(true);
+          setLoadStage("데이터를 불러올 수 없습니다.");
+          setLoadProgress(0);
+          setLoading(false);
+        }
+      })
+      .catch((err) => {
+        // This should NEVER happen (safeFetch catches everything), but just in case:
+        console.error("[LOAD] UNEXPECTED loadEssentials error", err);
+        if (cancelled) return;
         setLoadError(true);
-        setLoadStage("서버 응답 대기 중...");
+        setLoadStage("예상치 못한 오류 발생");
         setLoadProgress(0);
-        setTimeout(() => setRetryCount((c) => c + 1), 5000);
-        return; // Keep loading=true
+        setLoading(false);
+      });
+
+    // Safety timeout: if loading hasn't finished after 20s, force-show whatever we have
+    const safetyTimer = setTimeout(() => {
+      if (!cancelled) {
+        console.warn("[LOAD] Safety timeout — forcing loading=false");
+        setLoading(false);
+        setPartialDataWarning(true);
       }
+    }, 20000);
 
-      if (!chartOk) setPartialDataWarning(true);
-      setLoadProgress(100);
-      setLoadStage("완료!");
-      setLoading(false);
-
-      // ── Phase 2+: Non-essential data loads in background ──
-      loadBackgroundData(pick.ticker);
+    return () => {
+      cancelled = true;
+      clearTimeout(safetyTimer);
     };
-
-    loadAll();
-  }, [pick.ticker, period, retryCount, loadBackgroundData]);
+  }, [pick.ticker, period, retryCount]);
 
   // Auto-refresh every 5 min — only refresh analysis & checklist (not chart, to avoid UI jump)
   useEffect(() => {
@@ -736,7 +779,9 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
               <>
                 <p className="text-lg font-bold text-[var(--color-text-primary)]">데이터 수신 대기 중...</p>
                 <p className="text-sm text-[var(--color-text-muted)] mt-1">{pick.name} ({pick.ticker})</p>
-                <p className="text-xs text-[rgba(234,179,8,0.9)] mt-2">서버가 준비 중입니다. 자동으로 재시도합니다...</p>
+                <p className="text-xs text-[rgba(234,179,8,0.9)] mt-2">
+                  {retryCount < 3 ? `자동 재시도 중... (${retryCount}/3)` : "서버 연결을 확인해 주세요."}
+                </p>
               </>
             ) : (
               <>
@@ -757,7 +802,7 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
               className="mt-2 px-5 py-2 rounded-xl text-sm font-bold text-white transition-all"
               style={{ background: sectorColor }}
             >
-              지금 다시 시도
+              다시 시도
             </button>
           ) : (
             <p className="text-[10px] text-[var(--color-text-muted)]">
@@ -845,21 +890,26 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                   <Bar dataKey="volume" fill={sectorColor} fillOpacity={0.08} yAxisId="vol" />
                   <YAxis yAxisId="vol" orientation="right" hide />
                   <Area type="monotone" dataKey="close" stroke={sectorColor} fill={sectorColor} fillOpacity={0.06} strokeWidth={2} />
-                  {/* Event dots on big moves */}
+                  {/* Event dots on big moves — show reason summary for large moves */}
                   {bigMoves.map((m, i) => {
                     const dp = chartData.find((d) => d.date === m.date);
                     if (!dp) return null;
+                    const moveInfo = findMoveReason(m.date);
+                    const isBig = Math.abs(m.pctChange) > 5;
+                    const labelText = isBig && moveInfo?.issue_summary
+                      ? moveInfo.issue_summary
+                      : `${m.pctChange > 0 ? "+" : ""}${m.pctChange.toFixed(0)}%`;
                     return (
                       <ReferenceDot
                         key={`move-${i}`}
                         x={m.date}
                         y={dp.close}
-                        r={Math.abs(m.pctChange) > 5 ? 8 : 6}
+                        r={isBig ? 8 : 6}
                         fill={m.pctChange > 0 ? "#22c55e" : "#ef4444"}
                         stroke="#fff"
                         strokeWidth={2}
                         style={{ cursor: "pointer", filter: `drop-shadow(0 0 6px ${m.pctChange > 0 ? "rgba(34,197,94,0.7)" : "rgba(239,68,68,0.7)"})` }}
-                        label={{ value: `${m.pctChange > 0 ? "+" : ""}${m.pctChange.toFixed(0)}%`, position: "top", fontSize: 9, fill: m.pctChange > 0 ? "#22c55e" : "#ef4444", fontWeight: 700 }}
+                        label={{ value: labelText, position: "top", fontSize: 9, fill: m.pctChange > 0 ? "#22c55e" : "#ef4444", fontWeight: 700 }}
                       />
                     );
                   })}

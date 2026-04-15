@@ -1123,7 +1123,11 @@ def _infer_sector_id_from_profile(ticker: str, info: dict | None = None, quote: 
         return "smr-nuclear"
     if any(keyword in text for keyword in ["cyber", "security", "cloud software", "software - infrastructure"]):
         return "cybersec"
-    if any(keyword in text for keyword in ["aerospace", "defense", "space", "satellite", "aircraft"]):
+    if any(keyword in text for keyword in ["defense", "weapon", "missile", "military", "munition",
+                                            "방산", "방위", "군수", "군사", "무기", "탄약",
+                                            "한화에어로", "한국항공우주", "한화디펜스", "LIG넥스원"]):
+        return "defense-geo"
+    if any(keyword in text for keyword in ["aerospace", "space", "satellite", "aircraft"]):
         return "space"
     if any(keyword in text for keyword in ["biotech", "drug", "pharma", "healthcare", "genomics", "life sciences"]):
         return "biotech"
@@ -1201,6 +1205,8 @@ def _infer_sector_id_from_profile(ticker: str, info: dict | None = None, quote: 
                 return "smr-nuclear"
             if any(kw in news_text for kw in ["보안", "사이버", "security"]):
                 return "cybersec"
+            if any(kw in news_text for kw in ["방산", "방위", "군수", "미사일", "전투기", "defense", "military"]):
+                return "defense-geo"
             if any(kw in news_text for kw in ["수소", "연료전지", "태양광", "풍력"]):
                 return "hydrogen"
             if any(kw in news_text for kw in ["화학", "석유화학", "정유"]):
@@ -1215,10 +1221,36 @@ def _infer_sector_id_from_profile(ticker: str, info: dict | None = None, quote: 
 _INDUSTRY_CACHE: dict[str, tuple[float, dict]] = {}
 
 
+# Fast static mapping for well-known Korean stocks (avoids Naver scraping delay)
+_KRX_INDUSTRY_MAP: dict[str, dict] = {
+    # 2차전지/배터리
+    "086520": {"name": "에코프로", "industry": "2차전지", "sector": "battery"},
+    "247540": {"name": "에코프로비엠", "industry": "2차전지 양극재", "sector": "battery"},
+    "373220": {"name": "LG에너지솔루션", "industry": "배터리", "sector": "battery"},
+    "006400": {"name": "삼성SDI", "industry": "배터리", "sector": "battery"},
+    "003670": {"name": "포스코퓨처엠", "industry": "2차전지 소재", "sector": "battery"},
+    "066970": {"name": "엘앤에프", "industry": "양극재", "sector": "battery"},
+    # 방산
+    "012450": {"name": "한화에어로스페이스", "industry": "방산", "sector": "defense-geo"},
+    "047810": {"name": "한국항공우주", "industry": "방산", "sector": "defense-geo"},
+    "079550": {"name": "LIG넥스원", "industry": "방산", "sector": "defense-geo"},
+    "272210": {"name": "한화시스템", "industry": "방산", "sector": "defense-geo"},
+    # 반도체
+    "000660": {"name": "SK하이닉스", "industry": "반도체", "sector": "ai-semi"},
+    "005930": {"name": "삼성전자", "industry": "전자", "sector": "ai-semi"},
+    # 바이오
+    "207940": {"name": "삼성바이오로직스", "industry": "바이오", "sector": "biotech"},
+    "068270": {"name": "셀트리온", "industry": "바이오시밀러", "sector": "biotech"},
+    # 자동차
+    "005380": {"name": "현대자동차", "industry": "자동차", "sector": "ev"},
+    "000270": {"name": "기아", "industry": "자동차", "sector": "ev"},
+}
+
+
 def _fetch_stock_industry(ticker: str) -> dict:
     """
     Actively fetch industry/sector info for a stock when yfinance is empty.
-    Korean stocks: scrape Naver Finance for 업종, 종목명, 시가총액.
+    Korean stocks: check static map first, then scrape Naver Finance.
     US stocks: scrape Yahoo Finance summary page.
     Returns dict with keys: industry, sector, name, market_cap.
     """
@@ -1229,6 +1261,15 @@ def _fetch_stock_industry(ticker: str) -> dict:
 
     result: dict = {}
     is_krx = ticker.endswith(".KS") or ticker.endswith(".KQ")
+
+    # Fast static lookup for well-known Korean stocks
+    if is_krx:
+        code = ticker.split(".")[0]
+        static = _KRX_INDUSTRY_MAP.get(code)
+        if static:
+            result = dict(static)
+            _INDUSTRY_CACHE[cache_key] = (time.time(), result)
+            return result
 
     if is_krx:
         code = ticker.split(".")[0]
@@ -1357,10 +1398,14 @@ def _build_dynamic_checklist_sources(ticker: str, info: dict | None = None) -> l
                thesis=f"리튬 가격 하락기에 {name}의 마진 방어가 밸류에이션의 핵심입니다.", window="향후 1~2분기"),
             ck("리튬 가격 (LIT)", "commodity", symbol="LIT", positive_if="up", weight=88,
                thesis=f"리튬 가격은 {name}의 양극재 ASP와 직접 연동됩니다. 가격 하락 = 매출 감소.", window="향후 1~3개월"),
+            ck("니켈 가격 (원가 압박)", "commodity", symbol="NI=F", positive_if="down", weight=72,
+               thesis=f"니켈은 양극재 핵심 원료입니다. 니켈 급등 시 {name}의 원가 부담이 커집니다.", window="향후 1~3개월"),
             ck("EV 판매 추이 (DRIV)", "commodity", symbol="DRIV", positive_if="up", weight=78,
                thesis="글로벌 EV 판매 기대가 꺾이면 배터리 소재 수요도 함께 줄어듭니다.", window="향후 1~3개월"),
-            ck("경쟁사/고객사 (LG에너지솔루션)", "commodity", symbol="373220.KS", positive_if="up", weight=65,
+            ck("고객사 (LG에너지솔루션)", "commodity", symbol="373220.KS", positive_if="up", weight=65,
                thesis="LG에너지솔루션 등 고객사 주가는 배터리 밸류체인 기대를 선반영합니다.", window="향후 1~3개월"),
+            ck("경쟁사 (포스코퓨처엠)", "commodity", symbol="003670.KS", positive_if="down", weight=55,
+               thesis="경쟁사 주가가 강해지면 시장 점유율 경쟁 우려가 커질 수 있습니다.", window="향후 1~3개월"),
             ck(f"{name} ROE", "earnings_metric", metric="roe",
                positive_if="above", threshold=0.05, weight=60,
                thesis=f"적자 탈출 여부가 {name} 주가 방향을 결정합니다.", window="향후 2~4분기"),
@@ -1463,6 +1508,20 @@ def _build_dynamic_checklist_sources(ticker: str, info: dict | None = None) -> l
                thesis=f"통신주는 배당 매력이 밸류에이션의 핵심 요소입니다.", window="향후 2~4분기"),
             ck("통신서비스 ETF (XLC)", "commodity", symbol="XLC", positive_if="up", weight=65,
                thesis="통신/미디어 섹터 전체 심리를 반영합니다.", window="향후 1~3개월"),
+        ],
+        "defense-geo": [
+            ck(f"{name} 매출 성장률", "earnings_metric", metric="revenue_growth",
+               positive_if="above", threshold=0.05, weight=82,
+               thesis=f"{name}의 수주가 실제 매출로 전환되는지가 핵심입니다.", window="향후 1~2분기"),
+            ck(f"{name} 영업이익률", "earnings_metric", metric="operating_margin",
+               positive_if="above", threshold=0.06, weight=88,
+               thesis=f"방산 기업은 수주만 많아도 마진이 뒷받침돼야 주가가 유지됩니다.", window="향후 1~2분기"),
+            ck("방산 ETF (ITA)", "commodity", symbol="ITA", positive_if="up", weight=85,
+               thesis="글로벌 국방비 증가 기대가 방산주 전체 프리미엄을 좌우합니다.", window="향후 1~3개월"),
+            ck("유가 (지정학 프록시)", "commodity", symbol="CL=F", positive_if="up", weight=72,
+               thesis="유가 급등은 지정학 리스크 심화의 신호이며 방산 수요 기대를 높입니다.", window="향후 1~3개월"),
+            ck("금 가격 (안전자산)", "commodity", symbol="GC=F", positive_if="up", weight=65,
+               thesis="금 강세는 지정학 불안 → 방산주 수혜 시나리오를 지지합니다.", window="향후 1~3개월"),
         ],
     }
 
@@ -1749,6 +1808,33 @@ def _build_dynamic_checklist_sources(ticker: str, info: dict | None = None) -> l
                 ck(candidate["label"], "commodity", symbol=symbol, positive_if=positive_if,
                    weight=68, thesis=candidate["why"], window="향후 1~3개월")
             )
+
+    # ── 7. Geopolitical / Macro risk items (대외이슈) ──
+    # Add oil/gold/VIX as geopolitical risk proxies for all stocks
+    geo_items = []
+    if "CL=F" not in seen_symbols:
+        geo_items.append(
+            ck("유가 (지정학 리스크)", "commodity", symbol="CL=F",
+               positive_if="stable", weight=45,
+               thesis="유가 급등은 이란·중동 리스크 심화 신호이며, 인플레이션과 공급망 교란으로 전 업종에 영향을 줍니다.",
+               window="향후 1~3개월")
+        )
+    if "GC=F" not in seen_symbols:
+        geo_items.append(
+            ck("금 가격 (안전자산 선호)", "commodity", symbol="GC=F",
+               positive_if="stable", weight=40,
+               thesis="금 급등은 지정학 불안과 경기 침체 우려를 반영합니다. 위험자산 선호 약화 시그널.",
+               window="향후 1~3개월")
+        )
+    # For Korean stocks, add additional geopolitical sensitivity
+    if is_krx and "KRW=X" not in seen_symbols:
+        geo_items.append(
+            ck("원/달러 환율 (대외 리스크)", "commodity", symbol="KRW=X",
+               positive_if="stable", weight=48,
+               thesis="지정학 리스크 확대 시 원화 급락 → 외국인 자금 이탈, 수입 원자재 원가 상승으로 이중 타격.",
+               window="향후 1~3개월")
+        )
+    dynamic_sources.extend(geo_items)
 
     # Dedup: remove duplicate commodity symbols (sector template + generic may overlap)
     seen_syms: set[str] = set()
@@ -3451,14 +3537,26 @@ _MOVE_SPAM_PATTERNS = [
 
 
 def _search_news_for_date(query: str, date_str: str) -> list[dict]:
-    """Search Naver & Google for news around a specific date, filter spam."""
+    """Search Naver & Google for news around a specific date, filter spam.
+    Uses Naver's date range parameters (ds/de) for precise date matching.
+    """
     from urllib.parse import quote
+    from datetime import datetime, timedelta
     results = []
     seen = set()
 
-    # Naver: date-sorted search
+    # Compute date range: target date ±2 days
     try:
-        url = f"https://search.naver.com/search.naver?where=news&query={quote(query)}&sm=tab_opt&sort=1"
+        target = datetime.strptime(date_str, "%Y-%m-%d")
+        ds = (target - timedelta(days=2)).strftime("%Y.%m.%d")
+        de = (target + timedelta(days=2)).strftime("%Y.%m.%d")
+    except Exception:
+        ds = de = ""
+
+    # Naver: date-range search (ds/de parameters for precise date filtering)
+    try:
+        naver_params = f"where=news&query={quote(query)}&sm=tab_opt&sort=0&ds={ds}&de={de}" if ds else f"where=news&query={quote(query)}&sm=tab_opt&sort=1"
+        url = f"https://search.naver.com/search.naver?{naver_params}"
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
         with limit_http():
             r = requests.get(url, headers=headers, timeout=8)
@@ -3482,11 +3580,13 @@ def _search_news_for_date(query: str, date_str: str) -> list[dict]:
     except Exception:
         pass
 
-    # Google News RSS
+    # Google News RSS with date filter
     try:
         import feedparser
         encoded = quote(query)
-        feed_url = f"https://news.google.com/rss/search?q={encoded}+after:{date_str}&hl=ko&gl=KR&ceid=KR:ko"
+        before_date = (target + timedelta(days=3)).strftime("%Y-%m-%d") if ds else ""
+        after_date = (target - timedelta(days=3)).strftime("%Y-%m-%d") if ds else date_str
+        feed_url = f"https://news.google.com/rss/search?q={encoded}+after:{after_date}+before:{before_date}&hl=ko&gl=KR&ceid=KR:ko"
         feed = feedparser.parse(feed_url)
         for entry in feed.entries[:6]:
             title = entry.get("title", "")
@@ -3503,6 +3603,32 @@ def _search_news_for_date(query: str, date_str: str) -> list[dict]:
         pass
 
     return results
+
+
+def _build_issue_summary(category: str, reason: str, pct: float) -> str:
+    """Build a short (≤15 char) summary for chart dot labels."""
+    direction = "↑" if pct > 0 else "↓"
+    # Map category to short label
+    cat_map = {
+        "실적": f"실적{direction}",
+        "가이던스": f"가이던스{direction}",
+        "제품/수주": f"수주{direction}",
+        "규제/정책": f"규제이슈",
+        "리포트": f"리포트{direction}",
+        "매크로": f"매크로{direction}",
+        "업황": f"업황{direction}",
+        "M&A/투자": f"M&A",
+        "수급": f"수급{direction}",
+    }
+    summary = cat_map.get(category, "")
+    if summary:
+        return summary
+    # Fallback: extract key term from reason
+    if "거래량" in reason and "폭증" in reason:
+        return f"거래량폭증{direction}"
+    if "시장 전체" in reason or "지수 연동" in reason:
+        return f"시장연동{direction}"
+    return f"변동{direction}"
 
 
 def _analyze_move_reason(titles: list[str], ticker: str, company_name: str,
@@ -3676,17 +3802,17 @@ def get_move_reasons(ticker: str, period: str = "3mo") -> dict:
             pct = mv["pct"]
             vol_ratio = mv["vol_ratio"]
 
-            # Search with company name + date context
-            query = f"{search_name} {date_str[:7].replace('-', '.')}"
+            # Search with company name + exact date context
+            query = f"{search_name} 주가" if is_krx else f"{search_name} stock"
             articles = _search_news_for_date(query, date_str)
+
+            # Also try broader company name search
+            if len(articles) < 3:
+                articles.extend(_search_news_for_date(search_name, date_str))
 
             # Also try ticker-based search for US stocks
             if not is_krx and len(articles) < 3:
-                articles.extend(_search_news_for_date(f"{ticker} stock", date_str))
-
-            # Also try broader search if no results
-            if len(articles) < 2:
-                articles.extend(_search_news_for_date(search_name, date_str))
+                articles.extend(_search_news_for_date(f"{ticker} stock price", date_str))
 
             # Deduplicate
             seen_titles = set()
@@ -3719,6 +3845,9 @@ def get_move_reasons(ticker: str, period: str = "3mo") -> dict:
             elif vol_ratio > 1.5:
                 vol_note = f"거래량 {vol_ratio:.1f}배 증가"
 
+            # Build short issue_summary (≤15 chars) for chart dot label
+            issue_summary = _build_issue_summary(category, reason, pct)
+
             moves.append({
                 "date": date_str,
                 "change_pct": round(pct, 2),
@@ -3726,6 +3855,7 @@ def get_move_reasons(ticker: str, period: str = "3mo") -> dict:
                 "volume_ratio": round(vol_ratio, 2),
                 "move_type": move_type,
                 "reason": reason,
+                "issue_summary": issue_summary,
                 "issue_category": category,
                 "confidence": confidence,
                 "vol_note": vol_note,
@@ -4032,6 +4162,35 @@ CHECKLIST_SOURCES = {
         ck("클린에너지 (ICLN)", "commodity", symbol="ICLN", positive_if="up", weight=60, thesis="수소 관련주는 클린에너지 위험선호 영향을 크게 받습니다.", window="향후 1~3개월"),
         ck("이익률 (흑자전환)", "earnings_metric", metric="profit_margin", positive_if="above", threshold=0.0, weight=90, thesis="흑자전환 여부가 핵심입니다.", window="향후 1~2분기"),
         ck("수소 관련 (백금)", "commodity", symbol="PL=F", positive_if="up", weight=34, thesis="수소 밸류체인 기대를 보조적으로 확인합니다.", window="향후 1~2개월"),
+    ],
+    # ── 방산/지정학 섹터 ──
+    "LMT": [
+        ck("매출 성장률", "earnings_metric", metric="revenue_growth", positive_if="above", threshold=0.05, weight=78, thesis="LMT는 F-35·미사일 방어 수주가 실제 매출로 전환되는지가 중요합니다.", window="향후 1~2분기"),
+        ck("방산 ETF (ITA)", "commodity", symbol="ITA", positive_if="up", weight=85, thesis="글로벌 국방비 증가 기대가 방산주 전체 프리미엄을 좌우합니다.", window="향후 1~3개월"),
+        ck("유가 (지정학 프록시)", "commodity", symbol="CL=F", positive_if="up", weight=72, thesis="유가 급등은 지정학 리스크 심화의 신호이며 방산 수요 기대를 높입니다.", window="향후 1~3개월"),
+        ck("금 가격 (안전자산)", "commodity", symbol="GC=F", positive_if="up", weight=65, thesis="금 강세는 지정학 불안 → 방산주 수혜 시나리오를 지지합니다.", window="향후 1~3개월"),
+        ck("이익률", "earnings_metric", metric="profit_margin", positive_if="above", threshold=0.08, weight=82, thesis="수주만 많아도 이익률이 안정적이어야 밸류 프리미엄이 유지됩니다.", window="향후 1~2분기"),
+        ck("VIX (변동성)", "commodity", symbol="^VIX", positive_if="up", weight=55, thesis="시장 불안이 커지면 방산주는 방어적 포지션으로 수혜받는 경향이 있습니다.", window="향후 1~2개월"),
+    ],
+    "012450.KS": [
+        ck("매출 성장률", "earnings_metric", metric="revenue_growth", positive_if="above", threshold=0.1, weight=88, thesis="한화에어로는 K9·천무 등 수출 수주가 매출로 실현돼야 멀티플이 유지됩니다.", window="향후 1~2분기"),
+        ck("방산 ETF (ITA)", "commodity", symbol="ITA", positive_if="up", weight=78, thesis="글로벌 방산 심리 상승은 한국 방산주에도 직접 긍정적입니다.", window="향후 1~3개월"),
+        ck("영업이익률", "earnings_metric", metric="operating_margin", positive_if="above", threshold=0.06, weight=92, thesis="한화에어로는 수출 물량이 늘어도 이익률이 뒷받침돼야 주가가 갑니다.", window="향후 1~2분기"),
+        ck("유가 (지정학 프록시)", "commodity", symbol="CL=F", positive_if="up", weight=68, thesis="중동 긴장과 유가 상승은 K-방산 수출 기대를 높입니다.", window="향후 1~3개월"),
+        ck("환율 (USD/KRW)", "commodity", symbol="KRW=X", positive_if="up", weight=55, thesis="원화 약세는 방산 수출 채산성에 우호적입니다.", window="향후 1~2개월"),
+        ck("유럽 방산 심리 (EUAD)", "commodity", symbol="LMT", positive_if="up", weight=60, thesis="유럽 재무장 수요가 K-방산 수출의 핵심 동력입니다.", window="향후 1~3개월"),
+    ],
+    "RTX": [
+        ck("매출 성장률", "earnings_metric", metric="revenue_growth", positive_if="above", threshold=0.05, weight=75, thesis="패트리어트 미사일과 항공엔진 수요가 안정적 성장을 뒷받침합니다.", window="향후 1~2분기"),
+        ck("방산 ETF (ITA)", "commodity", symbol="ITA", positive_if="up", weight=82, thesis="미국 방산 섹터 전체 심리가 RTX에 직접 반영됩니다.", window="향후 1~3개월"),
+        ck("이익률", "earnings_metric", metric="profit_margin", positive_if="above", threshold=0.08, weight=80, thesis="방산+항공 이중사업에서 마진 개선이 핵심입니다.", window="향후 1~2분기"),
+        ck("유가 (군수/항공)", "commodity", symbol="CL=F", positive_if="up", weight=60, thesis="지정학 긴장과 유가 상승은 군수 수요 기대를 높입니다.", window="향후 1~3개월"),
+    ],
+    "GD": [
+        ck("매출 성장률", "earnings_metric", metric="revenue_growth", positive_if="above", threshold=0.03, weight=72, thesis="핵잠수함·전차 수주는 장기계약이라 안정적이나 증가율 확인이 필요합니다.", window="향후 1~2분기"),
+        ck("방산 ETF (ITA)", "commodity", symbol="ITA", positive_if="up", weight=80, thesis="방산 섹터 펀드 흐름이 GD에도 직접 반영됩니다.", window="향후 1~3개월"),
+        ck("이익률", "earnings_metric", metric="profit_margin", positive_if="above", threshold=0.08, weight=78, thesis="Gulfstream과 방산의 이중 마진이 핵심 경쟁력입니다.", window="향후 1~2분기"),
+        ck("배당수익률", "earnings_metric", metric="dividend_yield", positive_if="above", threshold=0.015, weight=55, thesis="안정적 배당은 방어주 매력의 일부입니다.", window="향후 2~4분기"),
     ],
 }
 
@@ -4991,8 +5150,31 @@ def get_top_ranked() -> dict:
                 pass
 
     results.sort(key=lambda x: x["score"], reverse=True)
-    response = {"rankings": results[:10], "total_analyzed": len(results)}
-    _set_cached(cache_key, response)
+    top10 = results[:10]
+
+    # If too few results, fill with static fallback from sectors data
+    if len(top10) < 5:
+        existing_tickers = {r["ticker"] for r in top10}
+        for ticker, sector_id in list(TOP_PICK_SECTOR_MAP.items())[:15]:
+            if ticker in existing_tickers:
+                continue
+            top10.append({
+                "ticker": ticker,
+                "name": TOP_PICK_NAME_MAP.get(_ticker_key(ticker), ticker),
+                "price": 0,
+                "change_1m": None,
+                "score": 50,  # neutral default
+                "rsi": None,
+                "sector_id": sector_id,
+                "sector_name": SECTOR_NAME_MAP.get(sector_id, ""),
+                "flag": "KR" if ticker.endswith(".KS") or ticker.endswith(".KQ") else "US",
+            })
+            if len(top10) >= 10:
+                break
+
+    response = {"rankings": top10[:10], "total_analyzed": len(results)}
+    if results:  # Only cache if we got real data
+        _set_cached(cache_key, response)
     return response
 
 

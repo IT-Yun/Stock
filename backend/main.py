@@ -55,6 +55,13 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if request.method == "OPTIONS":
             return await call_next(request)
 
+        # Public read-only API access.
+        # In production the site is effectively read-only, and requiring browser
+        # localStorage-backed headers has been causing legitimate users to see
+        # empty data screens when the header is absent or stale.
+        if request.method == "GET" and path.startswith("/api/"):
+            return await call_next(request)
+
         # Allow public paths, static assets, and SPA routes
         if path in self._PUBLIC_PATHS or path.startswith("/assets") or not path.startswith("/api"):
             return await call_next(request)

@@ -11,7 +11,7 @@ from fastapi import APIRouter
 from bs4 import BeautifulSoup
 from pathlib import Path
 from models.schemas import AnalysisResult, TechnicalIndicators, CommodityPrice
-from services.stock_data import StockDataService
+from services.stock_data import StockDataService, get_yf_info, get_yf_financials
 from services.technical_analysis import TechnicalAnalysisService
 from services.commodity_data import CommodityDataService
 from services.news_crawler import NewsCrawlerService
@@ -2700,35 +2700,21 @@ async def get_earnings(ticker: str) -> dict:
         return cached
 
     try:
-        with limit_yfinance():
-            stock = yf.Ticker(ticker)
         is_krx = ticker.endswith(".KS") or ticker.endswith(".KQ")
+
+        # Use global cached info — avoids redundant yfinance calls
         info = {}
         if not is_krx:
             try:
-                with limit_yfinance():
-                    info = stock.info or {}
+                info = get_yf_info(ticker)
             except Exception:
                 info = {}
 
-        # Quarterly earnings
+        # Quarterly earnings & financials — use global cached financials
         quarterly_earnings = []
-        try:
-            qe = stock.quarterly_earnings
-            if qe is not None and not qe.empty:
-                for idx, row in qe.iterrows():
-                    quarterly_earnings.append({
-                        "date": str(idx),
-                        "revenue": float(row.get("Revenue", 0)) if not pd.isna(row.get("Revenue", None)) else None,
-                        "earnings": float(row.get("Earnings", 0)) if not pd.isna(row.get("Earnings", None)) else None,
-                    })
-        except Exception:
-            pass
-
-        # Quarterly financials
         quarterly_revenue = []
         try:
-            qf = stock.quarterly_financials
+            qf, _qbs = get_yf_financials(ticker)
             if qf is not None and not qf.empty:
                 for col in qf.columns:
                     rev = qf.loc["Total Revenue", col] if "Total Revenue" in qf.index else None
@@ -2744,6 +2730,8 @@ async def get_earnings(ticker: str) -> dict:
         # 3-source fallback: yfinance info → yf quarterly fallback → Naver/Yahoo scraping
         earnings_fallback = {}
         try:
+            # Build a lightweight stock object for _derive_earnings_fallbacks
+            stock = type("_S", (), {"quarterly_financials": qf if 'qf' in dir() else pd.DataFrame(), "quarterly_balance_sheet": _qbs if '_qbs' in dir() else pd.DataFrame()})()
             earnings_fallback = _derive_earnings_fallbacks(stock)
         except Exception:
             pass
@@ -3647,11 +3635,9 @@ async def get_move_reasons(ticker: str, period: str = "3mo") -> dict:
         volume_s = df["Volume"]
         vol_sma = volume_s.rolling(10).mean()
 
-        # Get company name for news search
+        # Get company name for news search — use global cache
         try:
-            with limit_yfinance():
-                stock = yf.Ticker(ticker)
-                info = stock.info or {}
+            info = get_yf_info(ticker)
             company_name = info.get("shortName", info.get("longName", ticker))
         except Exception:
             company_name = ticker
@@ -4079,15 +4065,8 @@ async def get_checklist_live(ticker: str) -> dict:
     try:
         sources = CHECKLIST_SOURCES.get(ticker, CHECKLIST_SOURCES.get(ticker.replace(".KS", "").replace(".KQ", ""), []))
 
-        # Fetch stock data — info may be rate limited, history usually works
-        with limit_yfinance():
-            stock = yf.Ticker(ticker)
-        info = {}
-        try:
-            with limit_yfinance():
-                info = stock.info or {}
-        except Exception:
-            pass
+        # Fetch stock data — use GLOBAL CACHE to avoid duplicate yfinance calls
+        info = get_yf_info(ticker)
         # If info is empty/rate-limited, still proceed with history-based analysis
         info_available = isinstance(info, dict) and len(info) > 3
         if not info_available:
@@ -4100,12 +4079,14 @@ async def get_checklist_live(ticker: str) -> dict:
         sector_id = _infer_sector_id_from_profile(ticker, info=info)
         if not sources:
             sources = _build_dynamic_checklist_sources(ticker, info=info)
-        # Always try to derive earnings from quarterly_financials,
-        # even when stock.info is rate-limited (quarterly_financials often still works)
+        # Use global cached financials — avoids separate yfinance call
         try:
+            qf, qbs = get_yf_financials(ticker)
+            stock = type("_S", (), {"quarterly_financials": qf, "quarterly_balance_sheet": qbs})()
             earnings_fallback = _derive_earnings_fallbacks(stock)
         except Exception:
             earnings_fallback = {}
+            stock = type("_S", (), {"quarterly_financials": pd.DataFrame(), "quarterly_balance_sheet": pd.DataFrame()})()
         # Build earnings_data from 3 sources (priority order):
         #   1. yfinance stock.info (fastest, but rate-limited on servers)
         #   2. yfinance quarterly_financials computed fallback

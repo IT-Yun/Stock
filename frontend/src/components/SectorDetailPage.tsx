@@ -361,60 +361,76 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
   const [showTargetReasons, setShowTargetReasons] = useState<string | null>(null);
   const [period, setPeriod] = useState<string>("3mo");
   const [loading, setLoading] = useState(true);
+  const [loadProgress, setLoadProgress] = useState(0);
+  const [loadStage, setLoadStage] = useState("초기화 중...");
   const [chartLoading, setChartLoading] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
   const [partialDataWarning, setPartialDataWarning] = useState(false);
 
-  // Load ticker-dependent data in phases.
-  // On Render Starter, firing every heavy endpoint at once causes queueing and
-  // transient failures across all stocks, so prioritize fast essentials first.
-  const loadTickerData = useCallback((t: string) => {
+  // Load ticker-dependent data in sequential phases with progress tracking.
+  // Each phase completes before the next starts to avoid overwhelming the backend.
+  const loadTickerData = useCallback(async (t: string) => {
     setLoadError(false);
     setPartialDataWarning(false);
-    let phaseOneFailed = 0;
-    let phaseTwoFailed = 0;
-    const trackPhaseOne = (p: Promise<any>) => p.catch(() => { phaseOneFailed++; });
-    const trackPhaseTwo = (p: Promise<any>) => p.catch(() => { phaseTwoFailed++; });
+    setLoadProgress(5);
+    setLoadStage("차트 데이터 수집 중...");
 
-    Promise.allSettled([
-      trackPhaseOne(fetchAnalysis(t).then(setAnalysis)),
-      trackPhaseOne(fetchEarnings(t).then(setEarnings)),
-    ]).then(() => {
-      if (phaseOneFailed > 0) {
-        setPartialDataWarning(true);
+    // Phase 1: Chart + Analysis (essential, must succeed)
+    setLoadStage("기술적 분석 수행 중...");
+    setLoadProgress(15);
+    const [analysisRes, earningsRes] = await Promise.allSettled([
+      fetchAnalysis(t).then((d) => { setAnalysis(d); setLoadProgress(25); return d; }),
+      fetchEarnings(t).then((d) => { setEarnings(d); setLoadProgress(35); return d; }),
+    ]);
+    if (analysisRes.status === "rejected" && earningsRes.status === "rejected") {
+      setPartialDataWarning(true);
+    }
+
+    // Phase 2: Pattern + Prediction + Targets (important, sequential batch)
+    setLoadStage("패턴 분석 & AI 예측 중...");
+    setLoadProgress(40);
+    await Promise.allSettled([
+      fetchPatternAnalysis(t).then((d) => { setPatternData(d); setLoadProgress(50); }),
+      fetchPrediction(t).then((d) => { setPrediction(d); setLoadProgress(55); }),
+      fetchTradingTargets(t).then((d) => { setTradingTargets(d); setLoadProgress(60); }),
+    ]);
+
+    // Phase 3: Move reasons + Macro (medium priority)
+    setLoadStage("뉴스 & 이벤트 분석 중...");
+    setLoadProgress(65);
+    await Promise.allSettled([
+      fetchMoveReasons(t, period).then((d) => { setMoveReasons(d); setLoadProgress(75); }),
+      fetchMacroEvents().then((d) => { setMacroEvents(d); setLoadProgress(80); }),
+    ]);
+
+    // Phase 4: Checklist (slowest — fetch last, with retry)
+    setLoadStage("투자 체크리스트 검증 중...");
+    setLoadProgress(85);
+    try {
+      const cl = await fetchChecklistLive(t);
+      setChecklistLive(cl);
+    } catch {
+      setPartialDataWarning(true);
+      // Auto-retry once
+      try {
+        await new Promise((r) => setTimeout(r, 2000));
+        const cl2 = await fetchChecklistLive(t);
+        setChecklistLive(cl2);
+      } catch {
+        // Give up on checklist — show rest of data
       }
-    });
+    }
 
-    // Delay heavy calculations so chart + core summary get server time first.
-    window.setTimeout(() => {
-      Promise.allSettled([
-        trackPhaseTwo(fetchPatternAnalysis(t).then(setPatternData)),
-        trackPhaseTwo(fetchPrediction(t).then(setPrediction)),
-        trackPhaseTwo(fetchTradingTargets(t).then(setTradingTargets)),
-        trackPhaseTwo(fetchMoveReasons(t, period).then(setMoveReasons)),
-      ]).then(() => {
-        if (phaseTwoFailed > 0) {
-          setPartialDataWarning(true);
-        }
-      });
-
-      fetchChecklistLive(t)
-        .then(setChecklistLive)
-        .catch(() => {
-          setPartialDataWarning(true);
-          window.setTimeout(() => {
-            fetchChecklistLive(t).then(setChecklistLive).catch(() => {});
-          }, 3000);
-        });
-
-      fetchMacroEvents().then(setMacroEvents).catch(() => {});
-    }, 600);
+    setLoadProgress(100);
+    setLoadStage("완료!");
   }, [period]);
 
   // Ticker-dependent data — re-fetches when stock changes or retry
   useEffect(() => {
     setLoading(true);
+    setLoadProgress(0);
+    setLoadStage("데이터 준비 중...");
     setAnalysis(null);
     setEarnings(null);
     setPatternData(null);
@@ -422,43 +438,44 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
     setChecklistLive(null);
     setTradingTargets(null);
     setShowTargetReasons(null);
-    loadTickerData(pick.ticker);
-  }, [pick.ticker, retryCount, loadTickerData]);
 
-  // Period-dependent data
-  useEffect(() => {
-    setChartLoading(true);
-    setLoadError(false);
-    const t = pick.ticker;
-    const loadChart = async () => {
+    // Load chart and ticker data together
+    const loadAll = async () => {
+      setChartLoading(true);
+      setLoadError(false);
+
+      // Chart data (with retry)
+      setLoadStage("주가 차트 로딩 중...");
+      setLoadProgress(5);
+      let chartOk = false;
       try {
-        const data = await fetchChartData(t, period);
+        const data = await fetchChartData(pick.ticker, period);
         setChartData(data);
-        if (data?.length) {
-          return true;
+        chartOk = Boolean(data?.length);
+      } catch {
+        try {
+          await new Promise((r) => setTimeout(r, 1200));
+          const retried = await fetchChartData(pick.ticker, period);
+          setChartData(retried);
+          chartOk = Boolean(retried?.length);
+        } catch {
+          setLoadError(true);
         }
-      } catch {
-        // Retry once below.
       }
+      setLoadProgress(10);
+      setChartLoading(false);
 
-      try {
-        await new Promise((resolve) => window.setTimeout(resolve, 1200));
-        const retried = await fetchChartData(t, period);
-        setChartData(retried);
-        return Boolean(retried?.length);
-      } catch {
-        setLoadError(true);
-        return false;
-      }
+      if (!chartOk) setPartialDataWarning(true);
+
+      // Now load all other data sequentially
+      await loadTickerData(pick.ticker);
+
+      // Only dismiss loading when done
+      setLoading(false);
     };
 
-    const chartP = loadChart().then((ok) => {
-      if (!ok) {
-        setPartialDataWarning(true);
-      }
-    });
-    chartP.finally(() => { setChartLoading(false); setLoading(false); });
-  }, [pick.ticker, period, retryCount]);
+    loadAll();
+  }, [pick.ticker, period, retryCount, loadTickerData]);
 
   // Auto-refresh every 5 min — only refresh analysis & checklist (not chart, to avoid UI jump)
   useEffect(() => {
@@ -730,13 +747,19 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
             <Activity size={24} style={{ color: sectorColor }} className="animate-pulse" />
           </div>
           <div className="text-center">
-            <p className="text-lg font-bold text-[var(--color-text-primary)]">AI 분석 중...</p>
+            <p className="text-lg font-bold text-[var(--color-text-primary)]">AI 분석 중... {loadProgress}%</p>
             <p className="text-sm text-[var(--color-text-muted)] mt-1">{pick.name} ({pick.ticker})</p>
-            <p className="text-xs text-[var(--color-text-muted)] mt-2">차트, 뉴스, 재무, 체크리스트를 종합 분석하고 있습니다</p>
+            <p className="text-xs mt-2" style={{ color: sectorColor }}>{loadStage}</p>
           </div>
-          <div className="w-48 h-1.5 rounded-full bg-[var(--color-bg-hover)] overflow-hidden">
-            <div className="h-full rounded-full" style={{ background: `linear-gradient(90deg, ${sectorColor}, ${sectorColor}88)`, width: "100%", animation: "progressLoad 2s ease-in-out infinite" }} />
+          <div className="w-64 h-2 rounded-full bg-[var(--color-bg-hover)] overflow-hidden">
+            <div className="h-full rounded-full transition-all duration-500 ease-out" style={{ background: `linear-gradient(90deg, ${sectorColor}, ${sectorColor}cc)`, width: `${Math.max(5, loadProgress)}%` }} />
           </div>
+          <p className="text-[10px] text-[var(--color-text-muted)]">
+            {loadProgress < 30 ? "서버에서 데이터를 가져오고 있습니다..." :
+             loadProgress < 60 ? "기술적 지표를 분석하고 있습니다..." :
+             loadProgress < 85 ? "뉴스와 이벤트를 수집하고 있습니다..." :
+             "체크리스트 최종 검증 중..."}
+          </p>
         </div>
       ) : (
         <>

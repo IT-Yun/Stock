@@ -39,6 +39,86 @@ def _set_cached(key: str, data: object):
     _cache[key] = (time.time(), data)
 
 
+# ═══ curl_cffi browser-impersonation session for yfinance ═══
+# Bypasses Yahoo Finance bot detection by mimicking real browser TLS fingerprint
+_yf_session = None
+try:
+    from curl_cffi.requests import Session as CffiSession
+    _yf_session = CffiSession(impersonate="chrome")
+    # Patch yfinance to use curl_cffi session globally
+    yf.utils.get_json = lambda *a, **kw: yf.utils.get_json(*a, **{**kw, "session": _yf_session})
+except (ImportError, Exception):
+    pass
+
+
+def _make_yf_ticker(ticker: str):
+    """Create yfinance Ticker with browser-impersonation session if available."""
+    if _yf_session:
+        return yf.Ticker(ticker, session=_yf_session)
+    return yf.Ticker(ticker)
+
+
+# ═══ Global yfinance object cache ═══
+# Prevents duplicate yfinance API calls across multiple endpoints for the same ticker.
+# When /earnings, /checklist-live, /move-reasons all need stock.info for the same ticker,
+# this ensures yfinance is only called ONCE per 30 minutes.
+
+_yf_info_cache: dict[str, tuple[float, dict]] = {}
+_yf_financials_cache: dict[str, tuple[float, object]] = {}
+_yf_lock = __import__("threading").Lock()
+_YF_CACHE_TTL = 1800  # 30 min
+
+
+def get_yf_info(ticker: str) -> dict:
+    """Get yfinance .info with global 30-min cache. Thread-safe."""
+    with _yf_lock:
+        cached = _yf_info_cache.get(ticker)
+        if cached and time.time() - cached[0] < _YF_CACHE_TTL:
+            return cached[1]
+
+    # Not cached or expired — fetch (outside lock to allow parallel fetches for different tickers)
+    try:
+        with limit_yfinance():
+            stock = _make_yf_ticker(ticker)
+            info = stock.info or {}
+        with _yf_lock:
+            _yf_info_cache[ticker] = (time.time(), info)
+        return info
+    except Exception:
+        # Return stale cache if available
+        with _yf_lock:
+            cached = _yf_info_cache.get(ticker)
+            if cached:
+                return cached[1]
+        return {}
+
+
+def get_yf_financials(ticker: str) -> tuple:
+    """Get yfinance quarterly_financials + balance_sheet with global 30-min cache.
+    Returns (quarterly_financials_df, quarterly_balance_sheet_df)."""
+    cache_key = f"fin:{ticker}"
+    with _yf_lock:
+        cached = _yf_financials_cache.get(cache_key)
+        if cached and time.time() - cached[0] < _YF_CACHE_TTL:
+            return cached[1]
+
+    try:
+        with limit_yfinance():
+            stock = _make_yf_ticker(ticker)
+            qf = stock.quarterly_financials
+            qbs = stock.quarterly_balance_sheet
+        result = (qf, qbs)
+        with _yf_lock:
+            _yf_financials_cache[cache_key] = (time.time(), result)
+        return result
+    except Exception:
+        with _yf_lock:
+            cached = _yf_financials_cache.get(cache_key)
+            if cached:
+                return cached[1]
+        return (pd.DataFrame(), pd.DataFrame())
+
+
 def _cache_path(prefix: str, key: str, suffix: str) -> Path:
     digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
     return _CACHE_DIR / f"{prefix}-{digest}.{suffix}"
@@ -167,7 +247,7 @@ class StockDataService:
         # Fallback to yfinance
         try:
             with limit_yfinance():
-                stock = yf.Ticker(ticker)
+                stock = _make_yf_ticker(ticker)
                 hist = stock.history(period="2d")
             if hist.empty:
                 _set_cached(f"info:{ticker}", result)
@@ -231,7 +311,7 @@ class StockDataService:
         # Fallback to yfinance
         try:
             with limit_yfinance():
-                stock = yf.Ticker(ticker)
+                stock = _make_yf_ticker(ticker)
                 hist = stock.history(period=period)
             _set_cached(cache_key, hist)
             if not hist.empty:

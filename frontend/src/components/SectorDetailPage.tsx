@@ -366,35 +366,51 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
   const [retryCount, setRetryCount] = useState(0);
   const [partialDataWarning, setPartialDataWarning] = useState(false);
 
-  // Load all ticker-dependent data with error tracking
+  // Load ticker-dependent data in phases.
+  // On Render Starter, firing every heavy endpoint at once causes queueing and
+  // transient failures across all stocks, so prioritize fast essentials first.
   const loadTickerData = useCallback((t: string) => {
     setLoadError(false);
     setPartialDataWarning(false);
-    let failed = 0;
-    const track = (p: Promise<any>) => p.catch(() => { failed++; });
-    const promises = [
-      track(fetchAnalysis(t).then(setAnalysis)),
-      track(fetchEarnings(t).then(setEarnings)),
-      track(fetchPatternAnalysis(t).then(setPatternData)),
-      track(fetchPrediction(t).then(setPrediction)),
-      track(fetchTradingTargets(t).then(setTradingTargets)),
-    ];
-    // Checklist is slow — fetch separately with its own retry
-    fetchChecklistLive(t)
-      .then(setChecklistLive)
-      .catch(() => {
-        // Auto-retry checklist once after 3s
-        setTimeout(() => {
-          fetchChecklistLive(t).then(setChecklistLive).catch(() => {});
-        }, 3000);
-      });
-    Promise.allSettled(promises).then(() => {
-      if (failed >= 3) setLoadError(true);
-      else if (failed > 0) setPartialDataWarning(true);
+    let phaseOneFailed = 0;
+    let phaseTwoFailed = 0;
+    const trackPhaseOne = (p: Promise<any>) => p.catch(() => { phaseOneFailed++; });
+    const trackPhaseTwo = (p: Promise<any>) => p.catch(() => { phaseTwoFailed++; });
+
+    Promise.allSettled([
+      trackPhaseOne(fetchAnalysis(t).then(setAnalysis)),
+      trackPhaseOne(fetchEarnings(t).then(setEarnings)),
+    ]).then(() => {
+      if (phaseOneFailed > 0) {
+        setPartialDataWarning(true);
+      }
     });
-    // Macro events — global, fetch once
-    fetchMacroEvents().then(setMacroEvents).catch(() => {});
-  }, []);
+
+    // Delay heavy calculations so chart + core summary get server time first.
+    window.setTimeout(() => {
+      Promise.allSettled([
+        trackPhaseTwo(fetchPatternAnalysis(t).then(setPatternData)),
+        trackPhaseTwo(fetchPrediction(t).then(setPrediction)),
+        trackPhaseTwo(fetchTradingTargets(t).then(setTradingTargets)),
+        trackPhaseTwo(fetchMoveReasons(t, period).then(setMoveReasons)),
+      ]).then(() => {
+        if (phaseTwoFailed > 0) {
+          setPartialDataWarning(true);
+        }
+      });
+
+      fetchChecklistLive(t)
+        .then(setChecklistLive)
+        .catch(() => {
+          setPartialDataWarning(true);
+          window.setTimeout(() => {
+            fetchChecklistLive(t).then(setChecklistLive).catch(() => {});
+          }, 3000);
+        });
+
+      fetchMacroEvents().then(setMacroEvents).catch(() => {});
+    }, 600);
+  }, [period]);
 
   // Ticker-dependent data — re-fetches when stock changes or retry
   useEffect(() => {
@@ -414,15 +430,33 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
     setChartLoading(true);
     setLoadError(false);
     const t = pick.ticker;
-    const chartP = fetchChartData(t, period)
-      .then((data) => {
+    const loadChart = async () => {
+      try {
+        const data = await fetchChartData(t, period);
         setChartData(data);
         if (data?.length) {
-          setPartialDataWarning(false);
+          return true;
         }
-      })
-      .catch(() => setLoadError(true));
-    fetchMoveReasons(t, period).then(setMoveReasons).catch(() => {});
+      } catch {
+        // Retry once below.
+      }
+
+      try {
+        await new Promise((resolve) => window.setTimeout(resolve, 1200));
+        const retried = await fetchChartData(t, period);
+        setChartData(retried);
+        return Boolean(retried?.length);
+      } catch {
+        setLoadError(true);
+        return false;
+      }
+    };
+
+    const chartP = loadChart().then((ok) => {
+      if (!ok) {
+        setPartialDataWarning(true);
+      }
+    });
     chartP.finally(() => { setChartLoading(false); setLoading(false); });
   }, [pick.ticker, period, retryCount]);
 

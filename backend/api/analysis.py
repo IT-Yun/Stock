@@ -4702,7 +4702,9 @@ async def get_commodity_history(symbol: str, period: str = "6mo") -> dict:
 
 @router.get("/analysis/top-ranked")
 async def get_top_ranked() -> dict:
-    """Return top 10 stocks ranked by composite score (cached 10 min)."""
+    """Return top 10 stocks ranked by composite score (cached 10 min).
+    Uses cached chart data (from StockDataService) instead of direct yfinance
+    to avoid rate limiting on Render."""
     cache_key = "top-ranked-v2"
     cached = _get_cached_ttl(cache_key, 600)
     if cached is not None:
@@ -4715,14 +4717,38 @@ async def get_top_ranked() -> dict:
 
     def score_stock(ticker: str) -> dict | None:
         try:
-            stock = yf.Ticker(ticker)
-            info = stock.info or {}
-            hist = stock.history(period="3mo")
-            if hist.empty:
+            # Use StockDataService (has its own cache) instead of direct yf.Ticker
+            hist = StockDataService.get_stock_history(ticker, period="3mo")
+            if hist.empty or len(hist) < 5:
                 return None
 
             price = float(hist["Close"].iloc[-1])
-            # Simple composite score from key metrics
+            name = ticker  # default
+
+            # Try to get name from cached info (warmup stores this)
+            info_cached = _ANALYSIS_CACHE.get(f"info:{ticker}")
+            if info_cached:
+                _, info_data = info_cached
+                name = info_data.get("name", ticker) if isinstance(info_data, dict) else ticker
+
+            # If no cached name, try StockDataService cache
+            from services.stock_data import _cache as _stock_cache
+            stock_cached = _stock_cache.get(f"info:{ticker}")
+            if stock_cached and isinstance(stock_cached, tuple) and len(stock_cached) >= 2:
+                sc_data = stock_cached[1]
+                if isinstance(sc_data, dict) and sc_data.get("name"):
+                    name = sc_data["name"]
+
+            # If still default, quick yfinance attempt (with short timeout)
+            if name == ticker:
+                try:
+                    import yfinance as yf_quick
+                    stock_obj = yf_quick.Ticker(ticker)
+                    info = stock_obj.info or {}
+                    name = info.get("shortName") or info.get("longName") or ticker
+                except Exception:
+                    pass
+
             score = 50  # base
             rsi = None
             if len(hist) >= 14:
@@ -4749,26 +4775,28 @@ async def get_top_ranked() -> dict:
             else:
                 ret_1m = 0
 
-            # Earnings growth
-            rev_growth = info.get("revenueGrowth")
-            if rev_growth is not None:
-                if rev_growth > 0.2: score += 10
-                elif rev_growth > 0: score += 5
-                elif rev_growth < -0.1: score -= 8
-
-            # Profit margin
-            margin = info.get("profitMargins")
-            if margin is not None:
-                if margin > 0.2: score += 8
-                elif margin > 0: score += 3
-                elif margin < 0: score -= 5
+            # Use fundamentals service (Naver/Yahoo scraping) instead of yfinance .info
+            try:
+                fund = fetch_fundamentals(ticker)
+                rev_growth = fund.get("revenue_growth")
+                if rev_growth is not None:
+                    if rev_growth > 0.2: score += 10
+                    elif rev_growth > 0: score += 5
+                    elif rev_growth < -0.1: score -= 8
+                margin = fund.get("profit_margin")
+                if margin is not None:
+                    if margin > 0.2: score += 8
+                    elif margin > 0: score += 3
+                    elif margin < 0: score -= 5
+            except Exception:
+                pass
 
             score = max(0, min(100, score))
             sector_id = TOP_PICK_SECTOR_MAP.get(ticker, "")
 
             return {
                 "ticker": ticker,
-                "name": info.get("shortName") or info.get("longName") or ticker,
+                "name": name,
                 "price": round(price, 2),
                 "change_1m": round(ret_1m, 1) if len(hist) >= 21 else None,
                 "score": score,
@@ -4780,11 +4808,11 @@ async def get_top_ranked() -> dict:
         except Exception:
             return None
 
-    with ThreadPoolExecutor(max_workers=8) as executor:
+    with ThreadPoolExecutor(max_workers=6) as executor:
         futures = {executor.submit(score_stock, t): t for t in all_tickers}
-        for future in as_completed(futures, timeout=30):
+        for future in as_completed(futures, timeout=45):
             try:
-                result = future.result(timeout=15)
+                result = future.result(timeout=20)
                 if result:
                     results.append(result)
             except Exception:

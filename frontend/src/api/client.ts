@@ -27,10 +27,11 @@ api.interceptors.response.use(
   (response) => response,
   async (error) => {
     const config = error.config;
-    // If 403 unauthorized — redirect to login
-    if (error.response?.status === 403) {
+    // If 403 unauthorized — redirect to login (only once, prevent loop)
+    if (error.response?.status === 403 && !sessionStorage.getItem("_auth_redirect")) {
+      sessionStorage.setItem("_auth_redirect", "1");
       localStorage.removeItem("stock-nickname");
-      window.location.reload();
+      window.location.href = "/";
       return Promise.reject(error);
     }
     if (!config || config._retryCount >= 2) return Promise.reject(error);

@@ -50,6 +50,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
+
+        # Always allow CORS preflight (OPTIONS) — must pass through to CORSMiddleware
+        if request.method == "OPTIONS":
+            return await call_next(request)
+
         # Allow public paths, static assets, and SPA routes
         if path in self._PUBLIC_PATHS or path.startswith("/assets") or not path.startswith("/api"):
             return await call_next(request)
@@ -62,7 +67,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             # Token = sha256(normalized_nickname)
             if token in _ALLOWED_HASHES:
                 return await call_next(request)
-        elif nickname:
+        if nickname:
             if _normalize(nickname) in _ALLOWED_SET:
                 return await call_next(request)
 

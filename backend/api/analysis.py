@@ -214,7 +214,7 @@ SPAM_KEYWORDS = [
 ]
 
 # Auto-generated spam sources and patterns — block entirely
-SPAM_SOURCES = ["tradingkey", "stockanalysis.com/quote", "simplywall"]
+SPAM_SOURCES = ["tradingkey", "stockanalysis.com/quote", "simplywall", "smartkarma", "wallstreetzen", "marketscreener", "trendlyne"]
 SPAM_TITLE_PATTERNS = [
     "주식 움직였습니다",  # "stock moved" auto-articles
     "주식이 움직였습니다",
@@ -331,6 +331,139 @@ def _explain_live_article_impact(title: str, ticker: str, sector_id: str | None)
     return label, explanation
 
 
+def _search_stock_latest_news(queries: list[str], max_per_query: int = 8) -> list[dict]:
+    """
+    Directly search Naver + Google RSS for latest stock news.
+    Returns list of {title, source, url, published_at} dicts with spam filtered out.
+    """
+    from urllib.parse import quote
+    import feedparser
+
+    results = []
+    seen = set()
+
+    all_spam = SPAM_SOURCES + SPAM_TITLE_PATTERNS
+
+    for query in queries:
+        # Naver News — sorted by latest
+        try:
+            url = f"https://search.naver.com/search.naver?where=news&query={quote(query)}&sm=tab_opt&sort=1"
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+            r = requests.get(url, headers=headers, timeout=8)
+            if r.status_code == 200:
+                soup = BeautifulSoup(r.text, "html.parser")
+                for item in soup.select("div.news_area")[:max_per_query]:
+                    title_tag = item.select_one("a.news_tit")
+                    if not title_tag:
+                        continue
+                    title = title_tag.get_text(strip=True)
+                    if title in seen:
+                        continue
+                    source_tag = item.select_one("a.info.press")
+                    source = source_tag.get_text(strip=True) if source_tag else ""
+                    # Spam filter
+                    combined = (title + " " + source).lower()
+                    if any(s in combined for s in all_spam):
+                        continue
+                    if any(s in combined for s in SPAM_KEYWORDS):
+                        continue
+                    seen.add(title)
+                    link = title_tag.get("href", "")
+                    date_tag = item.select_one("span.info")
+                    pub = date_tag.get_text(strip=True) if date_tag else None
+                    results.append({"title": title, "source": source, "url": link, "published_at": pub})
+        except Exception:
+            pass
+
+        # Google News RSS — latest
+        try:
+            encoded = quote(query)
+            for lang, hl, gl, ceid in [("ko", "ko", "KR", "KR:ko"), ("en", "en", "US", "US:en")]:
+                feed_url = f"https://news.google.com/rss/search?q={encoded}&hl={hl}&gl={gl}&ceid={ceid}"
+                feed = feedparser.parse(feed_url)
+                for entry in feed.entries[:max_per_query]:
+                    title = entry.get("title", "")
+                    if not title or title in seen:
+                        continue
+                    src = entry.get("source", {}).get("title", "Google News") if hasattr(entry, "source") else "Google News"
+                    combined = (title + " " + src).lower()
+                    if any(s in combined for s in all_spam):
+                        continue
+                    if any(s in combined for s in SPAM_KEYWORDS):
+                        continue
+                    seen.add(title)
+                    results.append({
+                        "title": title,
+                        "source": src,
+                        "url": entry.get("link", ""),
+                        "published_at": entry.get("published", None),
+                    })
+        except Exception:
+            pass
+
+    return results
+
+
+def _classify_sentiment_detailed(title: str, company_name: str) -> tuple[str, str, str]:
+    """
+    Classify a news title into (direction, category, analysis).
+    direction: "positive" / "negative" / "neutral"
+    category: specific label like "실적 호재", "규제 리스크" etc.
+    analysis: 1-2 sentence specific explanation.
+    """
+    text = title.lower()
+    title_clean = title.strip()
+
+    pos_hits = [kw for kw in POSITIVE_KEYWORDS if kw in text]
+    neg_hits = [kw for kw in NEGATIVE_KEYWORDS if kw in text]
+
+    # Category detection with sentiment
+    if any(kw in text for kw in ["실적", "매출", "영업이익", "earnings", "revenue", "profit", "순이익"]):
+        if any(kw in text for kw in ["부진", "miss", "적자", "감소", "하락"]):
+            return "negative", "실적 악재", f"실적 부진 — \"{title_clean}\". 실적 미달은 밸류에이션 하향 조정으로 이어질 수 있습니다."
+        elif any(kw in text for kw in ["호실적", "beat", "상승", "성장", "흑자", "개선", "증가", "사상최대"]):
+            return "positive", "실적 호재", f"실적 호조 — \"{title_clean}\". 실적 서프라이즈는 목표주가 상향의 직접 트리거입니다."
+        else:
+            return "neutral", "실적 발표", f"실적 관련 — \"{title_clean}\". 구체적 수치 확인이 필요합니다."
+
+    if any(kw in text for kw in ["가이던스", "guidance", "전망", "outlook", "forecast"]):
+        if any(kw in text for kw in ["상향", "raise", "upbeat", "강화"]):
+            return "positive", "가이던스 상향", f"호재 — \"{title_clean}\". 가이던스 상향은 시장 기대치를 높이는 강력한 신호입니다."
+        elif any(kw in text for kw in ["하향", "lower", "cut", "축소", "우려"]):
+            return "negative", "가이던스 하향", f"악재 — \"{title_clean}\". 가이던스 하향은 성장 둔화 우려를 키웁니다."
+        return "neutral", "가이던스", f"전망 관련 — \"{title_clean}\". 가이던스 방향성 확인이 필요합니다."
+
+    if any(kw in text for kw in ["승인", "approval", "수주", "contract", "계약", "납품", "공급", "deal"]):
+        return "positive", "수주/계약 호재", f"호재 — \"{title_clean}\". 신규 수주·계약은 매출 성장 가시성을 높입니다."
+
+    if any(kw in text for kw in ["규제", "regulation", "소송", "lawsuit", "probe", "조사", "벌금", "제재", "ban"]):
+        return "negative", "규제/법적 리스크", f"악재 — \"{title_clean}\". 규제·법적 리스크는 불확실성을 키워 주가를 압박합니다."
+
+    if any(kw in text for kw in ["목표가", "target", "상향", "upgrade", "outperform", "매수", "buy"]):
+        return "positive", "애널리스트 호평", f"호재 — \"{title_clean}\". 투자의견 상향은 기관 매수세 유입의 신호입니다."
+
+    if any(kw in text for kw in ["하향", "downgrade", "매도", "sell", "underperform", "underweight"]):
+        return "negative", "애널리스트 하향", f"악재 — \"{title_clean}\". 투자의견 하향은 기관 매도 압력으로 이어질 수 있습니다."
+
+    if any(kw in text for kw in ["인수", "합병", "m&a", "acquisition", "merge", "투자", "지분"]):
+        if any(kw in text for kw in ["우려", "반대", "실패"]):
+            return "negative", "M&A 리스크", f"악재 — \"{title_clean}\". M&A 관련 불확실성이 주가에 부담을 줍니다."
+        return "positive", "M&A/전략적 투자", f"호재 — \"{title_clean}\". 전략적 투자·M&A는 성장 기대를 높입니다."
+
+    if any(kw in text for kw in ["신제품", "출시", "launch", "발표", "공개", "신기술"]):
+        return "positive", "제품/기술 호재", f"호재 — \"{title_clean}\". 신제품·신기술 발표는 성장 동력 확대의 신호입니다."
+
+    if any(kw in text for kw in ["리콜", "recall", "결함", "defect", "지연", "delay"]):
+        return "negative", "제품 리스크", f"악재 — \"{title_clean}\". 리콜·결함은 비용 증가와 브랜드 훼손을 야기합니다."
+
+    # Fallback: keyword-based sentiment
+    if len(pos_hits) > len(neg_hits):
+        return "positive", "호재", f"호재 — \"{title_clean}\". 긍정적 영향이 예상됩니다."
+    elif len(neg_hits) > len(pos_hits):
+        return "negative", "악재", f"악재 — \"{title_clean}\". 부정적 영향이 우려됩니다."
+    return "neutral", "모니터링 필요", f"중립 — \"{title_clean}\". 후속 뉴스로 방향성 확인이 필요합니다."
+
+
 def _extract_live_impact_news(ticker: str, info: dict | None = None, sector_id: str | None = None) -> list[dict]:
     cache_key = f"live-impact-news:{_ticker_key(ticker)}"
     cached = _get_cached_ttl(cache_key, 180)  # 3분 — 뉴스는 실시간
@@ -338,49 +471,54 @@ def _extract_live_impact_news(ticker: str, info: dict | None = None, sector_id: 
         return cached
 
     company_name = str((info or {}).get("shortName") or (info or {}).get("longName") or ticker).strip()
-    cached_news = _get_cached_ttl(cache_key, 180)  # 3분 — 뉴스 실시간
-    if cached_news is not None:
-        return cached_news
+
+    # Build per-stock search queries
+    queries = _build_stock_news_queries(ticker, info=info, sector_id=sector_id)
+
+    # Direct search Naver + Google (not through limited search_news)
+    raw_articles = _search_stock_latest_news(queries, max_per_query=6)
+
+    # Score and filter — must mention company/ticker
+    company_lower = company_name.lower().strip()
+    ticker_base = _ticker_key(ticker).replace(".KS", "").replace(".KQ", "").lower()
+    name_parts = [p for p in company_lower.split() if len(p) >= 2]
+    name_variants = [company_lower] + name_parts
 
     candidates = []
-    seen_titles = set()
-    for query in _build_stock_news_queries(ticker, info=info, sector_id=sector_id):
-        try:
-            for article in NewsCrawlerService.search_news(query)[:6]:
-                title = getattr(article, "title", "") or ""
-                source = getattr(article, "source", "") or ""
-                if not title or title in seen_titles:
-                    continue
-                # Block spam sources
-                if any(spam_src in source.lower() for spam_src in SPAM_SOURCES):
-                    continue
-                if any(spam_src in title.lower() for spam_src in SPAM_SOURCES):
-                    continue
-                seen_titles.add(title)
-                score = _score_live_article_impact(title, ticker, company_name, sector_id)
-                if score < 6:
-                    continue
-                issue_label, explanation = _explain_live_article_impact(title, ticker, sector_id)
-                # Determine sentiment direction
-                title_lower = title.lower()
-                pos_count = sum(1 for kw in POSITIVE_KEYWORDS if kw in title_lower)
-                neg_count = sum(1 for kw in NEGATIVE_KEYWORDS if kw in title_lower)
-                impact_direction = "positive" if pos_count > neg_count else "negative" if neg_count > pos_count else "neutral"
-                candidates.append({
-                    "title": title,
-                    "source": getattr(article, "source", None),
-                    "published_at": getattr(article, "published_at", None),
-                    "url": getattr(article, "url", None),
-                    "impact_score": score,
-                    "impact_direction": impact_direction,
-                    "issue_label": issue_label,
-                    "explanation": explanation,
-                })
-        except Exception:
-            pass
+    for art in raw_articles:
+        title = art["title"]
+        text_lower = title.lower()
+
+        # Must mention company or ticker (relevance gate)
+        has_company = any(v in text_lower for v in name_variants if v)
+        has_ticker = bool(ticker_base) and ticker_base in text_lower
+        if not has_company and not has_ticker:
+            continue
+
+        # Classify sentiment with detailed analysis
+        direction, category, analysis = _classify_sentiment_detailed(title, company_name)
+
+        # Score for ranking
+        score = 6 if has_company else 0
+        score += 4 if has_ticker else 0
+        if direction != "neutral":
+            score += 3  # actionable news scores higher
+        if any(kw in text_lower for kw in ["실적", "매출", "earnings", "revenue", "승인", "수주"]):
+            score += 2
+
+        candidates.append({
+            "title": title,
+            "source": art.get("source"),
+            "published_at": art.get("published_at"),
+            "url": art.get("url"),
+            "impact_score": score,
+            "impact_direction": direction,
+            "issue_label": category,
+            "explanation": analysis,
+        })
 
     candidates.sort(key=lambda item: item["impact_score"], reverse=True)
-    top = candidates[:5]  # Take top 5 most impactful articles
+    top = candidates[:5]
     _set_cached(cache_key, top)
     return top
 
@@ -2291,14 +2429,190 @@ async def get_prediction(ticker: str) -> dict:
         return {"ticker": ticker.upper(), "error": str(e)}
 
 
+_MOVE_SPAM_SOURCES = {
+    "smartkarma", "tradingkey", "simplywall", "stockanalysis.com",
+    "wallstreetzen", "marketscreener", "trendlyne",
+}
+_MOVE_SPAM_PATTERNS = [
+    "주식 움직였습니다", "주식이 움직였습니다", "변동을 뒷받침하는",
+    "핵심 원인 공개", "투자자가 알아야 할", "what you need to know",
+    "stock moved", "here's what happened", "why it moved",
+    "what drove", "핵심 원인", "알아야 할 정보",
+]
+
+
+def _search_news_for_date(query: str, date_str: str) -> list[dict]:
+    """Search Naver & Google for news around a specific date, filter spam."""
+    from urllib.parse import quote
+    results = []
+    seen = set()
+
+    # Naver: date-sorted search
+    try:
+        url = f"https://search.naver.com/search.naver?where=news&query={quote(query)}&sm=tab_opt&sort=1"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        r = requests.get(url, headers=headers, timeout=8)
+        if r.status_code == 200:
+            soup = BeautifulSoup(r.text, "html.parser")
+            for item in soup.select("div.news_area")[:8]:
+                title_tag = item.select_one("a.news_tit")
+                if not title_tag:
+                    continue
+                title = title_tag.get_text(strip=True)
+                source_tag = item.select_one("a.info.press")
+                source = source_tag.get_text(strip=True) if source_tag else ""
+                if title in seen:
+                    continue
+                if any(s in source.lower() for s in _MOVE_SPAM_SOURCES):
+                    continue
+                if any(p in title.lower() for p in _MOVE_SPAM_PATTERNS):
+                    continue
+                seen.add(title)
+                results.append({"title": title, "source": source})
+    except Exception:
+        pass
+
+    # Google News RSS
+    try:
+        import feedparser
+        encoded = quote(query)
+        feed_url = f"https://news.google.com/rss/search?q={encoded}+after:{date_str}&hl=ko&gl=KR&ceid=KR:ko"
+        feed = feedparser.parse(feed_url)
+        for entry in feed.entries[:6]:
+            title = entry.get("title", "")
+            source = entry.get("source", {}).get("title", "") if hasattr(entry, "source") else ""
+            if title in seen:
+                continue
+            if any(s in source.lower() for s in _MOVE_SPAM_SOURCES):
+                continue
+            if any(p in title.lower() for p in _MOVE_SPAM_PATTERNS):
+                continue
+            seen.add(title)
+            results.append({"title": title, "source": source})
+    except Exception:
+        pass
+
+    return results
+
+
+def _analyze_move_reason(titles: list[str], ticker: str, company_name: str,
+                         pct: float, vol_ratio: float) -> tuple[str, str, str]:
+    """
+    Analyze news titles to determine the specific reason for a price move.
+    Returns (category, reason_detail, confidence).
+    """
+    if not titles:
+        # No news found — analyze based on price/volume pattern alone
+        direction = "상승" if pct > 0 else "하락"
+        if vol_ratio > 2.0:
+            return "수급", f"뉴스 없이 거래량 {vol_ratio:.1f}배 폭증과 함께 {direction} — 기관/외국인 수급 주도 가능성", "low"
+        elif vol_ratio > 1.5:
+            return "수급", f"특별한 뉴스 없이 거래량 증가와 함께 {direction} — 시장 전반의 섹터 순환 또는 수급 변동 추정", "low"
+        else:
+            return "시장", f"뉴스·거래량 특이점 없는 {direction} — 시장 전체 흐름(지수 연동) 또는 기술적 조정 가능성", "low"
+
+    combined = " ".join(titles).lower()
+
+    # Pattern matching for specific catalysts
+    patterns = [
+        # Earnings / Guidance
+        (["실적", "매출", "영업이익", "순이익", "잠정", "earnings", "revenue", "profit", "quarterly"],
+         "실적", lambda: _build_earnings_reason(titles, pct)),
+        # Guidance / Outlook
+        (["가이던스", "전망", "guidance", "outlook", "forecast", "목표", "상향", "하향"],
+         "가이던스", lambda: _build_guidance_reason(titles, pct)),
+        # Product / Orders
+        (["수주", "계약", "납품", "출시", "승인", "양산", "order", "deal", "contract", "launch", "approval", "shipment"],
+         "제품/수주", lambda: _build_product_reason(titles, pct)),
+        # Regulation / Policy
+        (["규제", "관세", "제재", "소송", "tariff", "regulation", "ban", "probe", "lawsuit", "export control", "수출규제"],
+         "규제/정책", lambda: _build_regulation_reason(titles, pct)),
+        # Upgrade / Downgrade
+        (["목표가", "투자의견", "upgrade", "downgrade", "매수", "매도", "outperform", "overweight", "상향", "하향"],
+         "리포트", lambda: _build_analyst_reason(titles, pct)),
+        # Macro
+        (["금리", "fed", "fomc", "인플레이션", "cpi", "환율", "달러", "rate", "inflation", "경기"],
+         "매크로", lambda: _build_macro_reason(titles, pct)),
+        # Sector / Industry
+        (["hbm", "dram", "nand", "메모리", "반도체", "ai ", "gpu", "capex", "데이터센터"],
+         "업황", lambda: _build_sector_reason(titles, pct)),
+        # M&A / Investment
+        (["인수", "합병", "투자", "지분", "acquisition", "merger", "stake", "buyback", "자사주"],
+         "M&A/투자", lambda: _build_ma_reason(titles, pct)),
+    ]
+
+    best_score = 0
+    best_result = ("시장", "관련 뉴스 확인 필요", "low")
+    for keywords, category, builder in patterns:
+        score = sum(1 for kw in keywords if kw in combined)
+        if score > best_score:
+            best_score = score
+            reason = builder()
+            confidence = "high" if score >= 3 else "medium" if score >= 2 else "low"
+            best_result = (category, reason, confidence)
+
+    return best_result
+
+
+def _extract_key_detail(titles: list[str], keywords: list[str]) -> str:
+    """Extract the most relevant title as a key detail."""
+    scored = []
+    for t in titles:
+        tl = t.lower()
+        score = sum(1 for kw in keywords if kw in tl)
+        if score > 0:
+            scored.append((score, t))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return scored[0][1] if scored else titles[0]
+
+
+def _build_earnings_reason(titles: list[str], pct: float) -> str:
+    key = _extract_key_detail(titles, ["실적", "매출", "영업이익", "earnings", "revenue", "profit"])
+    direction = "호실적 서프라이즈" if pct > 0 else "실적 미스/부진"
+    return f"{direction} 반영 — \"{key}\""
+
+def _build_guidance_reason(titles: list[str], pct: float) -> str:
+    key = _extract_key_detail(titles, ["가이던스", "전망", "guidance", "outlook", "목표"])
+    direction = "가이던스 상향/기대 초과" if pct > 0 else "가이던스 하향/기대 하회"
+    return f"{direction} — \"{key}\""
+
+def _build_product_reason(titles: list[str], pct: float) -> str:
+    key = _extract_key_detail(titles, ["수주", "계약", "출시", "승인", "order", "deal", "launch", "approval"])
+    direction = "호재" if pct > 0 else "차질"
+    return f"사업 이벤트 {direction} — \"{key}\""
+
+def _build_regulation_reason(titles: list[str], pct: float) -> str:
+    key = _extract_key_detail(titles, ["규제", "관세", "제재", "소송", "tariff", "regulation", "ban"])
+    return f"규제·정책 이슈 반영 — \"{key}\""
+
+def _build_analyst_reason(titles: list[str], pct: float) -> str:
+    key = _extract_key_detail(titles, ["목표가", "투자의견", "upgrade", "downgrade", "상향", "하향"])
+    direction = "목표가 상향/매수 리포트" if pct > 0 else "목표가 하향/매도 리포트"
+    return f"{direction} — \"{key}\""
+
+def _build_macro_reason(titles: list[str], pct: float) -> str:
+    key = _extract_key_detail(titles, ["금리", "fed", "cpi", "환율", "달러", "rate", "inflation"])
+    return f"매크로 환경 변화 반영 — \"{key}\""
+
+def _build_sector_reason(titles: list[str], pct: float) -> str:
+    key = _extract_key_detail(titles, ["hbm", "dram", "ai ", "gpu", "capex", "반도체", "메모리"])
+    direction = "업황 기대 강화" if pct > 0 else "업황 우려 확대"
+    return f"{direction} — \"{key}\""
+
+def _build_ma_reason(titles: list[str], pct: float) -> str:
+    key = _extract_key_detail(titles, ["인수", "합병", "투자", "지분", "acquisition", "merger"])
+    return f"M&A·투자 이슈 — \"{key}\""
+
+
 @router.get("/analysis/{ticker}/move-reasons")
 async def get_move_reasons(ticker: str, period: str = "3mo") -> dict:
     """
-    Find significant price moves and attempt to find news/reasons for each.
-    Returns big moves with potential catalysts from news search.
+    Find significant price moves and search for specific news/reasons for each date.
+    For each big move, directly searches Naver & Google News around that date
+    and analyzes the actual cause from news titles.
     """
     cache_key = f"move-reasons:{ticker}:{period}"
-    cached = _get_cached_ttl(cache_key, 300)
+    cached = _get_cached_ttl(cache_key, 600)  # 10 min cache
     if cached is not None:
         return cached
 
@@ -2311,74 +2625,107 @@ async def get_move_reasons(ticker: str, period: str = "3mo") -> dict:
         volume_s = df["Volume"]
         vol_sma = volume_s.rolling(10).mean()
 
-        # Pre-fetch ticker info and news ONCE (not per-move)
+        # Get company name for news search
         try:
             stock = yf.Ticker(ticker)
             info = stock.info or {}
-            name = info.get("shortName", ticker).split(" ")[0]
+            company_name = info.get("shortName", info.get("longName", ticker))
         except Exception:
-            name = ticker
+            company_name = ticker
 
-        all_articles = []
-        try:
-            all_articles = NewsCrawlerService.get_sector_news(name)
-        except Exception:
-            pass
+        # Build search name: short, useful for news search
+        is_krx = ticker.endswith(".KS") or ticker.endswith(".KQ")
+        if is_krx:
+            # Korean stock: use Korean name from our data or info
+            search_name = company_name if not company_name.startswith(ticker.split(".")[0]) else ticker.split(".")[0]
+        else:
+            # US stock: use first word of company name + ticker
+            search_name = company_name.split(" ")[0] if company_name != ticker else ticker
 
-        moves = []
+        # Detect all significant moves first
+        raw_moves = []
         for i in range(1, len(df)):
             pct = (float(close.iloc[i]) - float(close.iloc[i-1])) / float(close.iloc[i-1]) * 100
             if abs(pct) < 2.5:
                 continue
             date_str = str(df.index[i].date()) if hasattr(df.index[i], "date") else str(df.index[i])
             vol_ratio = float(volume_s.iloc[i]) / float(vol_sma.iloc[i]) if not pd.isna(vol_sma.iloc[i]) and float(vol_sma.iloc[i]) > 0 else 1.0
+            raw_moves.append({
+                "index": i, "date": date_str, "pct": pct,
+                "price": round(float(close.iloc[i]), 2), "vol_ratio": vol_ratio,
+            })
 
-            # Match pre-fetched news to this date
-            reasons = []
-            for art in all_articles:
-                if art.published_at and date_str[:7] in art.published_at:
-                    reasons.append(art.title)
+        # Sort by magnitude, keep top N
+        raw_moves.sort(key=lambda m: abs(m["pct"]), reverse=True)
+        limit = 20 if period in ("1y", "2y", "5y", "max") else 12
+        top_moves = raw_moves[:limit]
 
-            issue_category, issue_summary = _summarize_move_issue(reasons, pct, vol_ratio)
+        # For each top move, search news around that date
+        moves = []
+        for mv in top_moves:
+            date_str = mv["date"]
+            pct = mv["pct"]
+            vol_ratio = mv["vol_ratio"]
 
-            # Classify the move type
+            # Search with company name + date context
+            query = f"{search_name} {date_str[:7].replace('-', '.')}"
+            articles = _search_news_for_date(query, date_str)
+
+            # Also try ticker-based search for US stocks
+            if not is_krx and len(articles) < 3:
+                articles.extend(_search_news_for_date(f"{ticker} stock", date_str))
+
+            # Also try broader search if no results
+            if len(articles) < 2:
+                articles.extend(_search_news_for_date(search_name, date_str))
+
+            # Deduplicate
+            seen_titles = set()
+            unique_articles = []
+            for a in articles:
+                if a["title"] not in seen_titles:
+                    seen_titles.add(a["title"])
+                    unique_articles.append(a)
+            articles = unique_articles[:6]
+
+            # Analyze the reason from news titles
+            titles = [a["title"] for a in articles]
+            category, reason, confidence = _analyze_move_reason(
+                titles, ticker, company_name, pct, vol_ratio
+            )
+
+            # Classify move type
             if pct > 5:
                 move_type = "급등"
-                reason_guess = issue_summary if reasons else "단기 실적/수급 기대가 강하게 반영된 구간"
             elif pct > 2.5:
                 move_type = "상승"
-                reason_guess = issue_summary if reasons else "섹터 모멘텀 또는 수급 개선이 반영된 구간"
             elif pct < -5:
                 move_type = "급락"
-                reason_guess = issue_summary if reasons else "실적/가이던스 실망 또는 악재가 반영된 구간"
             else:
                 move_type = "하락"
-                reason_guess = issue_summary if reasons else "차익실현 또는 업황 조정이 반영된 구간"
 
-            # Add context about volume
             vol_note = ""
             if vol_ratio > 2.0:
-                vol_note = "거래량 폭증"
+                vol_note = f"거래량 {vol_ratio:.1f}배 폭증"
             elif vol_ratio > 1.5:
-                vol_note = "거래량 증가"
+                vol_note = f"거래량 {vol_ratio:.1f}배 증가"
 
             moves.append({
                 "date": date_str,
                 "change_pct": round(pct, 2),
-                "price": round(float(close.iloc[i]), 2),
+                "price": mv["price"],
                 "volume_ratio": round(vol_ratio, 2),
                 "move_type": move_type,
-                "reason": reason_guess,
-                "issue_category": issue_category,
-                "issue_summary": issue_summary,
+                "reason": reason,
+                "issue_category": category,
+                "confidence": confidence,
                 "vol_note": vol_note,
-                "news": reasons[:3],
+                "news": [{"title": a["title"], "source": a.get("source", "")} for a in articles[:3]],
             })
 
-        # Keep top moves by magnitude — more for longer periods
-        moves.sort(key=lambda m: abs(m["change_pct"]), reverse=True)
-        limit = 25 if period in ("1y", "2y", "5y", "max") else 15
-        response = {"ticker": ticker.upper(), "moves": moves[:limit]}
+        # Re-sort by date for chart display
+        moves.sort(key=lambda m: m["date"])
+        response = {"ticker": ticker.upper(), "moves": moves}
         _set_cached(cache_key, response)
         return response
 

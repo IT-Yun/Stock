@@ -469,38 +469,38 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
             className="px-5 py-5"
             style={{ background: `linear-gradient(135deg, ${overall.color}20, ${overall.color}05)`, borderBottom: `2px solid ${overall.color}40` }}
           >
-            {/* Top row: icon + verdict + score */}
+            {/* Top row: company name + price + score */}
             <div className="flex items-center gap-4 mb-4">
-              <div
-                className="w-16 h-16 rounded-2xl flex items-center justify-center text-3xl font-black text-white shrink-0"
-                style={{ background: `linear-gradient(135deg, ${overall.color}, ${overall.color}cc)`, boxShadow: `0 6px 24px ${overall.color}50` }}
-              >
-                {overall.label.includes("매수") ? "B" : overall.label.includes("매도") ? "S" : overall.label === "관망" ? "H" : "—"}
-              </div>
               <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-3">
-                  <span className="text-2xl font-black" style={{ color: overall.color }}>{overall.label}</span>
-                  <span className="text-xs font-bold text-[var(--color-text-primary)]">{pick.name}</span>
-                  <span className="text-[10px] font-mono text-[var(--color-text-muted)]">{pick.ticker}</span>
+                <h2 className="text-2xl font-black text-[var(--color-text-primary)] truncate">{pick.name}</h2>
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="text-sm font-mono text-[var(--color-text-muted)]">{pick.ticker}</span>
+                  <span
+                    className="text-[10px] px-2 py-0.5 rounded-full font-bold"
+                    style={{ background: pick.flag === "US" ? "rgba(59,130,246,0.15)" : "rgba(239,68,68,0.15)", color: pick.flag === "US" ? "#60a5fa" : "#f87171" }}
+                  >{pick.flag}</span>
                 </div>
-                <div className="flex items-center gap-3 mt-1">
+                <div className="flex items-center gap-3 mt-2">
                   {latestPrice && (
-                    <span className="text-lg font-mono font-bold text-[var(--color-text-primary)]">
-                      {currency}{latestPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                    <span className="text-xl font-mono font-black text-[var(--color-text-primary)]">
+                      {currency}{Math.round(latestPrice).toLocaleString()}
                     </span>
                   )}
-                  <p className="text-xs text-[var(--color-text-secondary)]">{overall.action}</p>
+                  <span className="text-sm font-bold px-3 py-1 rounded-lg" style={{ background: `${overall.color}18`, color: overall.color, border: `1px solid ${overall.color}30` }}>
+                    {overall.label}
+                  </span>
+                  <span className="text-xs text-[var(--color-text-secondary)]">{overall.action}</span>
                 </div>
               </div>
               {/* Big score circle */}
               <div className="flex flex-col items-center shrink-0">
                 <div
-                  className="w-16 h-16 rounded-full flex items-center justify-center border-4"
-                  style={{ borderColor: overall.color, background: `${overall.color}10` }}
+                  className="w-18 h-18 rounded-full flex items-center justify-center border-4"
+                  style={{ borderColor: overall.color, background: `${overall.color}10`, width: 72, height: 72 }}
                 >
-                  <span className="text-xl font-black" style={{ color: overall.color }}>{overallScore100}</span>
+                  <span className="text-2xl font-black" style={{ color: overall.color }}>{overallScore100}</span>
                 </div>
-                <span className="text-[9px] text-[var(--color-text-muted)] mt-1">/ 100점</span>
+                <span className="text-[9px] text-[var(--color-text-muted)] mt-1">종합 점수</span>
               </div>
             </div>
 

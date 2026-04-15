@@ -1,6 +1,7 @@
 import { Suspense, lazy } from "react";
 import { Navigate, Route, Routes, useParams } from "react-router-dom";
 import Layout from "./components/Layout";
+import LoginGate from "./components/LoginGate";
 import { SECTORS } from "./data/sectors";
 
 const SectorMindMap = lazy(() => import("./components/SectorMindMap"));
@@ -29,6 +30,7 @@ function StockRedirect() {
 
 export default function App() {
   return (
+    <LoginGate>
     <Layout>
       <Suspense
         fallback={
@@ -45,5 +47,6 @@ export default function App() {
         </Routes>
       </Suspense>
     </Layout>
+    </LoginGate>
   );
 }

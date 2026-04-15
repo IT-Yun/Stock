@@ -8,7 +8,6 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from starlette.middleware.base import BaseHTTPMiddleware
 import uvicorn
 
 from config import settings
@@ -43,45 +42,46 @@ _ALLOWED_SET = {_normalize(n) for n in _ALLOWED_NICKNAMES}
 _ALLOWED_HASHES = {hashlib.sha256(_normalize(n).encode()).hexdigest() for n in _ALLOWED_NICKNAMES}
 
 
-class AuthMiddleware(BaseHTTPMiddleware):
-    """Validate X-Auth-Nickname header on all /api/ routes."""
+class AuthMiddleware:
+    """Pure ASGI middleware — no BaseHTTPMiddleware overhead or blocking issues.
+    Only enforces auth on mutating (POST/PUT/DELETE) /api/ requests.
+    All GET requests pass through unconditionally for read-only public access.
+    """
 
-    _PUBLIC_PATHS = {"/health", "/", "/favicon.ico"}
+    def __init__(self, app):
+        self.app = app
 
-    async def dispatch(self, request: Request, call_next):
-        path = request.url.path
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
 
-        # Always allow CORS preflight (OPTIONS) — must pass through to CORSMiddleware
-        if request.method == "OPTIONS":
-            return await call_next(request)
+        method = scope.get("method", "GET")
+        path = scope.get("path", "")
 
-        # Public read-only API access.
-        # In production the site is effectively read-only, and requiring browser
-        # localStorage-backed headers has been causing legitimate users to see
-        # empty data screens when the header is absent or stale.
-        if request.method == "GET" and path.startswith("/api/"):
-            return await call_next(request)
+        # GET/HEAD/OPTIONS — always pass through (read-only public access)
+        if method in ("GET", "HEAD", "OPTIONS"):
+            return await self.app(scope, receive, send)
 
-        # Allow public paths, static assets, and SPA routes
-        if path in self._PUBLIC_PATHS or path.startswith("/assets") or not path.startswith("/api"):
-            return await call_next(request)
+        # Non-API routes — always pass through
+        if not path.startswith("/api"):
+            return await self.app(scope, receive, send)
 
-        # Check auth header
-        nickname = request.headers.get("x-auth-nickname", "")
-        token = request.headers.get("x-auth-token", "")
+        # POST/PUT/DELETE on /api/ — check auth
+        headers = dict(scope.get("headers", []))
+        nickname = headers.get(b"x-auth-nickname", b"").decode("utf-8", errors="ignore")
+        token = headers.get(b"x-auth-token", b"").decode("utf-8", errors="ignore")
 
-        if token:
-            # Token = sha256(normalized_nickname)
-            if token in _ALLOWED_HASHES:
-                return await call_next(request)
-        if nickname:
-            if _normalize(nickname) in _ALLOWED_SET:
-                return await call_next(request)
+        if token and token in _ALLOWED_HASHES:
+            return await self.app(scope, receive, send)
+        if nickname and _normalize(nickname) in _ALLOWED_SET:
+            return await self.app(scope, receive, send)
 
-        return JSONResponse(
+        # Reject
+        response = JSONResponse(
             status_code=403,
             content={"error": "접근 권한이 없습니다. 로그인이 필요합니다."},
         )
+        return await response(scope, receive, send)
 
 
 def _warmup_cache():
@@ -137,7 +137,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Auth middleware — must be added AFTER CORS middleware (Starlette processes in reverse order)
+# Auth: pure ASGI middleware — only blocks POST/PUT/DELETE on /api/
+# Must be added AFTER CORS so CORS wraps it (Starlette reverses order)
 app.add_middleware(AuthMiddleware)
 
 app.include_router(sectors_router)

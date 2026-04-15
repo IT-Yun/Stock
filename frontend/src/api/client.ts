@@ -108,19 +108,13 @@ api.interceptors.response.use(
   (response) => response,
   async (error) => {
     const config = error.config;
-    // If 403 unauthorized — redirect to login (only once, prevent loop)
-    if (error.response?.status === 403 && !sessionStorage.getItem("_auth_redirect")) {
-      sessionStorage.setItem("_auth_redirect", "1");
-      localStorage.removeItem("stock-nickname");
-      window.location.href = "/";
-      return Promise.reject(error);
-    }
     if (!config || config._retryCount >= 2) return Promise.reject(error);
     const status = error.response?.status;
-    const isRetryable = !status || status >= 500 || error.code === "ECONNABORTED";
+    // Retry on server errors, timeouts, and transient 403s (deployment race)
+    const isRetryable = !status || status >= 500 || status === 403 || error.code === "ECONNABORTED";
     if (!isRetryable) return Promise.reject(error);
     config._retryCount = (config._retryCount || 0) + 1;
-    await new Promise((r) => setTimeout(r, 1000 * config._retryCount));
+    await new Promise((r) => setTimeout(r, 1500 * config._retryCount));
     return api(config);
   }
 );

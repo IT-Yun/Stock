@@ -50,6 +50,10 @@ export default function LoginGate({ children }: { children: React.ReactNode }) {
       localStorage.setItem("stock-nickname", trimmed);
       setAuthenticated(true);
       setError("");
+      // 홈으로 이동
+      if (window.location.pathname !== "/") {
+        window.location.href = "/";
+      }
     } else {
       setError("접근 권한이 없는 닉네임입니다");
     }

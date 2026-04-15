@@ -14,14 +14,30 @@ from api import sectors_router, analysis_router, news_router
 
 
 def _warmup_cache():
-    """Pre-fetch popular data so first requests are fast."""
+    """Pre-fetch ALL data at startup so yfinance calls are minimized during usage."""
+    import time as _t
     try:
         from services.stock_data import StockDataService
         from services.commodity_data import CommodityDataService
-        print("[WARMUP] Loading sectors + commodity data...")
+        print("[WARMUP] Phase 1: sectors + commodities...")
         StockDataService.get_all_sectors()
         CommodityDataService.get_commodity_prices()
-        print("[WARMUP] Done — cache is hot.")
+        print("[WARMUP] Phase 1 done.")
+
+        # Phase 2: pre-fetch checklist for all top-pick stocks (heaviest API usage)
+        # This prevents rate limiting during normal usage
+        from api.analysis import TOP_PICK_SECTOR_MAP, get_checklist_live
+        tickers = list(TOP_PICK_SECTOR_MAP.keys())
+        print(f"[WARMUP] Phase 2: pre-loading {len(tickers)} top-pick checklists...")
+        for i, ticker in enumerate(tickers):
+            try:
+                import asyncio
+                asyncio.get_event_loop().run_until_complete(get_checklist_live(ticker))
+                print(f"[WARMUP]   ({i+1}/{len(tickers)}) {ticker} OK")
+            except Exception as e:
+                print(f"[WARMUP]   ({i+1}/{len(tickers)}) {ticker} SKIP: {e}")
+            _t.sleep(2)  # 2초 간격 — rate limit 방지
+        print("[WARMUP] Phase 2 done — all checklists cached for 24h.")
     except Exception as e:
         print(f"[WARMUP] Partial failure (non-fatal): {e}")
 

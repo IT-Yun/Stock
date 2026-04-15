@@ -2806,7 +2806,7 @@ CHECKLIST_SOURCES = {
         ck("매출 성장률", "earnings_metric", metric="revenue_growth", positive_if="above", threshold=0.06, weight=75, thesis="메모리 업황 회복이 실제 외형 성장으로 전환되는지 확인하는 기본 축입니다.", window="향후 1~2분기"),
         ck("영업이익률", "earnings_metric", metric="operating_margin", positive_if="above", threshold=0.1, weight=92, thesis="삼성은 HBM/파운드리 개선 기대가 이익률로 나타나야 주가가 유지됩니다.", window="향후 1~2분기"),
         ck("환율 (USD/KRW)", "commodity", symbol="KRW=X", positive_if="up", weight=50, thesis="원화 약세는 삼성전자 수출 채산성에 우호적입니다.", window="향후 1~3개월"),
-        ck("밸류 부담 점검 (P/B)", "earnings_metric", metric="price_to_book", positive_if="below", threshold=2.2, weight=35, thesis="대형주는 업황 회복 기대가 커도 밸류 부담이 커지면 상단이 제한될 수 있습니다.", window="향후 1~2개월"),
+        ck("밸류 부담 점검 (P/B)", "earnings_metric", metric="price_to_book", positive_if="below", threshold=3.5, weight=35, thesis="대형주는 업황 회복 기대가 커도 밸류 부담이 커지면 상단이 제한될 수 있습니다.", window="향후 1~2개월"),
     ],
     "TSLA": [
         ck("차량 인도/매출 성장", "earnings_metric", metric="revenue_growth", positive_if="above", threshold=0.08, weight=88, thesis="TSLA는 인도량과 매출 성장 둔화가 확인되면 기대감이 먼저 무너집니다.", window="향후 1~2분기"),
@@ -3327,10 +3327,30 @@ async def get_checklist_live(ticker: str) -> dict:
                     except Exception:
                         pass
 
+                    # Graduated scoring: not just pass/fail but with buffer zones
                     if positive_if == "above":
-                        item["status"] = "positive" if val > threshold else ("negative" if val < 0 else "neutral")
+                        if val >= threshold:
+                            item["status"] = "positive"
+                        elif val < 0:
+                            item["status"] = "negative"
+                        elif threshold > 0 and val < threshold * 0.5:
+                            # Significantly below threshold (less than half) → negative
+                            item["status"] = "negative"
+                        else:
+                            # Between 50%-100% of threshold → neutral (close but not there)
+                            item["status"] = "neutral"
                     elif positive_if == "below":
-                        item["status"] = "positive" if val < threshold else "negative"
+                        if val <= threshold:
+                            item["status"] = "positive"
+                        elif threshold > 0 and val > threshold * 2.0:
+                            # More than 2x threshold → clearly negative
+                            item["status"] = "negative"
+                        elif threshold > 0 and val > threshold * 1.3:
+                            # 30%-100% above threshold → mild warning (neutral)
+                            item["status"] = "neutral"
+                        else:
+                            # Up to 30% above threshold → still neutral
+                            item["status"] = "neutral"
                     if "margin" in metric or "growth" in metric or metric == "roe" or metric == "dividend_yield":
                         item["value"] = round(val * 100, 1)
                         pct_str = f"{round(val * 100, 1)}%"

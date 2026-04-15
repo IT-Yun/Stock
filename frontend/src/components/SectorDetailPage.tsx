@@ -14,7 +14,7 @@ import {
   ReferenceLine,
   ReferenceArea,
 } from "recharts";
-import { ArrowLeft, AlertTriangle, Activity, Newspaper, Zap, ChevronRight, TrendingUp, TrendingDown, Target, CheckCircle2, XCircle, MinusCircle, Shield } from "lucide-react";
+import { ArrowLeft, AlertTriangle, Activity, Newspaper, Zap, ChevronRight, TrendingUp, TrendingDown, CheckCircle2, XCircle, MinusCircle, Shield } from "lucide-react";
 import { SECTORS } from "@/data/sectors";
 import type { SectorDef, StockPick } from "@/data/sectors";
 import { fetchChartData, fetchAnalysis, fetchEarnings, fetchPatternAnalysis, fetchCommodityHistory, searchNews, fetchPrediction, fetchMoveReasons, fetchChecklistLive, fetchSectorPulse } from "@/api/client";
@@ -540,35 +540,48 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
               </div>
             </div>
 
-            {/* Price targets — prominent */}
-            {prediction?.targets && (
-              <div className="grid grid-cols-3 gap-3">
-                <div className="rounded-xl p-3 text-center" style={{ background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.2)" }}>
-                  <div className="flex items-center justify-center gap-1 mb-1">
-                    <Target size={12} className="text-[var(--color-accent-green)]" />
-                    <span className="text-[10px] text-[var(--color-text-muted)]">1주 목표가</span>
+            {/* Trading signals — actionable buy/sell/stop */}
+            {latestPrice && (() => {
+              // Calculate actionable price levels from current price + indicators
+              const p = latestPrice;
+              const ind = analysis?.indicators;
+              // Buy zone: near bollinger lower or -5~8% from current
+              const buyPrice = ind?.bollinger_lower ? Math.round(ind.bollinger_lower) : Math.round(p * 0.94);
+              // Sell zone: near bollinger upper or +8~12% from current
+              const sellPrice = ind?.bollinger_upper ? Math.round(ind.bollinger_upper) : Math.round(p * 1.10);
+              // Stop loss: -10~15% or below SMA200
+              const stopPrice = ind?.sma_200 ? Math.round(Math.min(ind.sma_200 * 0.97, p * 0.88)) : Math.round(p * 0.88);
+
+              // Round to clean numbers
+              const round = (v: number) => {
+                if (v >= 100000) return Math.round(v / 1000) * 1000;
+                if (v >= 10000) return Math.round(v / 100) * 100;
+                if (v >= 100) return Math.round(v / 10) * 10;
+                return Math.round(v * 10) / 10;
+              };
+              const fmt = (v: number) => `${currency}${round(v).toLocaleString()}`;
+              const pct = (v: number) => `${((round(v) - p) / p * 100) >= 0 ? "+" : ""}${((round(v) - p) / p * 100).toFixed(0)}%`;
+
+              return (
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="rounded-xl p-3" style={{ background: "rgba(59,130,246,0.08)", border: "1px solid rgba(59,130,246,0.25)" }}>
+                    <p className="text-[10px] font-bold text-[#3b82f6] mb-1">분할매수</p>
+                    <p className="text-lg font-black text-[#3b82f6]">{fmt(buyPrice)}</p>
+                    <p className="text-[10px] text-[#3b82f6]/70 mt-0.5">{pct(buyPrice)} 이하 시 매수</p>
                   </div>
-                  <p className="text-lg font-black text-[var(--color-accent-green)]">{currency}{prediction.targets.target_1w?.toLocaleString()}</p>
-                  {latestPrice && <p className="text-[9px] text-[var(--color-accent-green)] mt-0.5">{((prediction.targets.target_1w - latestPrice) / latestPrice * 100).toFixed(1)}%</p>}
-                </div>
-                <div className="rounded-xl p-3 text-center" style={{ background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.2)" }}>
-                  <div className="flex items-center justify-center gap-1 mb-1">
-                    <Target size={12} className="text-[var(--color-accent-green)]" />
-                    <span className="text-[10px] text-[var(--color-text-muted)]">1달 목표가</span>
+                  <div className="rounded-xl p-3" style={{ background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.25)" }}>
+                    <p className="text-[10px] font-bold text-[#22c55e] mb-1">분할매도</p>
+                    <p className="text-lg font-black text-[#22c55e]">{fmt(sellPrice)}</p>
+                    <p className="text-[10px] text-[#22c55e]/70 mt-0.5">{pct(sellPrice)} 이상 시 익절</p>
                   </div>
-                  <p className="text-lg font-black text-[var(--color-accent-green)]">{currency}{prediction.targets.target_1m?.toLocaleString()}</p>
-                  {latestPrice && <p className="text-[9px] text-[var(--color-accent-green)] mt-0.5">{((prediction.targets.target_1m - latestPrice) / latestPrice * 100).toFixed(1)}%</p>}
-                </div>
-                <div className="rounded-xl p-3 text-center" style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)" }}>
-                  <div className="flex items-center justify-center gap-1 mb-1">
-                    <Shield size={12} className="text-[var(--color-accent-red)]" />
-                    <span className="text-[10px] text-[var(--color-text-muted)]">손절가</span>
+                  <div className="rounded-xl p-3" style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.25)" }}>
+                    <p className="text-[10px] font-bold text-[#ef4444] mb-1">손절</p>
+                    <p className="text-lg font-black text-[#ef4444]">{fmt(stopPrice)}</p>
+                    <p className="text-[10px] text-[#ef4444]/70 mt-0.5">{pct(stopPrice)} 이하 시 손절</p>
                   </div>
-                  <p className="text-lg font-black text-[var(--color-accent-red)]">{currency}{prediction.targets.stop_loss?.toLocaleString()}</p>
-                  {latestPrice && <p className="text-[9px] text-[var(--color-accent-red)] mt-0.5">{((prediction.targets.stop_loss - latestPrice) / latestPrice * 100).toFixed(1)}%</p>}
                 </div>
-              </div>
-            )}
+              );
+            })()}
           </div>
         </div>
       )}

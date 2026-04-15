@@ -140,3 +140,8 @@ export async function searchStocks(query: string): Promise<any> {
   const res = await api.get(`/analysis/stock-search/${encodeURIComponent(query)}`);
   return res.data;
 }
+
+export async function fetchTopRanked(): Promise<any> {
+  const res = await api.get("/analysis/top-ranked");
+  return res.data;
+}

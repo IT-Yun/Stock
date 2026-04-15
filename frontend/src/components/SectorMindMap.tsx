@@ -1,9 +1,9 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { Factory, Search, X } from "lucide-react";
+import { Factory, Search, X, Trophy, TrendingUp, TrendingDown } from "lucide-react";
 import { SECTORS, normalizeWeights } from "@/data/sectors";
 import type { SectorDef } from "@/data/sectors";
-import { searchStocks, fetchChartData, fetchAnalysis, fetchChecklistLive, fetchEarnings, fetchNews } from "@/api/client";
+import { searchStocks, fetchChartData, fetchAnalysis, fetchChecklistLive, fetchEarnings, fetchNews, fetchTopRanked } from "@/api/client";
 
 /* ───────────────────────── HELPERS ───────────────────────── */
 
@@ -68,6 +68,8 @@ export default function SectorMindMap() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
+  const [topRanked, setTopRanked] = useState<any[]>([]);
+  const [topRankedLoading, setTopRankedLoading] = useState(true);
   const [evaluatingStock, setEvaluatingStock] = useState<null | {
     ticker: string;
     name: string;
@@ -94,6 +96,20 @@ export default function SectorMindMap() {
     window.addEventListener("resize", measure);
     return () => window.removeEventListener("resize", measure);
   }, [measure]);
+
+  // Fetch top 10 ranked stocks
+  useEffect(() => {
+    setTopRankedLoading(true);
+    fetchTopRanked()
+      .then((data) => setTopRanked(data?.rankings ?? []))
+      .catch(() => {})
+      .finally(() => setTopRankedLoading(false));
+    // Refresh every 5 min
+    const id = window.setInterval(() => {
+      fetchTopRanked().then((data) => setTopRanked(data?.rankings ?? [])).catch(() => {});
+    }, 300_000);
+    return () => window.clearInterval(id);
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -447,6 +463,78 @@ export default function SectorMindMap() {
                 <div className="px-4 py-4 text-xs text-[var(--color-text-muted)]">
                   검색 결과가 없습니다. 티커 또는 종목명을 조금 더 구체적으로 입력해주세요.
                 </div>
+              )}
+            </div>
+          )}
+          {/* ─── Top 10 Ranking ─── */}
+          {!searchOpen && !normalizedQuery && (
+            <div
+              className="mt-3 glass rounded-2xl border border-white/10 overflow-hidden"
+              style={{ boxShadow: "0 8px 32px rgba(0,0,0,0.3)", maxHeight: 420, overflowY: "auto" }}
+            >
+              <div className="px-4 py-3 border-b border-white/5 flex items-center gap-2">
+                <Trophy size={14} className="text-[#f59e0b]" />
+                <span className="text-xs font-bold text-[var(--color-text-primary)]">종합 점수 TOP 10</span>
+                <span className="text-[10px] text-[var(--color-text-muted)] ml-auto">실시간</span>
+              </div>
+              {topRankedLoading ? (
+                <div className="px-4 py-6 text-xs text-[var(--color-text-muted)] animate-pulse text-center">순위 계산 중...</div>
+              ) : topRanked.length === 0 ? (
+                <div className="px-4 py-4 text-xs text-[var(--color-text-muted)] text-center">데이터 로딩 중...</div>
+              ) : (
+                topRanked.map((stock, i) => (
+                  <button
+                    key={stock.ticker}
+                    className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-white/5 transition-colors border-b border-white/3 last:border-b-0"
+                    onClick={() => {
+                      const sector = SECTORS.find(s => s.picks.some(p => p.ticker === stock.ticker));
+                      if (sector) {
+                        navigate(`/sector/${sector.id}?stock=${encodeURIComponent(stock.ticker)}`);
+                      } else {
+                        openStock({ ticker: stock.ticker, name: stock.name, sectorName: stock.sector_name || "", sectorId: stock.sector_id, flag: stock.flag });
+                      }
+                    }}
+                  >
+                    <div
+                      className="w-7 h-7 rounded-lg flex items-center justify-center text-[11px] font-black shrink-0"
+                      style={{
+                        background: i < 3 ? "linear-gradient(135deg, #f59e0b, #d97706)" : "rgba(255,255,255,0.06)",
+                        color: i < 3 ? "#fff" : "var(--color-text-muted)",
+                        boxShadow: i < 3 ? "0 2px 8px rgba(245,158,11,0.3)" : "none",
+                      }}
+                    >
+                      {i + 1}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-sm font-semibold text-[var(--color-text-primary)] truncate">{stock.name}</span>
+                        <span
+                          className="text-[8px] px-1 py-0.5 rounded font-bold shrink-0"
+                          style={{
+                            background: stock.flag === "US" ? "rgba(59,130,246,0.15)" : "rgba(239,68,68,0.15)",
+                            color: stock.flag === "US" ? "#60a5fa" : "#f87171",
+                          }}
+                        >
+                          {stock.flag}
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-[var(--color-text-muted)] truncate">{stock.ticker} · {stock.sector_name}</p>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <p className="text-sm font-black" style={{
+                        color: stock.score >= 65 ? "#22c55e" : stock.score >= 45 ? "#eab308" : "#ef4444"
+                      }}>{stock.score}</p>
+                      {stock.change_1m != null && (
+                        <div className="flex items-center gap-0.5 justify-end">
+                          {stock.change_1m >= 0 ? <TrendingUp size={10} className="text-[#22c55e]" /> : <TrendingDown size={10} className="text-[#ef4444]" />}
+                          <span className={`text-[10px] font-mono ${stock.change_1m >= 0 ? "text-[#22c55e]" : "text-[#ef4444]"}`}>
+                            {stock.change_1m >= 0 ? "+" : ""}{stock.change_1m}%
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </button>
+                ))
               )}
             </div>
           )}

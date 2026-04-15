@@ -212,6 +212,22 @@ SPAM_KEYWORDS = [
     "lottery", "로또", "점술", "운세", "horoscope", "사건사고", "crime",
 ]
 
+# Auto-generated spam sources and patterns — block entirely
+SPAM_SOURCES = ["tradingkey", "stockanalysis.com/quote", "simplywall"]
+SPAM_TITLE_PATTERNS = [
+    "주식 움직였습니다",  # "stock moved" auto-articles
+    "주식이 움직였습니다",
+    "변동을 뒷받침하는 사실",
+    "핵심 원인 공개",
+    "투자자가 알아야 할 정보",
+    "what you need to know",
+    "stock moved",
+    "here's what happened",
+    "here is what happened",
+    "why it moved",
+    "what drove",
+]
+
 
 def _score_live_article_impact(title: str, ticker: str, company_name: str, sector_id: str | None) -> int:
     """Score article relevance. MUST contain company name or ticker to score above threshold."""
@@ -220,6 +236,9 @@ def _score_live_article_impact(title: str, ticker: str, company_name: str, secto
 
     # Reject spam/irrelevant articles immediately
     if any(spam in text for spam in SPAM_KEYWORDS):
+        return 0
+    # Block auto-generated price-movement spam articles
+    if any(pattern in text for pattern in SPAM_TITLE_PATTERNS):
         return 0
 
     # Hard requirement: article must mention the company or ticker
@@ -324,7 +343,13 @@ def _extract_live_impact_news(ticker: str, info: dict | None = None, sector_id: 
         try:
             for article in NewsCrawlerService.search_news(query)[:6]:
                 title = getattr(article, "title", "") or ""
+                source = getattr(article, "source", "") or ""
                 if not title or title in seen_titles:
+                    continue
+                # Block spam sources
+                if any(spam_src in source.lower() for spam_src in SPAM_SOURCES):
+                    continue
+                if any(spam_src in title.lower() for spam_src in SPAM_SOURCES):
                     continue
                 seen_titles.add(title)
                 score = _score_live_article_impact(title, ticker, company_name, sector_id)
@@ -3246,6 +3271,102 @@ async def get_commodity_history(symbol: str, period: str = "6mo") -> dict:
         return {"symbol": symbol, "data": data}
     except Exception:
         return {"symbol": symbol, "data": []}
+
+
+@router.get("/analysis/top-ranked")
+async def get_top_ranked() -> dict:
+    """Return top 10 stocks ranked by composite score (cached 10 min)."""
+    cache_key = "top-ranked-v2"
+    cached = _get_cached_ttl(cache_key, 600)
+    if cached is not None:
+        return cached
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    all_tickers = list(TOP_PICK_SECTOR_MAP.keys())
+    results = []
+
+    def score_stock(ticker: str) -> dict | None:
+        try:
+            stock = yf.Ticker(ticker)
+            info = stock.info or {}
+            hist = stock.history(period="3mo")
+            if hist.empty:
+                return None
+
+            price = float(hist["Close"].iloc[-1])
+            # Simple composite score from key metrics
+            score = 50  # base
+            rsi = None
+            if len(hist) >= 14:
+                delta = hist["Close"].diff()
+                gain = delta.where(delta > 0, 0).rolling(14).mean()
+                loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+                rs = gain.iloc[-1] / loss.iloc[-1] if loss.iloc[-1] != 0 else 1
+                rsi = 100 - (100 / (1 + rs))
+
+            # RSI score
+            if rsi is not None:
+                if rsi < 30: score += 15
+                elif rsi < 45: score += 8
+                elif rsi > 70: score -= 10
+                elif rsi > 60: score -= 5
+
+            # Momentum (1mo return)
+            if len(hist) >= 21:
+                ret_1m = (price - float(hist["Close"].iloc[-21])) / float(hist["Close"].iloc[-21]) * 100
+                if ret_1m > 10: score += 12
+                elif ret_1m > 3: score += 6
+                elif ret_1m < -10: score -= 8
+                elif ret_1m < -3: score -= 4
+            else:
+                ret_1m = 0
+
+            # Earnings growth
+            rev_growth = info.get("revenueGrowth")
+            if rev_growth is not None:
+                if rev_growth > 0.2: score += 10
+                elif rev_growth > 0: score += 5
+                elif rev_growth < -0.1: score -= 8
+
+            # Profit margin
+            margin = info.get("profitMargins")
+            if margin is not None:
+                if margin > 0.2: score += 8
+                elif margin > 0: score += 3
+                elif margin < 0: score -= 5
+
+            score = max(0, min(100, score))
+            sector_id = TOP_PICK_SECTOR_MAP.get(ticker, "")
+
+            return {
+                "ticker": ticker,
+                "name": info.get("shortName") or info.get("longName") or ticker,
+                "price": round(price, 2),
+                "change_1m": round(ret_1m, 1) if len(hist) >= 21 else None,
+                "score": score,
+                "rsi": round(rsi, 1) if rsi else None,
+                "sector_id": sector_id,
+                "sector_name": SECTOR_NAME_MAP.get(sector_id, ""),
+                "flag": "KR" if ticker.endswith(".KS") or ticker.endswith(".KQ") else "US",
+            }
+        except Exception:
+            return None
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = {executor.submit(score_stock, t): t for t in all_tickers}
+        for future in as_completed(futures, timeout=30):
+            try:
+                result = future.result(timeout=15)
+                if result:
+                    results.append(result)
+            except Exception:
+                pass
+
+    results.sort(key=lambda x: x["score"], reverse=True)
+    response = {"rankings": results[:10], "total_analyzed": len(results)}
+    _set_cached(cache_key, response)
+    return response
 
 
 @router.get("/commodities")

@@ -1,0 +1,72 @@
+{
+  "technical_indicators": {
+    "rsi": {
+      "name": "RSI (상대강도지수)",
+      "period": 14,
+      "overbought": 70,
+      "oversold": 30,
+      "description": "주가의 과매수·과매도 상태를 판단하는 모멘텀 지표"
+    },
+    "macd": {
+      "name": "MACD (이동평균수렴확산)",
+      "fast_period": 12,
+      "slow_period": 26,
+      "signal_period": 9,
+      "description": "단기·장기 이동평균의 차이를 이용한 추세 전환 지표"
+    },
+    "bollinger_bands": {
+      "name": "볼린저 밴드",
+      "period": 20,
+      "std_dev": 2,
+      "description": "이동평균선과 표준편차를 활용한 변동성 지표"
+    },
+    "sma": {
+      "name": "단순이동평균 (SMA)",
+      "periods": [20, 50, 200],
+      "description": "일정 기간 종가의 단순 평균으로 추세 방향을 판단하는 지표"
+    }
+  },
+  "signal_weights": {
+    "rsi": 0.3,
+    "macd": 0.3,
+    "bollinger": 0.2,
+    "sma": 0.2
+  },
+  "commodities": [
+    {
+      "name": "금",
+      "symbol": "GC=F",
+      "unit": "달러/온스"
+    },
+    {
+      "name": "은",
+      "symbol": "SI=F",
+      "unit": "달러/온스"
+    },
+    {
+      "name": "원유 (WTI)",
+      "symbol": "CL=F",
+      "unit": "달러/배럴"
+    },
+    {
+      "name": "천연가스",
+      "symbol": "NG=F",
+      "unit": "달러/MMBtu"
+    },
+    {
+      "name": "구리",
+      "symbol": "HG=F",
+      "unit": "달러/파운드"
+    },
+    {
+      "name": "우라늄 ETF",
+      "symbol": "URA",
+      "unit": "달러"
+    },
+    {
+      "name": "리튬 ETF",
+      "symbol": "LIT",
+      "unit": "달러"
+    }
+  ]
+}

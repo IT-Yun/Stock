@@ -371,66 +371,27 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
   // Load ticker-dependent data in sequential phases with progress tracking.
   // Each phase completes before the next starts to avoid overwhelming the backend.
   // Returns true if essential data (analysis) was loaded successfully.
-  const loadTickerData = useCallback(async (t: string): Promise<boolean> => {
-    setLoadError(false);
-    setPartialDataWarning(false);
-    setLoadProgress(5);
-    setLoadStage("차트 데이터 수집 중...");
-
-    let hasAnalysis = false;
-    let hasEarnings = false;
-
-    // Phase 1: Chart + Analysis (essential, must succeed)
-    setLoadStage("기술적 분석 수행 중...");
-    setLoadProgress(15);
-    const [analysisRes, earningsRes] = await Promise.allSettled([
-      fetchAnalysis(t).then((d) => { setAnalysis(d); setLoadProgress(25); hasAnalysis = Boolean(d); return d; }),
-      fetchEarnings(t).then((d) => { setEarnings(d); setLoadProgress(35); hasEarnings = Boolean(d); return d; }),
-    ]);
-    if (analysisRes.status === "rejected" && earningsRes.status === "rejected") {
-      setPartialDataWarning(true);
-    }
-
-    // Phase 2: Pattern + Prediction + Targets (important, sequential batch)
-    setLoadStage("패턴 분석 & AI 예측 중...");
-    setLoadProgress(40);
-    await Promise.allSettled([
-      fetchPatternAnalysis(t).then((d) => { setPatternData(d); setLoadProgress(50); }),
-      fetchPrediction(t).then((d) => { setPrediction(d); setLoadProgress(55); }),
-      fetchTradingTargets(t).then((d) => { setTradingTargets(d); setLoadProgress(60); }),
-    ]);
-
-    // Phase 3: Move reasons + Macro (medium priority)
-    setLoadStage("뉴스 & 이벤트 분석 중...");
-    setLoadProgress(65);
-    await Promise.allSettled([
-      fetchMoveReasons(t, period).then((d) => { setMoveReasons(d); setLoadProgress(75); }),
-      fetchMacroEvents().then((d) => { setMacroEvents(d); setLoadProgress(80); }),
-    ]);
-
-    // Phase 4: Checklist (slowest — fetch last, with retry)
-    setLoadStage("투자 체크리스트 검증 중...");
-    setLoadProgress(85);
-    try {
-      const cl = await fetchChecklistLive(t);
-      setChecklistLive(cl);
-    } catch {
-      setPartialDataWarning(true);
-      // Auto-retry once
-      try {
-        await new Promise((r) => setTimeout(r, 2000));
-        const cl2 = await fetchChecklistLive(t);
-        setChecklistLive(cl2);
-      } catch {
-        // Give up on checklist — show rest of data
-      }
-    }
-
-    setLoadProgress(100);
-    setLoadStage("완료!");
-
-    // Return whether we got essential data
-    return hasAnalysis || hasEarnings;
+  // Load non-essential data in background (doesn't block loading screen)
+  const loadBackgroundData = useCallback((t: string) => {
+    // Pattern + Prediction + Targets
+    Promise.allSettled([
+      fetchPatternAnalysis(t).then((d) => setPatternData(d)),
+      fetchPrediction(t).then((d) => setPrediction(d)),
+      fetchTradingTargets(t).then((d) => setTradingTargets(d)),
+    ]).then(() => {
+      // Move reasons + Macro
+      return Promise.allSettled([
+        fetchMoveReasons(t, period).then((d) => setMoveReasons(d)),
+        fetchMacroEvents().then((d) => setMacroEvents(d)),
+      ]);
+    }).then(() => {
+      // Checklist (slowest — fetch last, with retry)
+      return fetchChecklistLive(t).then((cl) => setChecklistLive(cl)).catch(() => {
+        return new Promise((r) => setTimeout(r, 2000)).then(() =>
+          fetchChecklistLive(t).then((cl2) => setChecklistLive(cl2)).catch(() => {})
+        );
+      });
+    });
   }, [period]);
 
   // Ticker-dependent data — re-fetches when stock changes or retry
@@ -446,52 +407,72 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
     setTradingTargets(null);
     setShowTargetReasons(null);
 
-    // Load chart and ticker data together
     const loadAll = async () => {
       setChartLoading(true);
       setLoadError(false);
 
-      // Chart data (with retry)
-      setLoadStage("주가 차트 로딩 중...");
-      setLoadProgress(5);
+      // ── Phase 1: Chart + Analysis + Earnings (essential — all in parallel) ──
+      setLoadStage("주가 차트 & 분석 데이터 로딩 중...");
+      setLoadProgress(10);
+
       let chartOk = false;
-      try {
-        const data = await fetchChartData(pick.ticker, period);
-        setChartData(data);
-        chartOk = Boolean(data?.length);
-      } catch {
+      let hasAnalysis = false;
+      let hasEarnings = false;
+
+      await Promise.allSettled([
+        fetchChartData(pick.ticker, period).then((data) => {
+          setChartData(data);
+          chartOk = Boolean(data?.length);
+          setLoadProgress(30);
+          return data;
+        }),
+        fetchAnalysis(pick.ticker).then((d) => {
+          setAnalysis(d);
+          hasAnalysis = Boolean(d);
+          setLoadProgress(50);
+          return d;
+        }),
+        fetchEarnings(pick.ticker).then((d) => {
+          setEarnings(d);
+          hasEarnings = Boolean(d);
+          setLoadProgress(60);
+          return d;
+        }),
+      ]);
+      setChartLoading(false);
+
+      // If chart failed, retry once
+      if (!chartOk) {
         try {
           await new Promise((r) => setTimeout(r, 1500));
           const retried = await fetchChartData(pick.ticker, period);
           setChartData(retried);
           chartOk = Boolean(retried?.length);
-        } catch {
-          // Chart failed twice — will check below
-        }
+        } catch { /* give up on chart */ }
       }
-      setLoadProgress(10);
-      setChartLoading(false);
 
-      // Now load all other data sequentially
-      const hasAnalysisData = await loadTickerData(pick.ticker);
+      const hasEssentialData = chartOk || hasAnalysis || hasEarnings;
 
-      // ── CRITICAL: Only dismiss loading if we have real data ──
-      // If BOTH chart and analysis are empty → keep loading, show error + retry
-      if (!chartOk && !hasAnalysisData) {
+      // ── CRITICAL: Only dismiss loading if we have ANY real data ──
+      if (!hasEssentialData) {
         setLoadError(true);
         setLoadStage("서버 응답 대기 중...");
         setLoadProgress(0);
-        // Auto-retry after 5 seconds
         setTimeout(() => setRetryCount((c) => c + 1), 5000);
-        return; // Keep loading=true — never show empty screen
+        return; // Keep loading=true
       }
-      if (!chartOk) setPartialDataWarning(true);
 
+      if (!chartOk) setPartialDataWarning(true);
+      setLoadProgress(100);
+      setLoadStage("완료!");
       setLoading(false);
+
+      // ── Phase 2+: Non-essential data loads in background ──
+      loadBackgroundData(pick.ticker);
     };
 
     loadAll();
-  }, [pick.ticker, period, retryCount, loadTickerData]);
+  }, [pick.ticker, period, retryCount, loadBackgroundData]);
 
   // Auto-refresh every 5 min — only refresh analysis & checklist (not chart, to avoid UI jump)
   useEffect(() => {

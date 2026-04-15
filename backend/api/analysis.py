@@ -2666,50 +2666,29 @@ async def get_checklist_live(ticker: str) -> dict:
     try:
         sources = CHECKLIST_SOURCES.get(ticker, CHECKLIST_SOURCES.get(ticker.replace(".KS", "").replace(".KQ", ""), []))
 
-        # Fetch earnings data once
+        # Fetch stock data — info may be rate limited, history usually works
         stock = yf.Ticker(ticker)
-        info = stock.info or {}
-        # Detect rate limiting
-        if not info or (isinstance(info, dict) and len(info) < 3):
+        info = {}
+        try:
+            info = stock.info or {}
+        except Exception:
+            pass
+        # If info is empty/rate-limited, still proceed with history-based analysis
+        info_available = isinstance(info, dict) and len(info) > 3
+        if not info_available:
+            # Try stale cache first
             stale = _ANALYSIS_CACHE.get(stale_key)
             if stale:
                 return stale[1]
-            # Fallback: generate basic checklist from news only (no yfinance needed)
-            fallback_items = []
-            try:
-                news_drivers = _extract_news_drivers(ticker, sector_id=_infer_sector_id_from_profile(ticker))
-                for driver in news_drivers[:5]:
-                    fallback_items.append({
-                        "name": driver["name"],
-                        "status": "neutral",
-                        "value": None,
-                        "detail": f"뉴스 {driver['count']}건 감지",
-                        "trend_data": [],
-                        "stock_overlay": [],
-                        "correlation": 0.0,
-                        "corr_label": "",
-                        "thresholds": {},
-                        "source": "뉴스 기반 분석",
-                        "importance": 60,
-                        "window": "향후 1~3개월",
-                        "why_it_matters": driver.get("why_it_matters", ""),
-                        "expected_condition": "",
-                        "quarterly_chart": [],
-                        "preliminary_data": {},
-                        "news_headlines": driver.get("headlines", []),
-                    })
-            except Exception:
-                pass
-            if not fallback_items:
-                fallback_items = [{"name": "데이터 수집 대기 중", "status": "neutral", "value": None, "detail": "잠시 후 다시 시도해주세요", "trend_data": [], "stock_overlay": [], "correlation": 0, "corr_label": "", "thresholds": {}, "source": "", "importance": 50, "window": "", "why_it_matters": "yfinance API 제한으로 데이터 수집이 지연되고 있습니다", "expected_condition": "", "quarterly_chart": [], "preliminary_data": {}, "news_headlines": []}]
-            response = {"ticker": ticker.upper(), "checklist": fallback_items, "summary": {"score": None, "momentum_notes": [], "live_impact_news": []}, "rate_limited": True}
-            # Short cache — retry in 5 min
-            _ANALYSIS_CACHE[cache_key] = (time.time(), response)
-            return response
+            # Proceed without info — earnings metrics will be empty but commodity items still work
+            info = {"shortName": ticker}
         sector_id = _infer_sector_id_from_profile(ticker, info=info)
         if not sources:
             sources = _build_dynamic_checklist_sources(ticker, info=info)
-        earnings_fallback = _derive_earnings_fallbacks(stock)
+        try:
+            earnings_fallback = _derive_earnings_fallbacks(stock) if info_available else {}
+        except Exception:
+            earnings_fallback = {}
         earnings_data = {
             "revenue_growth": info.get("revenueGrowth") if info.get("revenueGrowth") is not None else earnings_fallback.get("revenue_growth"),
             "earnings_growth": info.get("earningsGrowth"),

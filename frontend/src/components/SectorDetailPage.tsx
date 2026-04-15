@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
-import { useParams, useNavigate, Link } from "react-router-dom";
+import { useParams, useNavigate, useSearchParams, Link } from "react-router-dom";
 import {
   ComposedChart,
   Area,
@@ -1568,25 +1568,24 @@ function SectorOverview({ sector }: { sector: SectorDef }) {
 
 export default function SectorDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const [selectedPick, setSelectedPick] = useState<StockPick | null>(null);
 
   const sector = SECTORS.find((s) => s.id === id);
-  const params = new URLSearchParams(window.location.search);
-  const isDynamic = params.get("dynamic") === "1";
+  const isDynamic = searchParams.get("dynamic") === "1";
+  const stockParam = searchParams.get("stock");
 
   // Auto-select stock from URL query param (?stock=NVDA)
   useEffect(() => {
-    const p = new URLSearchParams(window.location.search);
-    const stockParam = p.get("stock");
     if (stockParam && sector) {
       const match = sector.picks.find((pk) => pk.ticker === stockParam || pk.ticker === decodeURIComponent(stockParam));
       if (match) {
         setSelectedPick(match);
         return;
       }
-      const dynamicName = p.get("name") || stockParam;
-      const dynamicFlag = p.get("flag") === "KR" ? "KR" : "US";
+      const dynamicName = searchParams.get("name") || stockParam;
+      const dynamicFlag = searchParams.get("flag") === "KR" ? "KR" : "US";
       setSelectedPick({
         ticker: stockParam,
         name: dynamicName,
@@ -1594,7 +1593,7 @@ export default function SectorDetailPage() {
         desc: "AI 실시간 종합 분석",
       });
     }
-  }, [sector]);
+  }, [sector, stockParam, searchParams]);
 
   if (!sector) {
     return (

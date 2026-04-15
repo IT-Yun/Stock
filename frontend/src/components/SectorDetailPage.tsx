@@ -1572,24 +1572,26 @@ export default function SectorDetailPage() {
   const [selectedPick, setSelectedPick] = useState<StockPick | null>(null);
 
   const sector = SECTORS.find((s) => s.id === id);
+  const params = new URLSearchParams(window.location.search);
+  const isDynamic = params.get("dynamic") === "1";
 
   // Auto-select stock from URL query param (?stock=NVDA)
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const stockParam = params.get("stock");
+    const p = new URLSearchParams(window.location.search);
+    const stockParam = p.get("stock");
     if (stockParam && sector) {
-      const match = sector.picks.find((p) => p.ticker === stockParam || p.ticker === decodeURIComponent(stockParam));
+      const match = sector.picks.find((pk) => pk.ticker === stockParam || pk.ticker === decodeURIComponent(stockParam));
       if (match) {
         setSelectedPick(match);
         return;
       }
-      const dynamicName = params.get("name") || stockParam;
-      const dynamicFlag = params.get("flag") === "KR" ? "KR" : "US";
+      const dynamicName = p.get("name") || stockParam;
+      const dynamicFlag = p.get("flag") === "KR" ? "KR" : "US";
       setSelectedPick({
         ticker: stockParam,
         name: dynamicName,
         flag: dynamicFlag,
-        desc: "실시간 검색 종목 | 주가 연관도 역분석 기반 체크리스트",
+        desc: "AI 실시간 종합 분석",
       });
     }
   }, [sector]);
@@ -1599,6 +1601,24 @@ export default function SectorDetailPage() {
       <div className="flex flex-col items-center justify-center py-20 space-y-4">
         <p className="text-lg text-[var(--color-text-secondary)]">섹터를 찾을 수 없습니다.</p>
         <Link to="/" className="text-sm text-[var(--color-accent-blue)] hover:underline">마인드맵으로 돌아가기</Link>
+      </div>
+    );
+  }
+
+  // Dynamic stock: full-screen analysis without sector sidebar
+  if (isDynamic && selectedPick) {
+    return (
+      <div className="h-full overflow-y-auto">
+        <div className="max-w-4xl mx-auto p-5">
+          {/* Back button */}
+          <button
+            onClick={() => navigate("/")}
+            className="flex items-center gap-2 text-sm text-[var(--color-text-muted)] hover:text-white transition-colors mb-4"
+          >
+            <ArrowLeft size={16} /> 마인드맵으로 돌아가기
+          </button>
+          <StockAnalysisCard pick={selectedPick} sectorColor="#3b82f6" />
+        </div>
       </div>
     );
   }

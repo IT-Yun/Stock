@@ -127,7 +127,9 @@ export async function fetchMoveReasons(ticker: string, period: string = "3mo"): 
 }
 
 export async function fetchChecklistLive(ticker: string): Promise<any> {
-  const res = await api.get(`/analysis/${encodeURIComponent(ticker)}/checklist-live`);
+  const res = await api.get(`/analysis/${encodeURIComponent(ticker)}/checklist-live`, {
+    timeout: 90000, // 90s — checklist is the slowest endpoint
+  });
   return res.data;
 }
 

@@ -65,13 +65,18 @@ export default function AnalysisDashboard({ ticker }: AnalysisDashboardProps) {
   const recColor = recommendationColors[analysis.recommendation] ?? "var(--color-text-primary)";
   const recLabel = recommendationLabels[analysis.recommendation] ?? analysis.recommendation;
   const ind = analysis.indicators;
-  const confidence = analysis.confidence_score;
+  const confidence = analysis.confidence ?? analysis.confidence_score ?? 0;
+  const macdSignal = ind.macd_signal ?? ind.macdSignal ?? null;
+  const bollingerLower = ind.bollinger_lower ?? ind.bollingerLower ?? null;
+  const bollingerUpper = ind.bollinger_upper ?? ind.bollingerUpper ?? null;
+  const bollingerMiddle = ind.bollinger_middle ?? ind.bollingerMiddle ?? null;
+  const sma20 = ind.sma_20 ?? ind.sma20 ?? null;
+  const sma50 = ind.sma_50 ?? ind.sma50 ?? null;
 
   return (
     <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-xl p-5 space-y-5">
       <h3 className="text-lg font-bold">매매 분석</h3>
 
-      {/* Recommendation badge + confidence */}
       <div className="flex items-center gap-4">
         <span
           className="px-4 py-2 rounded-lg text-lg font-bold"
@@ -80,48 +85,49 @@ export default function AnalysisDashboard({ ticker }: AnalysisDashboardProps) {
           {recLabel}
         </span>
         <div className="flex-1">
-          <p className="text-xs text-[var(--color-text-muted)] mb-1">
-            신뢰도 {confidence.toFixed(0)}%
-          </p>
+          <p className="text-xs text-[var(--color-text-muted)] mb-1">신뢰도 {confidence.toFixed(0)}%</p>
           <div className="w-full bg-[var(--color-bg-hover)] rounded-full h-2.5">
             <div
               className="h-2.5 rounded-full transition-all"
-              style={{
-                width: `${confidence}%`,
-                backgroundColor: recColor,
-              }}
+              style={{ width: `${confidence}%`, backgroundColor: recColor }}
             />
           </div>
         </div>
       </div>
 
-      {/* Signal */}
-      <p className="text-sm text-[var(--color-text-secondary)]">
-        시그널: {ind.buy_sell_signal}
-      </p>
+      {ind.buy_sell_signal && (
+        <p className="text-sm text-[var(--color-text-secondary)]">시그널: {ind.buy_sell_signal}</p>
+      )}
 
-      {/* Indicators breakdown */}
       <div className="space-y-3">
-        <IndicatorRow
-          label="RSI"
-          value={ind.rsi?.toFixed(1) ?? "N/A"}
-          interpretation={ind.rsi > 70 ? "과매수" : ind.rsi < 30 ? "과매도" : "중립"}
-        />
-        <IndicatorRow
-          label="MACD"
-          value={`${ind.macd?.toFixed(2) ?? "N/A"} / ${ind.macd_signal?.toFixed(2) ?? "N/A"}`}
-          interpretation={ind.macd > ind.macd_signal ? "상승 모멘텀" : "하락 모멘텀"}
-        />
-        <IndicatorRow
-          label="볼린저 밴드"
-          value={`${ind.bollinger_lower?.toFixed(1) ?? "?"} - ${ind.bollinger_upper?.toFixed(1) ?? "?"}`}
-          interpretation={`중심: ${ind.bollinger_middle?.toFixed(1) ?? "?"}`}
-        />
-        <IndicatorRow
-          label="이동평균"
-          value={`SMA20: ${ind.sma_20?.toFixed(1) ?? "N/A"}`}
-          interpretation={`SMA50: ${ind.sma_50?.toFixed(1) ?? "N/A"}`}
-        />
+        {ind.rsi != null && (
+          <IndicatorRow
+            label="RSI"
+            value={ind.rsi.toFixed(1)}
+            interpretation={ind.rsi > 70 ? "과매수" : ind.rsi < 30 ? "과매도" : "중립"}
+          />
+        )}
+        {ind.macd != null && macdSignal != null && (
+          <IndicatorRow
+            label="MACD"
+            value={`${ind.macd.toFixed(2)} / ${macdSignal.toFixed(2)}`}
+            interpretation={ind.macd > macdSignal ? "상승 모멘텀" : "하락 모멘텀"}
+          />
+        )}
+        {bollingerLower != null && bollingerUpper != null && (
+          <IndicatorRow
+            label="볼린저 밴드"
+            value={`${bollingerLower.toFixed(1)} - ${bollingerUpper.toFixed(1)}`}
+            interpretation={`중심: ${bollingerMiddle?.toFixed(1) ?? "N/A"}`}
+          />
+        )}
+        {sma20 != null && (
+          <IndicatorRow
+            label="이동평균"
+            value={`SMA20: ${sma20.toFixed(1)}`}
+            interpretation={`SMA50: ${sma50?.toFixed(1) ?? "N/A"}`}
+          />
+        )}
       </div>
     </div>
   );

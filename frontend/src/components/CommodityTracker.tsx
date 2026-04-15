@@ -48,11 +48,14 @@ export default function CommodityTracker({ relatedCommodities }: CommodityTracke
     <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-xl p-5">
       <h3 className="text-lg font-bold mb-4">원자재 시세</h3>
       <div className="space-y-1">
-        {commodities.map((c: any) => {
+        {commodities.map((c) => {
           const pct = c.change_percent ?? c.changePercent ?? 0;
           const isPositive = pct >= 0;
           const displayName = c.nameKo ?? c.name;
-          const isRelated = relatedCommodities?.includes(c.name) || relatedCommodities?.includes(displayName);
+          const isRelated =
+            relatedCommodities?.includes(c.name) ||
+            relatedCommodities?.includes(displayName) ||
+            relatedCommodities?.includes(c.symbol);
           return (
             <div
               key={c.name}

@@ -1,14 +1,14 @@
 import { useEffect, useState } from "react";
 import {
+  Area,
+  Bar,
+  CartesianGrid,
   ComposedChart,
   Line,
-  Area,
+  ResponsiveContainer,
+  Tooltip,
   XAxis,
   YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  Bar,
 } from "recharts";
 import { fetchChartData } from "@/api/client";
 import type { ChartDataPoint } from "@/types";
@@ -33,8 +33,8 @@ export default function ChartView({ ticker }: ChartViewProps) {
   useEffect(() => {
     setLoading(true);
     fetchChartData(ticker, period)
-      .then((d) => {
-        setData(d);
+      .then((chartData) => {
+        setData(chartData);
         setError(null);
       })
       .catch(() => setError("차트 데이터를 불러오는 데 실패했습니다."))
@@ -61,7 +61,6 @@ export default function ChartView({ ticker }: ChartViewProps) {
 
   return (
     <div className="space-y-4">
-      {/* Period selector */}
       <div className="flex items-center gap-2">
         <span className="text-sm text-[var(--color-text-secondary)]">기간:</span>
         {periods.map((p) => (
@@ -79,11 +78,8 @@ export default function ChartView({ ticker }: ChartViewProps) {
         ))}
       </div>
 
-      {/* Main price chart */}
       <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-xl p-4">
-        <h3 className="text-sm font-semibold text-[var(--color-text-secondary)] mb-3">
-          주가 차트
-        </h3>
+        <h3 className="text-sm font-semibold text-[var(--color-text-secondary)] mb-3">주가 차트</h3>
         <ResponsiveContainer width="100%" height={350}>
           <ComposedChart data={data}>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
@@ -109,11 +105,15 @@ export default function ChartView({ ticker }: ChartViewProps) {
                   open: "시가",
                   high: "고가",
                   low: "저가",
+                  sma_20: "SMA 20",
+                  sma_50: "SMA 50",
+                  bollinger_upper: "볼린저 상단",
+                  bollinger_lower: "볼린저 하단",
                 };
-                return [value.toLocaleString(undefined, { maximumFractionDigits: 2 }), labels[name] ?? name];
+
+                return [typeof value === "number" ? value.toFixed(2) : value, labels[name] ?? name];
               }}
             />
-            {/* Price area */}
             <Area
               type="monotone"
               dataKey="close"
@@ -122,23 +122,31 @@ export default function ChartView({ ticker }: ChartViewProps) {
               fillOpacity={0.08}
               strokeWidth={2}
             />
-            {/* Close price line */}
+            <Line type="monotone" dataKey="close" stroke="var(--color-accent-blue)" strokeWidth={2} dot={false} />
             <Line
               type="monotone"
-              dataKey="close"
-              stroke="var(--color-accent-blue)"
-              strokeWidth={2}
+              dataKey="sma_20"
+              stroke="#f59e0b"
+              strokeWidth={1}
               dot={false}
+              strokeDasharray="3 3"
+              connectNulls={false}
+            />
+            <Line
+              type="monotone"
+              dataKey="sma_50"
+              stroke="#8b5cf6"
+              strokeWidth={1}
+              dot={false}
+              strokeDasharray="4 2"
+              connectNulls={false}
             />
           </ComposedChart>
         </ResponsiveContainer>
       </div>
 
-      {/* Volume chart */}
       <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-xl p-4">
-        <h3 className="text-sm font-semibold text-[var(--color-text-secondary)] mb-3">
-          거래량
-        </h3>
+        <h3 className="text-sm font-semibold text-[var(--color-text-secondary)] mb-3">거래량</h3>
         <ResponsiveContainer width="100%" height={120}>
           <ComposedChart data={data}>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
@@ -160,12 +168,7 @@ export default function ChartView({ ticker }: ChartViewProps) {
               }}
               formatter={(value: number) => [value.toLocaleString(), "거래량"]}
             />
-            <Bar
-              dataKey="volume"
-              fill="var(--color-accent-blue)"
-              fillOpacity={0.4}
-              barSize={3}
-            />
+            <Bar dataKey="volume" fill="var(--color-accent-blue)" fillOpacity={0.4} barSize={3} />
           </ComposedChart>
         </ResponsiveContainer>
       </div>

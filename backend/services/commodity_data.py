@@ -1,63 +1,83 @@
+import time
 import yfinance as yf
 from models.schemas import CommodityPrice
 
 
 COMMODITIES = {
-    "Gold": {"symbol": "GC=F", "unit": "USD/oz"},
-    "Oil": {"symbol": "CL=F", "unit": "USD/barrel"},
-    "Copper": {"symbol": "HG=F", "unit": "USD/lb"},
-    "Uranium": {"symbol": "URA", "unit": "USD/share"},
-    "Natural Gas": {"symbol": "NG=F", "unit": "USD/MMBtu"},
+    "금": {"symbol": "GC=F", "unit": "달러/온스"},
+    "은": {"symbol": "SI=F", "unit": "달러/온스"},
+    "원유 (WTI)": {"symbol": "CL=F", "unit": "달러/배럴"},
+    "구리": {"symbol": "HG=F", "unit": "달러/파운드"},
+    "우라늄 ETF": {"symbol": "URA", "unit": "달러"},
+    "천연가스": {"symbol": "NG=F", "unit": "달러/MMBtu"},
+    "리튬 ETF": {"symbol": "LIT", "unit": "달러"},
 }
 
 SECTOR_COMMODITY_MAP = {
-    "energy": ["Oil", "Natural Gas"],
-    "materials": ["Gold", "Copper"],
-    "mining": ["Gold", "Copper", "Uranium"],
-    "utilities": ["Natural Gas", "Uranium"],
-    "technology": [],
-    "healthcare": [],
-    "financials": [],
-    "industrials": ["Oil", "Copper"],
-    "consumer": ["Oil"],
-    "반도체": ["Copper"],
-    "에너지": ["Oil", "Natural Gas"],
-    "소재": ["Gold", "Copper"],
-    "원자력": ["Uranium", "Natural Gas"],
+    "반도체": ["은", "금"],
+    "로봇": ["구리", "리튬 ETF"],
+    "생명공학/유전자": [],
+    "smr 소형원전": ["우라늄 ETF", "천연가스"],
+    "smr": ["우라늄 ETF", "천연가스"],
+    "energy": ["원유 (WTI)", "천연가스"],
+    "materials": ["금", "구리"],
 }
+
+# Cache for commodity prices
+_commodity_cache: dict[str, tuple[float, CommodityPrice]] = {}
+_all_cache: tuple[float, list[CommodityPrice]] | None = None
+CACHE_TTL = 180  # 3 minutes for commodity data (faster refresh)
+
+
+def _fetch_single(name: str, info: dict) -> CommodityPrice | None:
+    """Fetch a single commodity price with caching."""
+    cached = _commodity_cache.get(name)
+    if cached and time.time() - cached[0] < CACHE_TTL:
+        return cached[1]
+
+    try:
+        ticker = yf.Ticker(info["symbol"])
+        hist = ticker.history(period="2d")
+        if hist.empty:
+            return None
+
+        current_price = float(hist["Close"].iloc[-1])
+        if len(hist) >= 2:
+            prev_price = float(hist["Close"].iloc[-2])
+            change_percent = ((current_price - prev_price) / prev_price) * 100
+        else:
+            change_percent = 0.0
+
+        result = CommodityPrice(
+            name=name,
+            symbol=info["symbol"],
+            price=round(current_price, 2),
+            change_percent=round(change_percent, 2),
+            unit=info["unit"],
+        )
+        _commodity_cache[name] = (time.time(), result)
+        return result
+    except Exception:
+        return None
 
 
 class CommodityDataService:
-    """Service for fetching commodity prices via yfinance."""
+    """Service for fetching commodity prices via yfinance with caching."""
 
     @staticmethod
     def get_commodity_prices() -> list[CommodityPrice]:
-        """Fetch prices for all tracked commodities."""
+        """Fetch prices for all tracked commodities (cached 3 min)."""
+        global _all_cache
+        if _all_cache and time.time() - _all_cache[0] < CACHE_TTL:
+            return _all_cache[1]
+
         results = []
         for name, info in COMMODITIES.items():
-            try:
-                ticker = yf.Ticker(info["symbol"])
-                hist = ticker.history(period="2d")
-                if hist.empty:
-                    continue
+            price = _fetch_single(name, info)
+            if price:
+                results.append(price)
 
-                current_price = float(hist["Close"].iloc[-1])
-                if len(hist) >= 2:
-                    prev_price = float(hist["Close"].iloc[-2])
-                    change_percent = ((current_price - prev_price) / prev_price) * 100
-                else:
-                    change_percent = 0.0
-
-                results.append(CommodityPrice(
-                    name=name,
-                    symbol=info["symbol"],
-                    price=round(current_price, 2),
-                    change_percent=round(change_percent, 2),
-                    unit=info["unit"],
-                ))
-            except Exception:
-                continue
-
+        _all_cache = (time.time(), results)
         return results
 
     @staticmethod
@@ -74,35 +94,14 @@ class CommodityDataService:
         if not related_names:
             return CommodityDataService.get_commodity_prices()
 
-        # Deduplicate
         related_names = list(dict.fromkeys(related_names))
 
         results = []
         for name in related_names:
             if name not in COMMODITIES:
                 continue
-            info = COMMODITIES[name]
-            try:
-                ticker = yf.Ticker(info["symbol"])
-                hist = ticker.history(period="2d")
-                if hist.empty:
-                    continue
-
-                current_price = float(hist["Close"].iloc[-1])
-                if len(hist) >= 2:
-                    prev_price = float(hist["Close"].iloc[-2])
-                    change_percent = ((current_price - prev_price) / prev_price) * 100
-                else:
-                    change_percent = 0.0
-
-                results.append(CommodityPrice(
-                    name=name,
-                    symbol=info["symbol"],
-                    price=round(current_price, 2),
-                    change_percent=round(change_percent, 2),
-                    unit=info["unit"],
-                ))
-            except Exception:
-                continue
+            price = _fetch_single(name, COMMODITIES[name])
+            if price:
+                results.append(price)
 
         return results

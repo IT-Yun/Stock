@@ -20,11 +20,14 @@ interface StockCardProps {
 }
 
 export default function StockCard({ stock }: StockCardProps) {
-  const pct = stock.change_percent ?? 0;
-  const isPositive = pct >= 0;
-  const sparkData = generateSparkline(stock.price, pct);
+  const changePct = stock.change_percent ?? stock.changePercent ?? 0;
+  const isPositive = changePct >= 0;
+  const sparkData = generateSparkline(stock.price, changePct);
+
   const isKRX = stock.ticker.endsWith(".KS") || stock.ticker.endsWith(".KQ");
-  const currency = isKRX ? "₩" : "$";
+  const priceStr = isKRX
+    ? `${Math.round(stock.price).toLocaleString()}원`
+    : `$${stock.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
   return (
     <Link
@@ -56,7 +59,7 @@ export default function StockCard({ stock }: StockCardProps) {
       </div>
       <div className="flex items-end justify-between">
         <p className="text-lg font-bold text-[var(--color-text-primary)]">
-          {currency}{stock.price.toLocaleString(undefined, { minimumFractionDigits: isKRX ? 0 : 2, maximumFractionDigits: isKRX ? 0 : 2 })}
+          {priceStr}
         </p>
         <p
           className={`text-sm font-semibold ${
@@ -64,7 +67,7 @@ export default function StockCard({ stock }: StockCardProps) {
           }`}
         >
           {isPositive ? "+" : ""}
-          {pct.toFixed(2)}%
+          {changePct.toFixed(2)}%
         </p>
       </div>
     </Link>

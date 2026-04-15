@@ -1,13 +1,61 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { Factory } from "lucide-react";
+import { Factory, Search } from "lucide-react";
 import { SECTORS, normalizeWeights } from "@/data/sectors";
 import type { SectorDef } from "@/data/sectors";
+import { searchStocks } from "@/api/client";
 
 /* ───────────────────────── HELPERS ───────────────────────── */
 
 function lerp(a: number, b: number, t: number) {
   return a + (b - a) * t;
+}
+
+const STOCK_EVAL_CRITERIA: Record<string, string[]> = {
+  "NVDA": ["AI CAPEX 지속 여부", "데이터센터 매출 성장률", "HBM 공급 타이트 유지", "영업이익률 방어"],
+  "TSM": ["파운드리 가동률", "주요 고객 수요", "매출 성장 추세", "고마진 유지"],
+  "AVGO": ["AI 네트워킹 수요", "커스텀칩 기대", "VMware 시너지", "영업이익률 확장"],
+  "000660.KS": ["DRAM 업황 선행 신호", "HBM 믹스 확대", "영업이익률 피크아웃 여부", "환율 수혜"],
+  "005930.KS": ["메모리 업황 회복", "HBM/파운드리 개선", "반도체 이익률", "밸류 부담"],
+  "TSLA": ["자동차 마진 회복", "인도량과 판가", "Optimus/FSD 기대", "배터리 원가 부담"],
+  "ISRG": ["수술 건수 성장", "설치 대수 확대", "이익률 유지", "고객 락인 강화"],
+  "CEG": ["전력 수요 증가", "원전 장기계약", "유틸리티 흐름", "정책 리스크"],
+  "CCJ": ["우라늄 가격 추세", "공급 부족 기대", "장기 계약 가격", "이익률 확장"],
+  "CRWD": ["ARR 성장 유지", "플랫폼 확장", "대형 계약 증가", "운영 리스크 재발 여부"],
+  "PANW": ["플랫폼 통합 확장", "보안 지출 유지", "성장률 방어", "수익성 유지"],
+  "FTNT": ["방화벽/OT 수요", "성장 재가속", "고이익률 유지", "보안 섹터 심리"],
+  "ZS": ["제로트러스트 확산", "고성장 유지", "흑자전환", "멀티플 방어"],
+  "S": ["초고성장 유지", "적자폭 축소", "보안 섹터 심리", "자금조달 우려"],
+  "RKLB": ["수주/발사 모멘텀", "Neutron 일정", "우주 테마 심리", "정부 예산 기대"],
+  "LMT": ["방산/우주 수주", "예산 안정성", "현금흐름 방어", "우주 옵션 가치"],
+  "BA": ["턴어라운드 신뢰 회복", "품질/규제 이슈", "생산 정상화", "우주 사업 기대"],
+  "CRSP": ["임상/승인 일정", "현금 런웨이", "바이오 위험선호", "상업화 초기 매출"],
+  "LLY": ["GLP-1 처방 모멘텀", "공급 확장", "경쟁사 점유율", "이익률 유지"],
+  "ILMN": ["시퀀싱 수요 회복", "장비 CAPEX 흐름", "이익률 방어", "바이오 심리"],
+  "207940.KS": ["CDMO 수주잔고", "증설 효과", "고마진 유지", "환율 수혜"],
+  "068270.KS": ["미국 판매 확대", "가격 경쟁 압박", "이익률 방어", "환율 효과"],
+  "IONQ": ["기술 로드맵 진척", "현금 소진 속도", "양자 섹터 심리", "수주/매출 성장"],
+  "GOOG": ["본업 현금창출", "양자 옵션 가치", "클라우드 성장", "빅테크 위험선호"],
+  "IBM": ["기업용 양자 신뢰", "본업 성장 바닥", "현금흐름 유지", "배당 매력"],
+  "RGTI": ["기술 검증 기대", "자금조달 압박", "양자 심리", "매출 성장 유지"],
+  "MSFT": ["Azure/AI 성장", "대형 CAPEX 유지", "고이익률 방어", "양자 옵션"],
+  "BE": ["데이터센터 전력 수요", "매출 성장 전환", "흑자전환", "클린에너지 심리"],
+  "PLUG": ["정책/보조금 기대", "적자폭 축소", "클린에너지 심리", "자금조달 리스크"],
+  "ENPH": ["태양광 수요 회복", "금리 부담", "고마진 유지", "설치 경기 회복"],
+  "005380.KS": ["친환경차 믹스", "자동차 섹터 심리", "이익률 유지", "환율 효과"],
+  "336260.KS": ["수소발전 정책", "프로젝트 수주", "흑자전환", "클린에너지 심리"],
+};
+
+function getEvalCriteria(ticker: string, sectorName: string) {
+  return (
+    STOCK_EVAL_CRITERIA[ticker] ??
+    [
+      `${sectorName} 업황 방향`,
+      "매출 성장과 이익률",
+      "핵심 선행 지표 추세",
+      "기대감이 꺾이는 위험 신호",
+    ]
+  );
 }
 
 /* ───────────────────────── COMPONENT ───────────────────────── */
@@ -16,9 +64,23 @@ export default function SectorMindMap() {
   const [year, setYear] = useState(10);
   const [selected, setSelected] = useState<SectorDef | null>(null);
   const [hovered, setHovered] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [evaluatingStock, setEvaluatingStock] = useState<null | {
+    ticker: string;
+    name: string;
+    sectorName: string;
+    criteria: string[];
+    sectorId?: string;
+    flag?: "KR" | "US";
+  }>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [dims, setDims] = useState({ w: 1200, h: 800 });
   const navigate = useNavigate();
+  const navigationTimeoutRef = useRef<number | null>(null);
+  const searchTimeoutRef = useRef<number | null>(null);
 
   const measure = useCallback(() => {
     if (containerRef.current) {
@@ -33,12 +95,79 @@ export default function SectorMindMap() {
     return () => window.removeEventListener("resize", measure);
   }, [measure]);
 
+  useEffect(() => {
+    return () => {
+      if (navigationTimeoutRef.current !== null) {
+        window.clearTimeout(navigationTimeoutRef.current);
+      }
+      if (searchTimeoutRef.current !== null) {
+        window.clearTimeout(searchTimeoutRef.current);
+      }
+    };
+  }, []);
+
   const cx = dims.w / 2;
   const cy = dims.h / 2;
   const orbitR = Math.min(dims.w, dims.h) * 0.34;
+  const normalizedQuery = query.trim().toLowerCase();
 
   const yearIdx = year - 1; // 0-based index
   const weights = normalizeWeights(SECTORS, yearIdx);
+
+  useEffect(() => {
+    if (!normalizedQuery) {
+      setSearchResults([]);
+      setSearchLoading(false);
+      return;
+    }
+    if (searchTimeoutRef.current !== null) {
+      window.clearTimeout(searchTimeoutRef.current);
+    }
+    searchTimeoutRef.current = window.setTimeout(async () => {
+      setSearchLoading(true);
+      try {
+        const res = await searchStocks(query.trim());
+        setSearchResults(Array.isArray(res?.results) ? res.results : []);
+      } catch {
+        setSearchResults([]);
+      } finally {
+        setSearchLoading(false);
+      }
+    }, 220);
+  }, [normalizedQuery, query]);
+
+  const openStock = useCallback((stock: { ticker: string; name: string; sectorName: string; sectorId?: string; flag?: "KR" | "US" }) => {
+    setQuery("");
+    setSearchOpen(false);
+    const resolvedSectorName = (stock as any).sector_name ?? stock.sectorName ?? "실시간 분석";
+    const resolvedSectorId = (stock as any).sector_id ?? stock.sectorId;
+    const criteria = getEvalCriteria(stock.ticker, resolvedSectorName);
+    setEvaluatingStock({
+      ticker: stock.ticker,
+      name: stock.name,
+      sectorName: resolvedSectorName,
+      criteria,
+      sectorId: resolvedSectorId,
+      flag: stock.flag,
+    });
+    if (navigationTimeoutRef.current !== null) {
+      window.clearTimeout(navigationTimeoutRef.current);
+    }
+    navigationTimeoutRef.current = window.setTimeout(() => {
+      setEvaluatingStock(null);
+      if (resolvedSectorId) {
+        const params = new URLSearchParams({
+          stock: stock.ticker,
+          name: stock.name,
+          flag: stock.flag ?? (stock.ticker.endsWith(".KS") || stock.ticker.endsWith(".KQ") ? "KR" : "US"),
+          dynamic: "1",
+        });
+        navigate(`/sector/${resolvedSectorId}?${params.toString()}`);
+        return;
+      }
+      navigate(`/stock/${encodeURIComponent(stock.ticker)}`);
+    }, 1400);
+  }, [navigate]);
 
   return (
     <div className="flex h-full">
@@ -199,6 +328,128 @@ export default function SectorMindMap() {
         ref={containerRef}
         className="flex-1 relative overflow-hidden bg-[var(--color-bg-primary)] bg-dot-grid"
       >
+        <div className="absolute top-5 left-5 z-40 w-[min(360px,calc(100%-2.5rem))]">
+          <div
+            className="glass rounded-2xl px-4 py-3 border border-white/10"
+            style={{ boxShadow: "0 12px 40px rgba(0,0,0,0.35)" }}
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl flex items-center justify-center bg-white/5 border border-white/10">
+                <Search size={16} className="text-[var(--color-text-secondary)]" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--color-text-muted)]">빠른 진입</p>
+                <input
+                  value={query}
+                  onChange={(e) => {
+                    setQuery(e.target.value);
+                    setSearchOpen(true);
+                  }}
+                  onFocus={() => setSearchOpen(true)}
+                  onBlur={() => window.setTimeout(() => setSearchOpen(false), 150)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && searchResults[0]) {
+                        openStock(searchResults[0]);
+                      }
+                    }}
+                  placeholder="티커 또는 종목명 검색 (예: NVDA, 삼성전자, SK하이닉스)"
+                  className="w-full bg-transparent text-sm text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] outline-none mt-1"
+                />
+              </div>
+            </div>
+            <p className="text-[10px] text-[var(--color-text-muted)] mt-2 pl-12">
+              미국/한국 전체 종목을 검색해서 바로 실시간 분석으로 진입합니다.
+            </p>
+          </div>
+
+          {searchOpen && normalizedQuery && (
+            <div
+              className="mt-2 glass rounded-2xl border border-white/10 overflow-hidden"
+              style={{ boxShadow: "0 12px 36px rgba(0,0,0,0.4)" }}
+            >
+              {searchLoading ? (
+                <div className="px-4 py-4 text-xs text-[var(--color-text-muted)] animate-pulse">
+                  종목 검색 중입니다...
+                </div>
+              ) : searchResults.length > 0 ? (
+                searchResults.map((stock) => (
+                  <button
+                    key={stock.ticker}
+                    className="w-full text-left px-4 py-3 hover:bg-white/5 transition-colors border-b border-white/5 last:border-b-0"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => openStock(stock)}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-[var(--color-text-primary)]">
+                          {stock.name}
+                        </p>
+                        <p className="text-[11px] text-[var(--color-text-muted)] mt-0.5">
+                          {stock.ticker} · {stock.sector_name ?? stock.sectorName ?? "실시간 분석"}
+                        </p>
+                      </div>
+                      <span
+                        className="text-[10px] px-2 py-1 rounded-full font-bold shrink-0"
+                        style={{
+                          background: stock.flag === "US" ? "rgba(59,130,246,0.15)" : "rgba(239,68,68,0.15)",
+                          color: stock.flag === "US" ? "#60a5fa" : "#f87171",
+                        }}
+                      >
+                        {stock.flag}
+                      </span>
+                    </div>
+                  </button>
+                ))
+              ) : (
+                <div className="px-4 py-4 text-xs text-[var(--color-text-muted)]">
+                  검색 결과가 없습니다. 티커 또는 종목명을 조금 더 구체적으로 입력해주세요.
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {evaluatingStock && (
+          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/45 backdrop-blur-sm px-4">
+            <div
+              className="w-full max-w-md rounded-3xl border border-white/10 glass px-6 py-6"
+              style={{ boxShadow: "0 24px 80px rgba(0,0,0,0.45)" }}
+            >
+              <p className="text-[11px] uppercase tracking-[0.22em] text-[var(--color-text-muted)]">
+                AI Live Analysis
+              </p>
+              <h3 className="text-xl font-bold text-[var(--color-text-primary)] mt-2">
+                {evaluatingStock.name} 분석 중
+              </h3>
+              <p className="text-sm text-[var(--color-text-secondary)] mt-2">
+                AI 분석을 시작합니다. 종목을 실시간으로 분석해서 알려드리겠습니다.
+              </p>
+              <p className="text-[11px] text-[var(--color-text-muted)] mt-2">
+                {evaluatingStock.ticker} · {evaluatingStock.sectorName}
+              </p>
+
+              <div className="mt-5 space-y-2">
+                {evaluatingStock.criteria.map((criterion, index) => (
+                  <div
+                    key={criterion}
+                    className="rounded-xl px-4 py-3 bg-white/5 border border-white/8"
+                    style={{ animation: `fadeInUp 0.35s ease-out ${index * 0.08}s both` }}
+                  >
+                    <p className="text-sm text-[var(--color-text-primary)]">{criterion}</p>
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-5 h-1.5 rounded-full bg-white/8 overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-[linear-gradient(90deg,#3b82f6,#22c55e)]"
+                  style={{ width: "100%", animation: "progressLoad 1.3s ease-out" }}
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Ambient glow blobs */}
         <div className="absolute pointer-events-none" style={{ left: cx - 250, top: cy - 250, width: 500, height: 500, background: "radial-gradient(circle, rgba(59,130,246,0.06) 0%, transparent 70%)", animation: "breathe 8s ease-in-out infinite" }} />
         <div className="absolute pointer-events-none" style={{ left: cx + 100, top: cy - 200, width: 400, height: 400, background: "radial-gradient(circle, rgba(168,85,247,0.04) 0%, transparent 70%)", animation: "breathe 10s ease-in-out infinite 2s" }} />

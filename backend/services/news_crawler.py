@@ -1,4 +1,5 @@
 import re
+import time
 import requests
 from urllib.parse import quote
 from bs4 import BeautifulSoup
@@ -8,12 +9,32 @@ from config import settings
 from models.schemas import NewsArticle
 
 
+_NEWS_CACHE: dict[str, tuple[float, object]] = {}
+NEWS_CACHE_TTL = 900
+
+
+def _get_cached(key: str):
+    cached = _NEWS_CACHE.get(key)
+    if cached and time.time() - cached[0] < NEWS_CACHE_TTL:
+        return cached[1]
+    return None
+
+
+def _set_cached(key: str, value: object):
+    _NEWS_CACHE[key] = (time.time(), value)
+
+
 class NewsCrawlerService:
     """Service for crawling news from multiple sources."""
 
     @staticmethod
     def crawl_naver_news(keyword: str) -> list[NewsArticle]:
         """Scrape Naver finance news for a keyword."""
+        cache_key = f"naver:{keyword}"
+        cached = _get_cached(cache_key)
+        if cached is not None:
+            return cached
+
         try:
             url = f"https://search.naver.com/search.naver?where=news&query={keyword}&sm=tab_opt&sort=1"
             headers = {
@@ -51,6 +72,7 @@ class NewsCrawlerService:
                     summary=summary,
                 ))
 
+            _set_cached(cache_key, articles)
             return articles
         except Exception:
             return []
@@ -58,6 +80,11 @@ class NewsCrawlerService:
     @staticmethod
     def crawl_google_news_rss(keyword: str, lang: str = "ko") -> list[NewsArticle]:
         """Fetch news via Google News RSS feed."""
+        cache_key = f"google:{lang}:{keyword}"
+        cached = _get_cached(cache_key)
+        if cached is not None:
+            return cached
+
         try:
             encoded_kw = quote(keyword)
             if lang == "en":
@@ -81,6 +108,7 @@ class NewsCrawlerService:
                     summary=None,
                 ))
 
+            _set_cached(cache_key, articles)
             return articles
         except Exception:
             return []
@@ -100,6 +128,11 @@ class NewsCrawlerService:
     @staticmethod
     def search_news(keyword: str) -> list[NewsArticle]:
         """Aggregate news from configured sources for a keyword."""
+        cache_key = f"search:{keyword}"
+        cached = _get_cached(cache_key)
+        if cached is not None:
+            return cached
+
         articles: list[NewsArticle] = []
 
         sources = {source.strip().lower() for source in settings.NEWS_SOURCES if source.strip()}
@@ -118,11 +151,17 @@ class NewsCrawlerService:
                 seen_titles.add(article.title)
                 unique_articles.append(article)
 
+        _set_cached(cache_key, unique_articles)
         return unique_articles
 
     @staticmethod
     def get_sector_news(sector_name: str) -> list[NewsArticle]:
         """Aggregate news from Korean + English sources for a sector."""
+        cache_key = f"sector:{sector_name}"
+        cached = _get_cached(cache_key)
+        if cached is not None:
+            return cached
+
         articles: list[NewsArticle] = []
 
         # Korean sources
@@ -145,6 +184,7 @@ class NewsCrawlerService:
                 seen_titles.add(article.title)
                 unique_articles.append(article)
 
+        _set_cached(cache_key, unique_articles)
         return unique_articles
 
     @staticmethod
@@ -154,6 +194,11 @@ class NewsCrawlerService:
         Returns extracted revenue/operating_profit/net_income if found.
         Searches both Korean (잠정실적) and English (preliminary earnings).
         """
+        cache_key = f"prelim:{company_name}:{ticker}"
+        cached = _get_cached(cache_key)
+        if cached is not None:
+            return cached
+
         result: dict = {"found": False, "source": "", "data": {}, "headlines": []}
 
         try:
@@ -273,4 +318,5 @@ class NewsCrawlerService:
         except Exception:
             pass
 
+        _set_cached(cache_key, result)
         return result

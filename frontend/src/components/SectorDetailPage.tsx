@@ -17,7 +17,7 @@ import {
 import { ArrowLeft, AlertTriangle, Activity, Newspaper, Zap, ChevronRight, TrendingUp, TrendingDown, Target, CheckCircle2, XCircle, MinusCircle, Shield } from "lucide-react";
 import { SECTORS } from "@/data/sectors";
 import type { SectorDef, StockPick } from "@/data/sectors";
-import { fetchChartData, fetchAnalysis, fetchEarnings, fetchPatternAnalysis, fetchCommodityHistory, searchNews, fetchPrediction, fetchMoveReasons, fetchChecklistLive } from "@/api/client";
+import { fetchChartData, fetchAnalysis, fetchEarnings, fetchPatternAnalysis, fetchCommodityHistory, searchNews, fetchPrediction, fetchMoveReasons, fetchChecklistLive, fetchSectorPulse } from "@/api/client";
 import type { ChartDataPoint, AnalysisResult, NewsArticle } from "@/types";
 
 const periods = [
@@ -356,10 +356,41 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
   const chartScore100 = chartVerdict.score100;
   const fundScore100 = fundVerdict.score100;
   const predScore100 = prediction?.overall_score != null ? Math.round(Math.max(0, Math.min(100, (prediction.overall_score + 100) / 2))) : null;
-  const overallScore100 = predScore100 != null
-    ? Math.round(chartScore100 * 0.4 + fundScore100 * 0.3 + predScore100 * 0.3)
-    : Math.round(chartScore100 * 0.55 + fundScore100 * 0.45);
+  const checklistScore100 = checklistLive?.summary?.score != null
+    ? checklistLive.summary.score
+    : (() => {
+        const items = checklistLive?.checklist ?? [];
+        if (!items.length) return null;
+        const positives = items.filter((c: any) => c.status === "positive").length;
+        const negatives = items.filter((c: any) => c.status === "negative").length;
+        return Math.round(Math.max(0, Math.min(100, 50 + ((positives - negatives) / items.length) * 50)));
+      })();
+  const weightedParts = [
+    { score: chartScore100, weight: 0.3 },
+    { score: fundScore100, weight: 0.25 },
+    { score: checklistScore100, weight: 0.2 },
+    { score: predScore100, weight: 0.25 },
+  ].filter((part) => part.score != null) as { score: number; weight: number }[];
+  const totalWeight = weightedParts.reduce((sum, part) => sum + part.weight, 0);
+  const overallScore100 = totalWeight > 0
+    ? Math.round(weightedParts.reduce((sum, part) => sum + part.score * part.weight, 0) / totalWeight)
+    : 50;
   const overall = scoreToVerdict(overallScore100);
+  const momentumNotes = checklistLive?.summary?.momentum_notes?.length
+    ? checklistLive.summary.momentum_notes
+    : meta.momentum.map((text) => ({
+        title: text,
+        detail: text,
+        expected_condition: "핵심 지표가 기대 수준을 유지해야 주가가 이를 선반영할 수 있습니다.",
+        window: "향후 1~3개월",
+        status: "neutral",
+      }));
+  const referenceCandidates = checklistLive?.summary?.reference_candidates?.length
+    ? checklistLive.summary.reference_candidates
+    : [];
+  const liveImpactNews = checklistLive?.summary?.live_impact_news?.length
+    ? checklistLive.summary.live_impact_news
+    : [];
 
   return (
     <div className="space-y-4">
@@ -534,8 +565,13 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                                 </div>
                               </div>
                               <p className="text-xs text-[var(--color-text-primary)] leading-relaxed font-semibold mb-1">
-                                {moveInfo?.reason || (bigMove.pctChange > 0 ? "모멘텀 상승 / 수급 개선" : "차익실현 / 시장 조정")}
+                                {moveInfo?.issue_summary || moveInfo?.reason || (bigMove.pctChange > 0 ? "모멘텀 상승 / 수급 개선" : "차익실현 / 시장 조정")}
                               </p>
+                              {moveInfo?.issue_category && (
+                                <p className="text-[10px] text-[var(--color-text-muted)] mb-1">
+                                  핵심 이슈: {moveInfo.issue_category}
+                                </p>
+                              )}
                               {moveInfo?.news?.length > 0 && (
                                 <div className="mt-1.5 space-y-1">
                                   {moveInfo.news.slice(0, 2).map((n: string, ni: number) => (
@@ -576,27 +612,134 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
             </div>
           </div>
 
-          {/* ═══ MOMENTUM — BIG & PROMINENT ═══ */}
+          {/* ═══ EXPECTATION — BIG & PROMINENT ═══ */}
           <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-2xl p-5">
             <div className="flex items-center gap-2 mb-3">
               <div className="w-8 h-8 rounded-xl flex items-center justify-center" style={{ background: `${sectorColor}18`, border: `1px solid ${sectorColor}25` }}>
                 <Zap size={16} style={{ color: sectorColor }} />
               </div>
-              <h3 className="text-sm font-bold text-[var(--color-text-primary)]">현재 모멘텀 & 카탈리스트</h3>
+              <div>
+                <h3 className="text-sm font-bold text-[var(--color-text-primary)]">현재 주가 기대감</h3>
+                <p className="text-[10px] text-[var(--color-text-muted)]">지금 주가를 밀고 있는 기대와 깨지는 조건</p>
+              </div>
             </div>
             <div className="grid grid-cols-1 gap-2">
-              {meta.momentum.map((m, i) => (
+              {momentumNotes.map((m: any, i: number) => (
                 <div
                   key={i}
-                  className="flex items-center gap-3 px-4 py-3 rounded-xl transition-colors"
-                  style={{ background: `${sectorColor}08`, border: `1px solid ${sectorColor}15` }}
+                  className="px-4 py-3 rounded-xl transition-colors"
+                  style={{
+                    background: m.status === "negative" ? "rgba(239,68,68,0.08)" : `${sectorColor}08`,
+                    border: `1px solid ${m.status === "negative" ? "rgba(239,68,68,0.2)" : `${sectorColor}15`}`,
+                  }}
                 >
-                  <div className="w-2 h-2 rounded-full animate-pulse" style={{ background: sectorColor, boxShadow: `0 0 8px ${sectorColor}60` }} />
-                  <span className="text-sm font-medium text-[var(--color-text-primary)]">{m}</span>
+                  <div className="flex items-start gap-3">
+                    <div
+                      className="w-2 h-2 rounded-full animate-pulse mt-1.5"
+                      style={{
+                        background: m.status === "negative" ? "#ef4444" : sectorColor,
+                        boxShadow: `0 0 8px ${m.status === "negative" ? "rgba(239,68,68,0.6)" : `${sectorColor}60`}`,
+                      }}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-semibold text-[var(--color-text-primary)]">{m.title}</p>
+                      {m.detail && <p className="text-xs text-[var(--color-text-secondary)] mt-1">{m.detail}</p>}
+                      {m.expected_condition && <p className="text-[11px] text-[var(--color-text-muted)] mt-1">유지 조건: {m.expected_condition}</p>}
+                      <p className="text-[10px] text-[var(--color-text-muted)] mt-1">유효 구간: {m.window ?? "향후 1~3개월"}</p>
+                    </div>
+                  </div>
                 </div>
               ))}
             </div>
           </div>
+
+          {referenceCandidates.length > 0 && (
+            <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-2xl p-5">
+              <div className="flex items-center gap-2 mb-3">
+                <div className="w-8 h-8 rounded-xl flex items-center justify-center bg-[rgba(59,130,246,0.12)] border border-[rgba(59,130,246,0.22)]">
+                  <Activity size={16} className="text-[var(--color-accent-blue)]" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-[var(--color-text-primary)]">주가 연관도 상위 참고 항목</h3>
+                  <p className="text-[10px] text-[var(--color-text-muted)]">역으로 찾은 선행/동행 신호 순위</p>
+                </div>
+              </div>
+              <div className="space-y-2">
+                {referenceCandidates.map((signal: any, index: number) => (
+                  <div
+                    key={`${signal.symbol}-${index}`}
+                    className="rounded-xl px-4 py-3"
+                    style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-[rgba(59,130,246,0.16)] text-[var(--color-accent-blue)]">
+                            #{index + 1}
+                          </span>
+                          <p className="text-sm font-semibold text-[var(--color-text-primary)]">{signal.name}</p>
+                          <span className="text-[10px] font-mono text-[var(--color-text-muted)]">{signal.symbol}</span>
+                        </div>
+                        <p className="text-xs text-[var(--color-text-secondary)] mt-1">{signal.why_it_matters}</p>
+                        <p className="text-[11px] text-[var(--color-text-muted)] mt-1">
+                          관계: {signal.relationship} · 현재: {signal.current_signal}
+                        </p>
+                        <p className="text-[11px] text-[var(--color-text-muted)] mt-1">
+                          연관도: 동행 {signal.same_day_corr} / 5일선행 {signal.lead_corr_5d} / 10일선행 {signal.lead_corr_10d}
+                        </p>
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <p className="text-lg font-black text-[var(--color-accent-blue)]">{signal.score}</p>
+                        <p className="text-[10px] text-[var(--color-text-muted)]">연관 점수</p>
+                        <p className="text-[10px] text-[var(--color-text-muted)] mt-1">{signal.window}</p>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {liveImpactNews.length > 0 && (
+            <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-2xl p-5">
+              <div className="flex items-center gap-2 mb-3">
+                <div className="w-8 h-8 rounded-xl flex items-center justify-center bg-[rgba(239,68,68,0.12)] border border-[rgba(239,68,68,0.22)]">
+                  <Newspaper size={16} className="text-[var(--color-accent-red)]" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-[var(--color-text-primary)]">실시간 이슈 뉴스</h3>
+                  <p className="text-[10px] text-[var(--color-text-muted)]">지금 주가에 영향이 클 가능성이 높은 기사만 선별</p>
+                </div>
+              </div>
+              <div className="space-y-2">
+                {liveImpactNews.map((article: any, index: number) => (
+                  <div
+                    key={`${article.title}-${index}`}
+                    className="rounded-xl px-4 py-3"
+                    style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-[rgba(239,68,68,0.14)] text-[var(--color-accent-red)]">
+                            영향도 {article.impact_score}
+                          </span>
+                          <p className="text-sm font-semibold text-[var(--color-text-primary)]">{article.issue_label}</p>
+                        </div>
+                        <p className="text-sm text-[var(--color-text-primary)] mt-2">{article.title}</p>
+                        <p className="text-xs text-[var(--color-text-secondary)] mt-2">{article.explanation}</p>
+                        {(article.source || article.published_at) && (
+                          <p className="text-[10px] text-[var(--color-text-muted)] mt-2">
+                            {[article.source, article.published_at].filter(Boolean).join(" · ")}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* ═══ LIVE CHECKLIST — FULL-SIZE CHARTS WITH THRESHOLDS ═══ */}
           <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-2xl p-5">
@@ -665,6 +808,9 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                             {item.importance >= 60 && <span className="text-[9px] font-black px-1.5 py-0.5 rounded-full bg-[rgba(239,68,68,0.2)] text-[#ef4444]">핵심</span>}
                           </div>
                           <p className="text-xs text-[var(--color-text-muted)] mt-0.5">{item.detail || "—"}</p>
+                          {item.why_it_matters && <p className="text-[11px] text-[var(--color-text-secondary)] mt-1">{item.why_it_matters}</p>}
+                          {item.expected_condition && <p className="text-[11px] text-[var(--color-text-muted)] mt-1">기대 조건: {item.expected_condition}</p>}
+                          {item.window && <p className="text-[10px] text-[var(--color-text-muted)] mt-1">체크 구간: {item.window}</p>}
                         </div>
                       </div>
                       {/* Big clear status — the ONE thing you need to see */}
@@ -1159,6 +1305,8 @@ const SECTOR_NEWS_KEYWORDS: Record<string, string> = {
 function SectorOverview({ sector }: { sector: SectorDef }) {
   const [news, setNews] = useState<NewsArticle[]>([]);
   const [newsLoading, setNewsLoading] = useState(true);
+  const [sectorPulse, setSectorPulse] = useState<any>(null);
+  const [sectorPulseLoading, setSectorPulseLoading] = useState(true);
 
   useEffect(() => {
     const keyword = SECTOR_NEWS_KEYWORDS[sector.id] || sector.name;
@@ -1167,6 +1315,14 @@ function SectorOverview({ sector }: { sector: SectorDef }) {
       .catch(() => {})
       .finally(() => setNewsLoading(false));
   }, [sector.id, sector.name]);
+
+  useEffect(() => {
+    setSectorPulseLoading(true);
+    fetchSectorPulse(sector.id)
+      .then(setSectorPulse)
+      .catch(() => {})
+      .finally(() => setSectorPulseLoading(false));
+  }, [sector.id]);
 
   return (
     <div className="space-y-5 overflow-y-auto h-full pb-8 pr-1">
@@ -1195,6 +1351,62 @@ function SectorOverview({ sector }: { sector: SectorDef }) {
               </span>
             ))}
           </div>
+        )}
+      </div>
+
+      <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-2xl p-5">
+        <div className="flex items-center gap-2 mb-3">
+          <Shield size={16} style={{ color: sector.color }} />
+          <h3 className="text-sm font-bold text-[var(--color-text-primary)]">섹터 체크리스트 (실시간)</h3>
+          {sectorPulse?.summary?.score != null && (
+            <span
+              className="ml-auto text-xs font-bold px-2.5 py-1 rounded-full"
+              style={{
+                background: sectorPulse.summary.score >= 60 ? "rgba(34,197,94,0.14)" : sectorPulse.summary.score <= 40 ? "rgba(239,68,68,0.14)" : "rgba(234,179,8,0.14)",
+                color: sectorPulse.summary.score >= 60 ? "#22c55e" : sectorPulse.summary.score <= 40 ? "#ef4444" : "#eab308",
+              }}
+            >
+              섹터 점수 {sectorPulse.summary.score}점
+            </span>
+          )}
+        </div>
+        {sectorPulseLoading ? (
+          <div className="space-y-2">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="h-16 bg-[var(--color-bg-hover)] rounded-xl animate-pulse" />
+            ))}
+          </div>
+        ) : sectorPulse?.checklist?.length ? (
+          <div className="space-y-3">
+            {sectorPulse.checklist.map((item: any, i: number) => {
+              const tone = item.status === "positive" ? "#22c55e" : item.status === "negative" ? "#ef4444" : "#eab308";
+              return (
+                <div
+                  key={i}
+                  className="rounded-xl px-4 py-3"
+                  style={{ background: `${tone}10`, border: `1px solid ${tone}22` }}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-[var(--color-text-primary)]">{item.name}</p>
+                      <p className="text-[11px] text-[var(--color-text-secondary)] mt-1">{item.why_it_matters}</p>
+                      <p className="text-[11px] text-[var(--color-text-muted)] mt-1">현재: {item.detail}</p>
+                      <p className="text-[11px] text-[var(--color-text-muted)] mt-1">필요 조건: {item.expected_condition}</p>
+                      <p className="text-[10px] text-[var(--color-text-muted)] mt-1">체크 구간: {item.window}</p>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <p className="text-lg font-black" style={{ color: tone }}>
+                        {item.status === "positive" ? "긍정" : item.status === "negative" ? "경고" : "중립"}
+                      </p>
+                      <p className="text-[10px] text-[var(--color-text-muted)] mt-1">{item.symbol}</p>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="text-xs text-[var(--color-text-muted)]">섹터 체크리스트를 불러오지 못했습니다.</p>
         )}
       </div>
 
@@ -1261,7 +1473,18 @@ export default function SectorDetailPage() {
     const stockParam = params.get("stock");
     if (stockParam && sector) {
       const match = sector.picks.find((p) => p.ticker === stockParam || p.ticker === decodeURIComponent(stockParam));
-      if (match) setSelectedPick(match);
+      if (match) {
+        setSelectedPick(match);
+        return;
+      }
+      const dynamicName = params.get("name") || stockParam;
+      const dynamicFlag = params.get("flag") === "KR" ? "KR" : "US";
+      setSelectedPick({
+        ticker: stockParam,
+        name: dynamicName,
+        flag: dynamicFlag,
+        desc: "실시간 검색 종목 | 주가 연관도 역분석 기반 체크리스트",
+      });
     }
   }, [sector]);
 
@@ -1318,6 +1541,14 @@ export default function SectorDetailPage() {
             Top 5 종목
           </p>
         </div>
+
+        {selectedPick && !sector.picks.some((pick) => pick.ticker === selectedPick.ticker) && (
+          <div className="mx-3 mb-3 rounded-xl px-3 py-3 border border-[rgba(59,130,246,0.2)] bg-[rgba(59,130,246,0.08)]">
+            <p className="text-[10px] font-semibold text-[var(--color-accent-blue)]">실시간 검색 종목</p>
+            <p className="text-sm font-semibold text-[var(--color-text-primary)] mt-1">{selectedPick.name}</p>
+            <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">{selectedPick.ticker}</p>
+          </div>
+        )}
 
         {/* Stock list */}
         <div className="flex-1 overflow-y-auto px-3 pb-4 space-y-1">

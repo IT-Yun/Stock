@@ -88,7 +88,7 @@ export default function NewsPanel({ sectorName, keyword }: NewsPanelProps) {
                   {article.source}
                 </span>
                 <span className="text-xs text-[var(--color-text-muted)]">
-                  {relativeTime(article.publishedAt)}
+                  {relativeTime(article.published_at ?? article.publishedAt ?? "")}
                 </span>
               </div>
               {article.summary && (

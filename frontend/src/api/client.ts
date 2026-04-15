@@ -13,11 +13,26 @@ const api = axios.create({
   timeout: 60000, // 60s timeout for slow endpoints like checklist-live
 });
 
+// Attach auth header to every request
+api.interceptors.request.use((config) => {
+  const nickname = localStorage.getItem("stock-nickname");
+  if (nickname) {
+    config.headers["X-Auth-Nickname"] = nickname;
+  }
+  return config;
+});
+
 // Auto-retry on failure (network errors, timeouts, 5xx)
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
     const config = error.config;
+    // If 403 unauthorized — redirect to login
+    if (error.response?.status === 403) {
+      localStorage.removeItem("stock-nickname");
+      window.location.reload();
+      return Promise.reject(error);
+    }
     if (!config || config._retryCount >= 2) return Promise.reject(error);
     const status = error.response?.status;
     const isRetryable = !status || status >= 500 || error.code === "ECONNABORTED";
@@ -145,5 +160,15 @@ export async function searchStocks(query: string): Promise<any> {
 
 export async function fetchTopRanked(): Promise<any> {
   const res = await api.get("/analysis/top-ranked");
+  return res.data;
+}
+
+export async function fetchTradingTargets(ticker: string): Promise<any> {
+  const res = await api.get(`/analysis/${encodeURIComponent(ticker)}/trading-targets`);
+  return res.data;
+}
+
+export async function fetchMacroEvents(): Promise<any> {
+  const res = await api.get("/analysis/macro-events");
   return res.data;
 }

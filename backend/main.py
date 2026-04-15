@@ -1,16 +1,75 @@
 import asyncio
+import hashlib
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 import uvicorn
 
 from config import settings
 from api import sectors_router, analysis_router, news_router
+
+
+# ── Auth: allowed nickname hashes (same list as frontend LoginGate) ──
+_ALLOWED_NICKNAMES = [
+    "admin", "seungyun", "이승윤",
+    "2차전지 네오", "공학관복사기", "퓨차차",
+    "pk 난 중국이 좋아(cweb)", "pk 미래로", "pk 뿅뿅 네오",
+    "pk ㅇㅇ", "pk_coriny", "pk.", "pknu흥",
+    "pk고고 xx", "pk기타치는 튜브", "pk마블",
+    "pk불나게 일하는 니오", "pk신라젠", "pk연", "pk응애",
+    "pk주릉", "pk주린코린", "pk코인이미래다", "pk하암",
+    "가난뱅이", "개초보", "건배하는 프로도",
+    "내가사면떨어짐", "눈물 흘리는 제이지",
+    "다래락빌런", "도지 이스 굿", "돌집", "모래로지은집",
+    "무지성", "베센트", "비트코이너", "서경", "수대 물고기",
+    "엔비 브컴 암페놀(전cs 주린이)", "원금만 찾게 해줘",
+    "제이지", "좌절하는 제이지", "주린이", "지하수",
+    "차를 사자", "초코바나나", "카피머신 1호 팬", "카피머신 비서",
+    "피카츄", "하트뽀뽀 어피치", "홀인원 강자", ".",
+]
+
+def _normalize(s: str) -> str:
+    import re as _re
+    return _re.sub(r"\s+", " ", s.strip().lower())
+
+_ALLOWED_SET = {_normalize(n) for n in _ALLOWED_NICKNAMES}
+# Also store SHA-256 hashes for token-based auth
+_ALLOWED_HASHES = {hashlib.sha256(_normalize(n).encode()).hexdigest() for n in _ALLOWED_NICKNAMES}
+
+
+class AuthMiddleware(BaseHTTPMiddleware):
+    """Validate X-Auth-Nickname header on all /api/ routes."""
+
+    _PUBLIC_PATHS = {"/health", "/", "/favicon.ico"}
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        # Allow public paths, static assets, and SPA routes
+        if path in self._PUBLIC_PATHS or path.startswith("/assets") or not path.startswith("/api"):
+            return await call_next(request)
+
+        # Check auth header
+        nickname = request.headers.get("x-auth-nickname", "")
+        token = request.headers.get("x-auth-token", "")
+
+        if token:
+            # Token = sha256(normalized_nickname)
+            if token in _ALLOWED_HASHES:
+                return await call_next(request)
+        elif nickname:
+            if _normalize(nickname) in _ALLOWED_SET:
+                return await call_next(request)
+
+        return JSONResponse(
+            status_code=403,
+            content={"error": "접근 권한이 없습니다. 로그인이 필요합니다."},
+        )
 
 
 def _warmup_cache():
@@ -91,6 +150,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Auth middleware — must be added AFTER CORS middleware (Starlette processes in reverse order)
+app.add_middleware(AuthMiddleware)
 
 app.include_router(sectors_router)
 app.include_router(analysis_router)

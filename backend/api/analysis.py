@@ -410,12 +410,66 @@ def _search_stock_latest_news(queries: list[str], max_per_query: int = 8) -> lis
     return results
 
 
+def _summarize_english_title(title: str, company_name: str) -> str:
+    """Translate/summarize English news title to Korean explanation."""
+    t = title.lower()
+    parts = []
+
+    # Extract key info from English title
+    # Target price
+    tp_match = re.search(r'tp\s*(?:to\s*)?(?:krw|usd|\$)?\s*([\d,.]+)', t)
+    if tp_match:
+        parts.append(f"목표주가 {tp_match.group(1)}")
+
+    # Rating
+    if "buy" in t or "outperform" in t:
+        parts.append("매수 의견")
+    elif "sell" in t or "underperform" in t:
+        parts.append("매도 의견")
+    elif "hold" in t or "neutral" in t:
+        parts.append("중립 의견")
+    if "initiates" in t or "initiate" in t:
+        parts.append("신규 커버리지 개시")
+    elif "upgrade" in t:
+        parts.append("투자의견 상향")
+    elif "downgrade" in t:
+        parts.append("투자의견 하향")
+    elif "maintains" in t or "reiterate" in t:
+        parts.append("투자의견 유지")
+    elif "raises" in t:
+        parts.append("목표주가 상향")
+
+    # Specific events
+    if "record" in t and ("high" in t or "breaking" in t):
+        parts.append("사상 최고치 기록")
+    if "surge" in t or "soar" in t or "jump" in t:
+        pct_m = re.search(r'(\d+\.?\d*)%', t)
+        parts.append(f"{pct_m.group(1)}% 급등" if pct_m else "급등")
+    if "falls" in t or "drop" in t or "plunge" in t:
+        pct_m = re.search(r'(\d+\.?\d*)%', t)
+        parts.append(f"{pct_m.group(1)}% 하락" if pct_m else "하락")
+    if "partnership" in t or "deal" in t:
+        parts.append("파트너십/계약 체결")
+    if "asml" in t or "equipment" in t:
+        parts.append("장비 투자 관련")
+    if "ai chip" in t or "ai boom" in t:
+        parts.append("AI 반도체 수혜")
+    if "hbm" in t:
+        parts.append("HBM 수요 관련")
+    if "upcycle" in t:
+        parts.append("메모리 업사이클 기대")
+    if "sandisk" in t or "western digital" in t:
+        parts.append("낸드 업황 관련")
+
+    if parts:
+        return " · ".join(parts)
+    return ""
+
+
 def _classify_sentiment_detailed(title: str, company_name: str) -> tuple[str, str, str]:
     """
     Classify a news title into (direction, category, analysis).
-    direction: "positive" / "negative" / "neutral"
-    category: specific label like "실적 호재", "규제 리스크" etc.
-    analysis: 1-2 sentence specific explanation.
+    Returns Korean summary with actual analysis, not just copy-paste.
     """
     text = title.lower()
     title_clean = title.strip()
@@ -423,51 +477,87 @@ def _classify_sentiment_detailed(title: str, company_name: str) -> tuple[str, st
     pos_hits = [kw for kw in POSITIVE_KEYWORDS if kw in text]
     neg_hits = [kw for kw in NEGATIVE_KEYWORDS if kw in text]
 
+    # Check if English title — if so, translate key points
+    is_english = all(ord(c) < 0x1100 or ord(c) > 0xD7AF for c in title_clean.replace(" ", "")[:20]) if title_clean else False
+    en_summary = _summarize_english_title(title_clean, company_name) if is_english else ""
+
+    def _build_explanation(direction_kr: str, detail: str, impact: str) -> str:
+        """Build a clean Korean explanation. If English title, add translated summary."""
+        if en_summary:
+            return f"{direction_kr} — {en_summary}. {impact}"
+        return f"{direction_kr} — {detail}. {impact}"
+
     # Category detection with sentiment
     if any(kw in text for kw in ["실적", "매출", "영업이익", "earnings", "revenue", "profit", "순이익"]):
         if any(kw in text for kw in ["부진", "miss", "적자", "감소", "하락"]):
-            return "negative", "실적 악재", f"실적 부진 — \"{title_clean}\". 실적 미달은 밸류에이션 하향 조정으로 이어질 수 있습니다."
-        elif any(kw in text for kw in ["호실적", "beat", "상승", "성장", "흑자", "개선", "증가", "사상최대"]):
-            return "positive", "실적 호재", f"실적 호조 — \"{title_clean}\". 실적 서프라이즈는 목표주가 상향의 직접 트리거입니다."
+            detail = en_summary or f"{company_name} 실적 부진 보도"
+            return "negative", "실적 악재", _build_explanation("실적 악재", detail, "실적 미달은 밸류에이션 하향 조정으로 이어질 수 있습니다")
+        elif any(kw in text for kw in ["호실적", "beat", "상승", "성장", "흑자", "개선", "증가", "사상최대", "record", "surge"]):
+            detail = en_summary or f"{company_name} 실적 호조 보도"
+            return "positive", "실적 호재", _build_explanation("실적 호재", detail, "실적 서프라이즈는 목표주가 상향의 직접 트리거입니다")
         else:
-            return "neutral", "실적 발표", f"실적 관련 — \"{title_clean}\". 구체적 수치 확인이 필요합니다."
+            detail = en_summary or f"{company_name} 실적 관련 보도"
+            return "neutral", "실적 발표", _build_explanation("실적 관련", detail, "구체적 수치 확인이 필요합니다")
 
     if any(kw in text for kw in ["가이던스", "guidance", "전망", "outlook", "forecast"]):
         if any(kw in text for kw in ["상향", "raise", "upbeat", "강화"]):
-            return "positive", "가이던스 상향", f"호재 — \"{title_clean}\". 가이던스 상향은 시장 기대치를 높이는 강력한 신호입니다."
+            detail = en_summary or f"{company_name} 가이던스 상향"
+            return "positive", "가이던스 상향", _build_explanation("호재", detail, "가이던스 상향은 시장 기대치를 높이는 강력한 신호입니다")
         elif any(kw in text for kw in ["하향", "lower", "cut", "축소", "우려"]):
-            return "negative", "가이던스 하향", f"악재 — \"{title_clean}\". 가이던스 하향은 성장 둔화 우려를 키웁니다."
-        return "neutral", "가이던스", f"전망 관련 — \"{title_clean}\". 가이던스 방향성 확인이 필요합니다."
+            detail = en_summary or f"{company_name} 가이던스 하향"
+            return "negative", "가이던스 하향", _build_explanation("악재", detail, "가이던스 하향은 성장 둔화 우려를 키웁니다")
+        detail = en_summary or f"{company_name} 전망 관련 보도"
+        return "neutral", "가이던스", _build_explanation("전망 관련", detail, "가이던스 방향성 확인이 필요합니다")
 
-    if any(kw in text for kw in ["승인", "approval", "수주", "contract", "계약", "납품", "공급", "deal"]):
-        return "positive", "수주/계약 호재", f"호재 — \"{title_clean}\". 신규 수주·계약은 매출 성장 가시성을 높입니다."
+    if any(kw in text for kw in ["승인", "approval", "수주", "contract", "계약", "납품", "공급", "deal", "partnership"]):
+        detail = en_summary or f"{company_name} 신규 수주/계약 보도"
+        return "positive", "수주/계약 호재", _build_explanation("호재", detail, "신규 수주·계약은 매출 성장 가시성을 높입니다")
 
-    if any(kw in text for kw in ["규제", "regulation", "소송", "lawsuit", "probe", "조사", "벌금", "제재", "ban"]):
-        return "negative", "규제/법적 리스크", f"악재 — \"{title_clean}\". 규제·법적 리스크는 불확실성을 키워 주가를 압박합니다."
+    if any(kw in text for kw in ["규제", "regulation", "소송", "lawsuit", "probe", "조사", "벌금", "제재", "ban", "tariff", "관세"]):
+        detail = en_summary or f"{company_name} 규제/법적 이슈"
+        return "negative", "규제/법적 리스크", _build_explanation("악재", detail, "규제·법적 리스크는 불확실성을 키워 주가를 압박합니다")
 
-    if any(kw in text for kw in ["목표가", "target", "상향", "upgrade", "outperform", "매수", "buy"]):
-        return "positive", "애널리스트 호평", f"호재 — \"{title_clean}\". 투자의견 상향은 기관 매수세 유입의 신호입니다."
+    if any(kw in text for kw in ["목표가", "target", "상향", "upgrade", "outperform", "매수", "buy", "initiates", "raises"]):
+        detail = en_summary or f"{company_name} 투자의견 상향"
+        return "positive", "애널리스트 호평", _build_explanation("호재", detail, "투자의견 상향은 기관 매수세 유입의 신호입니다")
 
     if any(kw in text for kw in ["하향", "downgrade", "매도", "sell", "underperform", "underweight"]):
-        return "negative", "애널리스트 하향", f"악재 — \"{title_clean}\". 투자의견 하향은 기관 매도 압력으로 이어질 수 있습니다."
+        detail = en_summary or f"{company_name} 투자의견 하향"
+        return "negative", "애널리스트 하향", _build_explanation("악재", detail, "투자의견 하향은 기관 매도 압력으로 이어질 수 있습니다")
 
     if any(kw in text for kw in ["인수", "합병", "m&a", "acquisition", "merge", "투자", "지분"]):
         if any(kw in text for kw in ["우려", "반대", "실패"]):
-            return "negative", "M&A 리스크", f"악재 — \"{title_clean}\". M&A 관련 불확실성이 주가에 부담을 줍니다."
-        return "positive", "M&A/전략적 투자", f"호재 — \"{title_clean}\". 전략적 투자·M&A는 성장 기대를 높입니다."
+            detail = en_summary or f"{company_name} M&A 리스크"
+            return "negative", "M&A 리스크", _build_explanation("악재", detail, "M&A 관련 불확실성이 주가에 부담을 줍니다")
+        detail = en_summary or f"{company_name} 전략적 투자/M&A"
+        return "positive", "M&A/전략적 투자", _build_explanation("호재", detail, "전략적 투자·M&A는 성장 기대를 높입니다")
 
     if any(kw in text for kw in ["신제품", "출시", "launch", "발표", "공개", "신기술"]):
-        return "positive", "제품/기술 호재", f"호재 — \"{title_clean}\". 신제품·신기술 발표는 성장 동력 확대의 신호입니다."
+        detail = en_summary or f"{company_name} 신제품/신기술 발표"
+        return "positive", "제품/기술 호재", _build_explanation("호재", detail, "신제품·신기술 발표는 성장 동력 확대의 신호입니다")
 
     if any(kw in text for kw in ["리콜", "recall", "결함", "defect", "지연", "delay"]):
-        return "negative", "제품 리스크", f"악재 — \"{title_clean}\". 리콜·결함은 비용 증가와 브랜드 훼손을 야기합니다."
+        detail = en_summary or f"{company_name} 제품 리스크"
+        return "negative", "제품 리스크", _build_explanation("악재", detail, "리콜·결함은 비용 증가와 브랜드 훼손을 야기합니다")
+
+    if any(kw in text for kw in ["war", "전쟁", "iran", "이란", "conflict", "분쟁", "geopoliti", "지정학"]):
+        detail = en_summary or "지정학적 리스크 고조"
+        return "negative", "지정학 리스크", _build_explanation("악재", detail, "지정학 리스크는 시장 전체 위험회피 심리를 키웁니다")
+
+    if any(kw in text for kw in ["oil", "유가", "crude", "원유", "opec"]):
+        detail = en_summary or "원유/유가 관련"
+        direction = "negative" if any(kw in text for kw in ["surge", "spike", "급등", "상승"]) else "neutral"
+        return direction, "유가/원자재", _build_explanation("유가 관련", detail, "유가 변동은 기업 원가와 소비심리에 영향을 줍니다")
 
     # Fallback: keyword-based sentiment
     if len(pos_hits) > len(neg_hits):
-        return "positive", "호재", f"호재 — \"{title_clean}\". 긍정적 영향이 예상됩니다."
+        detail = en_summary or f"{company_name} 관련 긍정 보도"
+        return "positive", "호재", _build_explanation("호재", detail, "긍정적 영향이 예상됩니다")
     elif len(neg_hits) > len(pos_hits):
-        return "negative", "악재", f"악재 — \"{title_clean}\". 부정적 영향이 우려됩니다."
-    return "neutral", "모니터링 필요", f"중립 — \"{title_clean}\". 후속 뉴스로 방향성 확인이 필요합니다."
+        detail = en_summary or f"{company_name} 관련 부정 보도"
+        return "negative", "악재", _build_explanation("악재", detail, "부정적 영향이 우려됩니다")
+    detail = en_summary or f"{company_name} 관련 보도"
+    return "neutral", "모니터링 필요", _build_explanation("중립", detail, "후속 뉴스로 방향성 확인이 필요합니다")
 
 
 def _extract_live_impact_news(ticker: str, info: dict | None = None, sector_id: str | None = None) -> list[dict]:
@@ -2028,6 +2118,370 @@ async def get_analysis(ticker: str) -> AnalysisResult:
         recommendation=recommendation,
         confidence_score=confidence,
     )
+
+
+@router.get("/analysis/{ticker}/trading-targets")
+async def get_trading_targets(ticker: str) -> dict:
+    """
+    Calculate precise buy/sell/stop targets using multi-indicator analysis.
+    Uses: Support/Resistance levels, Fibonacci retracement, RSI zones,
+    Bollinger bands, SMA crossovers, volume profile, MACD momentum.
+    """
+    cache_key = f"targets:{ticker}"
+    cached = _get_cached_ttl(cache_key, 600)
+    if cached is not None:
+        return cached
+
+    # Get longer history for better analysis
+    df_long = StockDataService.get_stock_history(ticker, period="1y")
+    df_3mo = StockDataService.get_stock_history(ticker, period="3mo")
+
+    if df_long.empty or len(df_long) < 20:
+        return {"ticker": ticker, "targets": None, "reasons": []}
+
+    close = df_long["Close"]
+    high = df_long["High"]
+    low = df_long["Low"]
+    volume = df_long["Volume"]
+    price = float(close.iloc[-1])
+
+    # ── 1. Support & Resistance from recent pivots ──
+    supports = []
+    resistances = []
+    window = 10
+    for i in range(window, len(df_long) - window):
+        is_support = all(float(low.iloc[i]) <= float(low.iloc[i-j]) for j in range(1, window+1)) and \
+                     all(float(low.iloc[i]) <= float(low.iloc[i+j]) for j in range(1, min(window+1, len(df_long)-i)))
+        is_resistance = all(float(high.iloc[i]) >= float(high.iloc[i-j]) for j in range(1, window+1)) and \
+                        all(float(high.iloc[i]) >= float(high.iloc[i+j]) for j in range(1, min(window+1, len(df_long)-i)))
+        if is_support:
+            supports.append(float(low.iloc[i]))
+        if is_resistance:
+            resistances.append(float(high.iloc[i]))
+
+    # Cluster nearby levels (within 2% of each other)
+    def _cluster_levels(levels: list[float], tolerance: float = 0.02) -> list[float]:
+        if not levels:
+            return []
+        levels.sort()
+        clusters = [[levels[0]]]
+        for lv in levels[1:]:
+            if abs(lv - clusters[-1][-1]) / clusters[-1][-1] < tolerance:
+                clusters[-1].append(lv)
+            else:
+                clusters.append([lv])
+        return [sum(c) / len(c) for c in clusters]
+
+    support_levels = _cluster_levels(supports)
+    resistance_levels = _cluster_levels(resistances)
+
+    # ── 2. Fibonacci retracement ──
+    recent_high = float(high.tail(60).max())
+    recent_low = float(low.tail(60).min())
+    fib_range = recent_high - recent_low
+    fib_levels = {
+        "0.236": recent_high - fib_range * 0.236,
+        "0.382": recent_high - fib_range * 0.382,
+        "0.500": recent_high - fib_range * 0.500,
+        "0.618": recent_high - fib_range * 0.618,
+        "0.786": recent_high - fib_range * 0.786,
+    }
+
+    # ── 3. SMAs as dynamic support/resistance ──
+    sma_20 = float(close.rolling(20).mean().iloc[-1]) if len(close) >= 20 else None
+    sma_50 = float(close.rolling(50).mean().iloc[-1]) if len(close) >= 50 else None
+    sma_200 = float(close.rolling(200).mean().iloc[-1]) if len(close) >= 200 else None
+
+    # ── 4. Bollinger Bands ──
+    bb_mid = float(close.rolling(20).mean().iloc[-1]) if len(close) >= 20 else price
+    bb_std = float(close.rolling(20).std().iloc[-1]) if len(close) >= 20 else 0
+    bb_upper = bb_mid + 2 * bb_std
+    bb_lower = bb_mid - 2 * bb_std
+
+    # ── 5. RSI ──
+    rsi = TechnicalAnalysisService.calculate_rsi(df_long)
+
+    # ── 6. MACD ──
+    macd_val, macd_signal, macd_hist = TechnicalAnalysisService.calculate_macd(df_long)
+
+    # ── 7. ATR (Average True Range) for volatility-adjusted targets ──
+    tr = pd.DataFrame({
+        "hl": high - low,
+        "hc": abs(high - close.shift(1)),
+        "lc": abs(low - close.shift(1)),
+    }).max(axis=1)
+    atr_14 = float(tr.rolling(14).mean().iloc[-1]) if len(tr) >= 14 else float(tr.mean())
+    atr_pct = atr_14 / price * 100  # ATR as % of price
+
+    # ── 8. Volume-weighted price analysis ──
+    recent_vwap = float((close.tail(20) * volume.tail(20)).sum() / volume.tail(20).sum()) if len(close) >= 20 else price
+
+    # ── 9. Trend strength: ADX-like (using price vs SMAs) ──
+    sma_values = [v for v in [sma_20, sma_50, sma_200] if v is not None]
+    bullish_smas = sum(1 for s in sma_values if price > s)
+    trend_strength = bullish_smas / len(sma_values) if sma_values else 0.5  # 0=bearish, 1=bullish
+
+    # ── 10. Recent momentum (last 5 days) ──
+    if len(close) >= 5:
+        momentum_5d = (price - float(close.iloc[-5])) / float(close.iloc[-5]) * 100
+    else:
+        momentum_5d = 0
+
+    # ═══════════════════════════════════════
+    # CALCULATE SMART TARGETS
+    # ═══════════════════════════════════════
+
+    buy_reasons = []
+    sell_reasons = []
+    stop_reasons = []
+
+    # ── BUY TARGET: Find the best entry point ──
+    buy_candidates = []
+
+    # Support levels below current price
+    nearby_supports = [s for s in support_levels if s < price * 0.99]
+    if nearby_supports:
+        best_support = max(nearby_supports)  # closest support below
+        buy_candidates.append(("지지선", best_support, f"과거 반등 지지선 ₩{round(best_support):,} — 이 가격대에서 {len([s for s in supports if abs(s - best_support)/best_support < 0.02])}회 반등 이력"))
+
+    # Fibonacci levels below price
+    for fib_name, fib_val in fib_levels.items():
+        if fib_val < price * 0.98 and fib_val > price * 0.80:
+            buy_candidates.append(("피보나치", fib_val, f"피보나치 {fib_name} 되돌림 (₩{round(fib_val):,}) — 기술적 매수 구간"))
+
+    # Bollinger lower band
+    if bb_lower < price * 0.99:
+        buy_candidates.append(("볼린저 하단", bb_lower, f"볼린저밴드 하단 ₩{round(bb_lower):,} — 과매도 반등 기대 구간"))
+
+    # SMA support
+    for name, sma_val in [("20일선", sma_20), ("50일선", sma_50), ("200일선", sma_200)]:
+        if sma_val and sma_val < price * 0.99 and sma_val > price * 0.85:
+            buy_candidates.append(("이동평균선", sma_val, f"{name} ₩{round(sma_val):,} — 이동평균선 지지 매수"))
+
+    # VWAP
+    if recent_vwap < price * 0.98:
+        buy_candidates.append(("VWAP", recent_vwap, f"20일 거래량가중평균가 ₩{round(recent_vwap):,} — 매물대 지지"))
+
+    # Sort by proximity to current price (closest = most likely to reach)
+    buy_candidates.sort(key=lambda x: abs(x[1] - price))
+
+    # Pick best buy target: consider trend strength
+    if buy_candidates:
+        if trend_strength >= 0.7:
+            # Strong uptrend: buy closer to current price (shallow dip)
+            buy_target = buy_candidates[0][1]
+            buy_reasons = [buy_candidates[0][2]]
+            if len(buy_candidates) > 1:
+                buy_reasons.append(f"2차 매수: {buy_candidates[1][2]}")
+        else:
+            # Weak/bearish: buy at deeper support
+            buy_target = buy_candidates[min(1, len(buy_candidates)-1)][1]
+            buy_reasons = [buy_candidates[min(1, len(buy_candidates)-1)][2]]
+            if buy_candidates:
+                buy_reasons.insert(0, f"1차 매수: {buy_candidates[0][2]}")
+    else:
+        # Fallback: ATR-based
+        buy_target = price * (1 - max(atr_pct * 1.5, 3) / 100)
+        buy_reasons = [f"ATR 기반 매수 구간 (변동성 {atr_pct:.1f}% × 1.5배 하단)"]
+
+    # ── SELL TARGET: Find the best profit-taking point ──
+    sell_candidates = []
+
+    # Resistance levels above current price
+    nearby_resistances = [r for r in resistance_levels if r > price * 1.01]
+    if nearby_resistances:
+        best_resistance = min(nearby_resistances)  # closest resistance above
+        sell_candidates.append(("저항선", best_resistance, f"과거 저항선 ₩{round(best_resistance):,} — 이 가격대에서 {len([r for r in resistances if abs(r - best_resistance)/best_resistance < 0.02])}회 하락 반전 이력"))
+
+    # Fibonacci levels above price
+    for fib_name, fib_val in fib_levels.items():
+        if fib_val > price * 1.03:
+            sell_candidates.append(("피보나치", fib_val, f"피보나치 {fib_name} 저항 (₩{round(fib_val):,}) — 기술적 매도 구간"))
+
+    # Bollinger upper band
+    if bb_upper > price * 1.02:
+        sell_candidates.append(("볼린저 상단", bb_upper, f"볼린저밴드 상단 ₩{round(bb_upper):,} — 과매수 주의 구간"))
+
+    # Recent high
+    if recent_high > price * 1.03:
+        sell_candidates.append(("전고점", recent_high, f"최근 고점 ₩{round(recent_high):,} — 돌파 전 차익실현 구간"))
+
+    # Sort by distance from current price
+    sell_candidates.sort(key=lambda x: x[1])
+
+    # Pick sell target considering trend and verdict
+    # Minimum sell distance depends on trend strength and volatility
+    if trend_strength >= 0.7:
+        min_sell_pct = max(10, atr_pct * 4)  # Strong trend: aim high (10%+ or 4x ATR)
+    elif trend_strength >= 0.4:
+        min_sell_pct = max(8, atr_pct * 3)   # Moderate: 8%+ or 3x ATR
+    else:
+        min_sell_pct = max(5, atr_pct * 2)   # Weak: 5%+ or 2x ATR
+
+    min_sell_price = price * (1 + min_sell_pct / 100)
+
+    # Filter sell candidates that are above minimum distance
+    strong_sells = [s for s in sell_candidates if s[1] >= min_sell_price]
+    close_sells = [s for s in sell_candidates if s[1] < min_sell_price and s[1] > price]
+
+    if strong_sells:
+        if trend_strength >= 0.7 and (rsi is None or rsi < 65) and len(strong_sells) > 1:
+            # Strong trend + not overbought: aim for 2nd target
+            sell_target = strong_sells[min(1, len(strong_sells) - 1)][1]
+            sell_reasons = [strong_sells[min(1, len(strong_sells) - 1)][2]]
+            sell_reasons.insert(0, f"1차 익절: {strong_sells[0][2]}")
+        else:
+            sell_target = strong_sells[0][1]
+            sell_reasons = [strong_sells[0][2]]
+            if len(strong_sells) > 1:
+                sell_reasons.append(f"2차 목표: {strong_sells[1][2]}")
+        # Add close resistance as partial take-profit note
+        if close_sells:
+            sell_reasons.append(f"참고 — 단기 저항: {close_sells[0][2]}")
+    elif sell_candidates:
+        # No candidates above minimum → use minimum + note the resistance
+        sell_target = min_sell_price
+        sell_reasons = [f"최소 목표 수익률 +{min_sell_pct:.0f}% (추세 강도·변동성 기반)"]
+        if sell_candidates:
+            sell_reasons.append(f"참고 — 가까운 저항: {sell_candidates[0][2]}")
+    else:
+        # Fallback: ATR-based
+        sell_target = min_sell_price
+        sell_reasons = [f"ATR 기반 목표가 (변동성 {atr_pct:.1f}% × {4 if trend_strength >= 0.7 else 3}배 상단)"]
+
+    # Also ensure sell is at least 8% above buy target
+    min_sell_from_buy = buy_target * 1.08
+    if sell_target < min_sell_from_buy:
+        sell_target = min_sell_from_buy
+        sell_reasons.append("매수 대비 최소 8% 수익 보장")
+
+    # ── STOP LOSS: Smart stop below key support ──
+    stop_candidates = []
+
+    # Below nearest support (with buffer)
+    if nearby_supports:
+        stop_below_support = max(nearby_supports) * 0.97  # 3% below support
+        stop_candidates.append(("지지선 이탈", stop_below_support, f"주요 지지선(₩{round(max(nearby_supports)):,}) 하방 이탈 시 — 추가 하락 가능성"))
+
+    # SMA200 break
+    if sma_200 and sma_200 < price:
+        stop_candidates.append(("200일선 이탈", sma_200 * 0.97, f"200일 이동평균선(₩{round(sma_200):,}) 이탈 시 — 장기 추세 전환 신호"))
+
+    # ATR-based stop
+    atr_stop = price - atr_14 * 2
+    stop_candidates.append(("ATR 기반", atr_stop, f"ATR 2배 하단 (일 변동폭 {atr_pct:.1f}% × 2) — 단기 노이즈 필터링"))
+
+    # Fibonacci support break
+    fib_stops = [(n, v) for n, v in fib_levels.items() if v < price * 0.95]
+    if fib_stops:
+        fib_stops.sort(key=lambda x: x[1], reverse=True)
+        stop_candidates.append(("피보나치 이탈", fib_stops[0][1] * 0.98, f"피보나치 {fib_stops[0][0]} (₩{round(fib_stops[0][1]):,}) 하방 이탈"))
+
+    # Pick stop loss
+    if stop_candidates:
+        # Use the tightest reasonable stop (but not tighter than -5%)
+        valid_stops = [s for s in stop_candidates if s[1] < price * 0.95]
+        if not valid_stops:
+            valid_stops = stop_candidates
+        valid_stops.sort(key=lambda x: x[1], reverse=True)  # highest = tightest
+        stop_price = valid_stops[0][1]
+        stop_reasons = [valid_stops[0][2]]
+        if len(valid_stops) > 1:
+            stop_reasons.append(f"최종 손절: {valid_stops[-1][2]}")
+    else:
+        stop_price = price * 0.90
+        stop_reasons = ["기본 손절 라인 (-10%)"]
+
+    # Ensure stop is at least 5% below current and below buy target
+    if stop_price > price * 0.95:
+        stop_price = price * 0.95
+    if stop_price > buy_target * 0.97:
+        stop_price = buy_target * 0.95
+        stop_reasons.append("매수 타점 대비 5% 하단으로 조정")
+
+    # ── Overall strategy assessment ──
+    buy_pct = (buy_target - price) / price * 100
+    sell_pct = (sell_target - price) / price * 100
+    stop_pct = (stop_price - price) / price * 100
+    risk_reward = abs(sell_pct / stop_pct) if stop_pct != 0 else 0
+
+    # Strategy description based on indicators
+    strategy_signals = []
+    if rsi is not None:
+        if rsi < 30:
+            strategy_signals.append(f"RSI {rsi:.0f} — 과매도 구간, 반등 임박 가능")
+        elif rsi < 40:
+            strategy_signals.append(f"RSI {rsi:.0f} — 매도 과열 완화 중")
+        elif rsi > 70:
+            strategy_signals.append(f"RSI {rsi:.0f} — 과매수 구간, 조정 주의")
+        elif rsi > 60:
+            strategy_signals.append(f"RSI {rsi:.0f} — 매수세 강한 구간")
+        else:
+            strategy_signals.append(f"RSI {rsi:.0f} — 중립 구간")
+
+    if macd_val is not None and macd_signal is not None:
+        if macd_val > macd_signal and macd_hist and macd_hist > 0:
+            strategy_signals.append("MACD 골든크로스 — 상승 모멘텀 확인")
+        elif macd_val < macd_signal and macd_hist and macd_hist < 0:
+            strategy_signals.append("MACD 데드크로스 — 하락 모멘텀 주의")
+        elif macd_val > macd_signal:
+            strategy_signals.append("MACD 매수 신호 유지 중")
+        else:
+            strategy_signals.append("MACD 매도 신호 — 추세 전환 모니터링")
+
+    if trend_strength >= 0.7:
+        strategy_signals.append(f"이동평균선 정배열 ({bullish_smas}/{len(sma_values)}개 상향) — 상승 추세")
+    elif trend_strength <= 0.3:
+        strategy_signals.append(f"이동평균선 역배열 ({bullish_smas}/{len(sma_values)}개 상향) — 하락 추세")
+    else:
+        strategy_signals.append(f"이동평균선 혼조 ({bullish_smas}/{len(sma_values)}개 상향) — 추세 불확실")
+
+    if momentum_5d > 3:
+        strategy_signals.append(f"최근 5일 +{momentum_5d:.1f}% 상승 — 단기 모멘텀 강함")
+    elif momentum_5d < -3:
+        strategy_signals.append(f"최근 5일 {momentum_5d:.1f}% 하락 — 단기 약세")
+
+    # Position in Bollinger band
+    if bb_upper != bb_lower:
+        bb_position = (price - bb_lower) / (bb_upper - bb_lower)
+        if bb_position > 0.8:
+            strategy_signals.append(f"볼린저밴드 상단({bb_position:.0%}) — 과매수 주의")
+        elif bb_position < 0.2:
+            strategy_signals.append(f"볼린저밴드 하단({bb_position:.0%}) — 과매도 반등 기대")
+        else:
+            strategy_signals.append(f"볼린저밴드 중간({bb_position:.0%})")
+
+    result = {
+        "ticker": ticker.upper(),
+        "current_price": round(price, 2),
+        "targets": {
+            "buy": {
+                "price": round(buy_target, 2),
+                "pct": round(buy_pct, 1),
+                "reasons": buy_reasons,
+            },
+            "sell": {
+                "price": round(sell_target, 2),
+                "pct": round(sell_pct, 1),
+                "reasons": sell_reasons,
+            },
+            "stop": {
+                "price": round(stop_price, 2),
+                "pct": round(stop_pct, 1),
+                "reasons": stop_reasons,
+            },
+        },
+        "risk_reward_ratio": round(risk_reward, 2),
+        "strategy_signals": strategy_signals,
+        "atr_pct": round(atr_pct, 2),
+        "trend_strength": round(trend_strength, 2),
+        "support_levels": [round(s, 2) for s in support_levels if s < price][-3:],
+        "resistance_levels": [round(r, 2) for r in resistance_levels if r > price][:3],
+        "fibonacci": {k: round(v, 2) for k, v in fib_levels.items()},
+    }
+
+    _set_cached(cache_key, result)
+    return result
 
 
 @router.get("/analysis/{ticker}/chart-data")
@@ -3761,7 +4215,37 @@ async def get_checklist_live(ticker: str) -> dict:
                     if "margin" in metric or "growth" in metric or metric == "roe" or metric == "dividend_yield":
                         item["value"] = round(val * 100, 1)
                         pct_str = f"{round(val * 100, 1)}%"
-                        item["detail"] = f"{pct_str} {quarterly_trend}" if quarterly_trend else pct_str
+                        # Build contextual detail text
+                        thr_pct = round(threshold * 100, 1)
+                        if positive_if == "above":
+                            if val >= threshold * 1.5:
+                                ctx = f"기준({thr_pct}%) 대비 크게 상회 — 매우 양호"
+                            elif val >= threshold:
+                                ctx = f"기준({thr_pct}%) 충족 — 양호"
+                            elif val >= threshold * 0.5:
+                                ctx = f"기준({thr_pct}%) 근접 — 주의 필요"
+                            elif val > 0:
+                                ctx = f"기준({thr_pct}%) 대비 부족 — 부진"
+                            else:
+                                ctx = f"마이너스 전환 — 위험 신호"
+                        else:
+                            if val <= threshold * 0.5:
+                                ctx = f"기준({thr_pct}%) 대비 크게 하회 — 매우 양호"
+                            elif val <= threshold:
+                                ctx = f"기준({thr_pct}%) 이하 — 양호"
+                            elif val <= threshold * 1.5:
+                                ctx = f"기준({thr_pct}%) 초과 — 주의"
+                            else:
+                                ctx = f"기준({thr_pct}%) 크게 초과 — 부담"
+                        trend_ctx = ""
+                        if quarterly_trend:
+                            if ("+" in quarterly_trend or "상승" in quarterly_trend) and positive_if == "above":
+                                trend_ctx = f" | {quarterly_trend} ↑ 개선 추세"
+                            elif ("-" in quarterly_trend or "−" in quarterly_trend or "하락" in quarterly_trend):
+                                trend_ctx = f" | {quarterly_trend} ↓ 하락 추세"
+                            else:
+                                trend_ctx = f" | {quarterly_trend}"
+                        item["detail"] = f"{pct_str} — {ctx}{trend_ctx}"
                         item["thresholds"] = {
                             "danger_line": round(threshold * 100 * 0.5, 1) if positive_if == "above" else round(threshold * 100 * 1.5, 1),
                             "safe_line": round(threshold * 100, 1),
@@ -3772,8 +4256,27 @@ async def get_checklist_live(ticker: str) -> dict:
                             "trend_warn": quarterly_trend if ("−" in quarterly_trend or "-" in quarterly_trend) and positive_if == "above" else "",
                         }
                     else:
+                        # Non-percentage metrics (PER, PBR, etc.)
                         item["value"] = round(val, 2)
-                        item["detail"] = f"{round(val, 2)}"
+                        thr_str = f"{round(threshold, 2)}"
+                        ratio = val / threshold if threshold > 0 else 1.0
+                        if positive_if == "below":
+                            if ratio <= 0.5:
+                                ctx = f"기준({thr_str}) 대비 크게 하회 — 저평가 매력"
+                            elif ratio <= 1.0:
+                                ctx = f"기준({thr_str}) 이하 — 적정 수준"
+                            elif ratio <= 1.5:
+                                ctx = f"기준({thr_str}) 초과 — 밸류 부담"
+                            else:
+                                ctx = f"기준({thr_str}) 대비 {ratio:.1f}배 — 고평가 부담 큼"
+                        else:
+                            if ratio >= 1.5:
+                                ctx = f"기준({thr_str}) 대비 크게 상회 — 우수"
+                            elif ratio >= 1.0:
+                                ctx = f"기준({thr_str}) 충족 — 양호"
+                            else:
+                                ctx = f"기준({thr_str}) 미달 — 부진"
+                        item["detail"] = f"{round(val, 2)} — {ctx}"
                     # ── Inject preliminary earnings from news if available ──
                     if preliminary_earnings.get("found") and quarterly_chart:
                         pe_data = preliminary_earnings["data"]
@@ -4303,3 +4806,200 @@ async def get_commodities() -> list[CommodityPrice]:
 async def get_sector_commodities(sector_name: str) -> list[CommodityPrice]:
     """Get commodities related to a specific sector."""
     return CommodityDataService.get_related_commodities(sector_name)
+
+
+# ═══════════════════════════════════════════════════════════════
+# MACRO / GEOPOLITICAL EVENTS SECTION
+# ═══════════════════════════════════════════════════════════════
+
+_MACRO_QUERIES = [
+    # Geopolitical
+    "이란 전쟁 중동 유가",
+    "미중 관세 무역전쟁",
+    "한국 주식시장 지정학 리스크",
+    # Oil & Commodities
+    "국제유가 WTI 브렌트",
+    "원자재 가격 금 구리",
+    # Macro economy
+    "미국 금리 FOMC 연준",
+    "환율 원달러 달러 강세",
+    "인플레이션 CPI 물가",
+    # Market-wide
+    "코스피 코스닥 시장 전망",
+]
+
+_MACRO_CATEGORIES = {
+    "지정학": ["이란", "전쟁", "중동", "미사일", "제재", "대만", "우크라이나", "러시아", "북한", "군사", "지정학", "war", "iran", "geopolitical", "sanctions", "strike"],
+    "유가/원자재": ["유가", "wti", "브렌트", "brent", "원유", "oil", "opec", "원자재", "금값", "구리", "commodity", "crude"],
+    "금리/통화": ["금리", "fomc", "연준", "fed", "기준금리", "인하", "인상", "rate", "interest", "환율", "원달러", "달러", "dollar", "yen", "엔화"],
+    "관세/무역": ["관세", "tariff", "무역", "trade war", "수출규제", "수입", "반덤핑", "미중", "관세전쟁", "보호무역"],
+    "경기/물가": ["인플레이션", "cpi", "물가", "디플레이션", "경기침체", "recession", "gdp", "고용", "실업률", "소비자심리"],
+    "시장전반": ["코스피", "코스닥", "나스닥", "s&p", "증시", "주식시장", "rally", "crash", "sell-off", "폭락", "급등"],
+}
+
+
+def _classify_macro_category(title: str) -> str:
+    tl = title.lower()
+    best_cat = "시장전반"
+    best_score = 0
+    for cat, keywords in _MACRO_CATEGORIES.items():
+        score = sum(1 for kw in keywords if kw in tl)
+        if score > best_score:
+            best_score = score
+            best_cat = cat
+    return best_cat
+
+
+def _assess_macro_impact(title: str, category: str) -> tuple[str, str]:
+    """Return (direction, explanation) for macro news impact on Korean stocks."""
+    tl = title.lower()
+    direction = "neutral"
+    explanation = ""
+
+    if category == "지정학":
+        if any(w in tl for w in ["휴전", "합의", "평화", "완화", "철수"]):
+            direction = "positive"
+            explanation = "지정학 리스크 완화 → 위험자산 선호 회복, 한국 증시 반등 기대"
+        else:
+            direction = "negative"
+            explanation = "지정학 리스크 확대 → 안전자산 선호, 외국인 매도 압력 증가"
+
+    elif category == "유가/원자재":
+        if any(w in tl for w in ["급등", "상승", "폭등", "돌파", "surge", "jump", "rally", "high"]):
+            direction = "negative"
+            explanation = "유가 상승 → 수입 비용 증가, 인플레 우려, 제조업 마진 압박"
+        elif any(w in tl for w in ["하락", "급락", "폭락", "drop", "fall", "plunge"]):
+            direction = "positive"
+            explanation = "유가 하락 → 수입 비용 감소, 인플레 완화, 소비 여력 확대"
+        else:
+            direction = "neutral"
+            explanation = "원자재 가격 변동 — 수출입 기업 영향 모니터링 필요"
+
+    elif category == "금리/통화":
+        if any(w in tl for w in ["인하", "비둘기", "dovish", "cut", "완화"]):
+            direction = "positive"
+            explanation = "금리 인하 기대 → 유동성 확대, 성장주·신흥국 자금 유입 기대"
+        elif any(w in tl for w in ["인상", "매파", "hawkish", "hike", "긴축"]):
+            direction = "negative"
+            explanation = "금리 인상/긴축 → 유동성 축소, 외국인 자금 이탈 우려"
+        elif any(w in tl for w in ["환율", "원달러", "달러 강세", "달러강세"]):
+            if any(w in tl for w in ["약세", "하락"]):
+                direction = "positive"
+                explanation = "원화 강세 → 외국인 투자 매력 증가, 수입 비용 감소"
+            else:
+                direction = "negative"
+                explanation = "원화 약세 → 외국인 매도 압력, 수입 물가 상승"
+        else:
+            direction = "neutral"
+            explanation = "통화·금리 정책 변화 모니터링 필요"
+
+    elif category == "관세/무역":
+        if any(w in tl for w in ["완화", "면제", "철회", "합의", "해소"]):
+            direction = "positive"
+            explanation = "무역 갈등 완화 → 수출 기업 수혜, 글로벌 공급망 안정"
+        else:
+            direction = "negative"
+            explanation = "무역 갈등 심화 → 수출 기업 타격, 공급망 불확실성 확대"
+
+    elif category == "경기/물가":
+        if any(w in tl for w in ["둔화", "하락", "안정", "개선"]) and any(w in tl for w in ["인플레이션", "cpi", "물가"]):
+            direction = "positive"
+            explanation = "물가 안정 → 금리 인하 기대, 소비 회복 긍정적"
+        elif any(w in tl for w in ["침체", "recession", "둔화", "위축"]):
+            direction = "negative"
+            explanation = "경기 둔화 우려 → 기업 실적 부진 가능성, 방어적 투자 필요"
+        else:
+            direction = "neutral"
+            explanation = "경기 지표 변동 — 시장 반응 모니터링 필요"
+
+    else:
+        if any(w in tl for w in ["급등", "반등", "상승", "rally", "surge"]):
+            direction = "positive"
+            explanation = "시장 전반 긍정적 흐름"
+        elif any(w in tl for w in ["급락", "폭락", "하락", "crash", "sell"]):
+            direction = "negative"
+            explanation = "시장 전반 약세 흐름"
+
+    return direction, explanation
+
+
+@router.get("/analysis/macro-events")
+async def get_macro_events() -> dict:
+    """
+    Fetch current geopolitical and macroeconomic events affecting Korean stock market.
+    Categorized by type with impact assessment.
+    """
+    cache_key = "macro-events:global"
+    cached = _get_cached_ttl(cache_key, 600)  # 10 min cache
+    if cached is not None:
+        return cached
+
+    articles = _search_stock_latest_news(_MACRO_QUERIES, max_per_query=5)
+
+    # Deduplicate and classify
+    seen_titles = set()
+    events = []
+    for a in articles:
+        title = a.get("title", "")
+        if not title or title in seen_titles:
+            continue
+        seen_titles.add(title)
+
+        category = _classify_macro_category(title)
+        direction, explanation = _assess_macro_impact(title, category)
+
+        events.append({
+            "title": title,
+            "source": a.get("source", ""),
+            "published_at": a.get("published_at", ""),
+            "category": category,
+            "impact_direction": direction,
+            "explanation": explanation,
+        })
+
+    # Sort: negative first (most impactful to Korean market), then positive, then neutral
+    priority = {"negative": 0, "positive": 1, "neutral": 2}
+    events.sort(key=lambda e: priority.get(e["impact_direction"], 2))
+
+    # Group by category
+    by_category: dict[str, list] = {}
+    for e in events:
+        cat = e["category"]
+        if cat not in by_category:
+            by_category[cat] = []
+        by_category[cat].append(e)
+
+    # Summary: count by direction
+    neg_count = sum(1 for e in events if e["impact_direction"] == "negative")
+    pos_count = sum(1 for e in events if e["impact_direction"] == "positive")
+    if neg_count > pos_count * 2:
+        market_sentiment = "매우 부정적"
+        sentiment_detail = "지정학·매크로 악재가 다수 — 방어적 투자 전략 권장"
+    elif neg_count > pos_count:
+        market_sentiment = "부정적"
+        sentiment_detail = "악재가 우세 — 리스크 관리 강화 필요"
+    elif pos_count > neg_count * 2:
+        market_sentiment = "매우 긍정적"
+        sentiment_detail = "매크로 환경 우호적 — 적극적 투자 기회"
+    elif pos_count > neg_count:
+        market_sentiment = "긍정적"
+        sentiment_detail = "호재가 우세 — 점진적 비중 확대 고려"
+    else:
+        market_sentiment = "중립"
+        sentiment_detail = "호·악재 혼재 — 선별적 종목 접근 필요"
+
+    result = {
+        "events": events[:30],
+        "by_category": by_category,
+        "summary": {
+            "total": len(events),
+            "positive": pos_count,
+            "negative": neg_count,
+            "neutral": len(events) - pos_count - neg_count,
+            "market_sentiment": market_sentiment,
+            "sentiment_detail": sentiment_detail,
+        },
+    }
+
+    _set_cached(cache_key, result)
+    return result

@@ -14,10 +14,10 @@ import {
   ReferenceLine,
   ReferenceArea,
 } from "recharts";
-import { ArrowLeft, AlertTriangle, Activity, Newspaper, Zap, ChevronRight, TrendingUp, TrendingDown, CheckCircle2, XCircle, MinusCircle, Shield } from "lucide-react";
+import { ArrowLeft, AlertTriangle, Activity, Newspaper, Zap, ChevronRight, TrendingUp, TrendingDown, CheckCircle2, XCircle, MinusCircle, Shield, Globe } from "lucide-react";
 import { SECTORS } from "@/data/sectors";
 import type { SectorDef, StockPick } from "@/data/sectors";
-import { fetchChartData, fetchAnalysis, fetchEarnings, fetchPatternAnalysis, fetchCommodityHistory, searchNews, fetchPrediction, fetchMoveReasons, fetchChecklistLive, fetchSectorPulse } from "@/api/client";
+import { fetchChartData, fetchAnalysis, fetchEarnings, fetchPatternAnalysis, fetchCommodityHistory, searchNews, fetchPrediction, fetchMoveReasons, fetchChecklistLive, fetchSectorPulse, fetchMacroEvents, fetchTradingTargets } from "@/api/client";
 import type { ChartDataPoint, AnalysisResult, NewsArticle } from "@/types";
 
 const periods = [
@@ -356,6 +356,9 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
   const [prediction, setPrediction] = useState<any>(null);
   const [moveReasons, setMoveReasons] = useState<any>(null);
   const [checklistLive, setChecklistLive] = useState<any>(null);
+  const [macroEvents, setMacroEvents] = useState<any>(null);
+  const [tradingTargets, setTradingTargets] = useState<any>(null);
+  const [showTargetReasons, setShowTargetReasons] = useState<string | null>(null);
   const [period, setPeriod] = useState<string>("3mo");
   const [loading, setLoading] = useState(true);
   const [chartLoading, setChartLoading] = useState(false);
@@ -372,6 +375,7 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
       track(fetchEarnings(t).then(setEarnings)),
       track(fetchPatternAnalysis(t).then(setPatternData)),
       track(fetchPrediction(t).then(setPrediction)),
+      track(fetchTradingTargets(t).then(setTradingTargets)),
     ];
     // Checklist is slow — fetch separately with its own retry
     fetchChecklistLive(t)
@@ -385,6 +389,8 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
     Promise.allSettled(promises).then(() => {
       if (failed >= 3) setLoadError(true);
     });
+    // Macro events — global, fetch once
+    fetchMacroEvents().then(setMacroEvents).catch(() => {});
   }, []);
 
   // Ticker-dependent data — re-fetches when stock changes or retry
@@ -395,6 +401,8 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
     setPatternData(null);
     setPrediction(null);
     setChecklistLive(null);
+    setTradingTargets(null);
+    setShowTargetReasons(null);
     loadTickerData(pick.ticker);
   }, [pick.ticker, retryCount, loadTickerData]);
 
@@ -408,14 +416,13 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
     chartP.finally(() => { setChartLoading(false); setLoading(false); });
   }, [pick.ticker, period, retryCount]);
 
-  // Auto-refresh every 90s (longer interval for server stability)
+  // Auto-refresh every 5 min — only refresh analysis & checklist (not chart, to avoid UI jump)
   useEffect(() => {
     const t = pick.ticker;
     const intervalId = window.setInterval(() => {
       fetchAnalysis(t).then(setAnalysis).catch(() => {});
-      fetchChartData(t, period).then(setChartData).catch(() => {});
       fetchChecklistLive(t).then(setChecklistLive).catch(() => {});
-    }, 90_000);
+    }, 300_000);
     return () => window.clearInterval(intervalId);
   }, [pick.ticker, period]);
 
@@ -561,45 +568,89 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
               </div>
             </div>
 
-            {/* Trading signals — actionable buy/sell/stop */}
-            {latestPrice && (() => {
-              // Calculate actionable price levels from current price + indicators
-              const p = latestPrice;
-              const ind = analysis?.indicators;
-              // Buy zone: near bollinger lower or -5~8% from current
-              const buyPrice = ind?.bollinger_lower ? Math.round(ind.bollinger_lower) : Math.round(p * 0.94);
-              // Sell zone: near bollinger upper or +8~12% from current
-              const sellPrice = ind?.bollinger_upper ? Math.round(ind.bollinger_upper) : Math.round(p * 1.10);
-              // Stop loss: -10~15% or below SMA200
-              const stopPrice = ind?.sma_200 ? Math.round(Math.min(ind.sma_200 * 0.97, p * 0.88)) : Math.round(p * 0.88);
+            {/* Trading targets — chart-based entry/exit/stop */}
+            {(() => {
+              const tt = tradingTargets?.targets;
+              if (!tt) return (
+                <div className="text-center py-3">
+                  <span className="text-[10px] text-[var(--color-text-muted)] animate-pulse">차트 분석 기반 매매 타점 계산 중...</span>
+                </div>
+              );
 
-              // Round to clean numbers
-              const round = (v: number) => {
+              const roundP = (v: number) => {
                 if (v >= 100000) return Math.round(v / 1000) * 1000;
                 if (v >= 10000) return Math.round(v / 100) * 100;
                 if (v >= 100) return Math.round(v / 10) * 10;
                 return Math.round(v * 10) / 10;
               };
-              const fmt = (v: number) => `${currency}${round(v).toLocaleString()}`;
-              const pct = (v: number) => `${((round(v) - p) / p * 100) >= 0 ? "+" : ""}${((round(v) - p) / p * 100).toFixed(0)}%`;
+              const fmt = (v: number) => `${currency}${roundP(v).toLocaleString()}`;
+              const rr = tradingTargets.risk_reward_ratio;
+
+              const cards = [
+                { key: "buy", label: "매수 타점", price: tt.buy.price, pct: tt.buy.pct, reasons: tt.buy.reasons, color: "#3b82f6", pctLabel: "이하 시 분할매수" },
+                { key: "sell", label: "매도 타점", price: tt.sell.price, pct: tt.sell.pct, reasons: tt.sell.reasons, color: "#22c55e", pctLabel: "이상 시 분할매도" },
+                { key: "stop", label: "손절 라인", price: tt.stop.price, pct: tt.stop.pct, reasons: tt.stop.reasons, color: "#ef4444", pctLabel: "이하 시 손절" },
+              ];
 
               return (
-                <div className="grid grid-cols-3 gap-3">
-                  <div className="rounded-xl p-3" style={{ background: "rgba(59,130,246,0.08)", border: "1px solid rgba(59,130,246,0.25)" }}>
-                    <p className="text-[10px] font-bold text-[#3b82f6] mb-1">분할매수</p>
-                    <p className="text-lg font-black text-[#3b82f6]">{fmt(buyPrice)}</p>
-                    <p className="text-[10px] text-[#3b82f6]/70 mt-0.5">{pct(buyPrice)} 이하 시 매수</p>
+                <div className="space-y-3">
+                  {/* Risk/Reward ratio bar */}
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-[var(--color-bg-hover)]">
+                    <span className="text-[10px] font-bold text-[var(--color-text-muted)]">손익비</span>
+                    <div className="flex-1 h-2 rounded-full bg-[var(--color-bg-primary)] overflow-hidden">
+                      <div className="h-full rounded-full transition-all" style={{
+                        width: `${Math.min(100, rr / 5 * 100)}%`,
+                        background: rr >= 2 ? "#22c55e" : rr >= 1 ? "#eab308" : "#ef4444"
+                      }} />
+                    </div>
+                    <span className={`text-xs font-black ${rr >= 2 ? "text-[#22c55e]" : rr >= 1 ? "text-[#eab308]" : "text-[#ef4444]"}`}>
+                      1:{rr.toFixed(1)} {rr >= 2.5 ? "매우 유리" : rr >= 1.5 ? "유리" : rr >= 1 ? "보통" : "불리"}
+                    </span>
                   </div>
-                  <div className="rounded-xl p-3" style={{ background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.25)" }}>
-                    <p className="text-[10px] font-bold text-[#22c55e] mb-1">분할매도</p>
-                    <p className="text-lg font-black text-[#22c55e]">{fmt(sellPrice)}</p>
-                    <p className="text-[10px] text-[#22c55e]/70 mt-0.5">{pct(sellPrice)} 이상 시 익절</p>
+
+                  <div className="grid grid-cols-3 gap-3">
+                    {cards.map(card => (
+                      <div key={card.key}
+                        className="rounded-xl p-3 cursor-pointer transition-all hover:scale-[1.02]"
+                        style={{ background: `${card.color}11`, border: `1px solid ${card.color}40` }}
+                        onClick={() => setShowTargetReasons(showTargetReasons === card.key ? null : card.key)}
+                      >
+                        <p className="text-[10px] font-bold mb-1" style={{ color: card.color }}>{card.label}</p>
+                        <p className="text-lg font-black" style={{ color: card.color }}>{fmt(card.price)}</p>
+                        <p className="text-[10px] mt-0.5" style={{ color: `${card.color}99` }}>
+                          {card.pct >= 0 ? "+" : ""}{card.pct.toFixed(1)}% {card.pctLabel}
+                        </p>
+                        <p className="text-[9px] mt-1 underline" style={{ color: `${card.color}80` }}>
+                          {showTargetReasons === card.key ? "닫기 ▲" : "근거 보기 ▼"}
+                        </p>
+                        {showTargetReasons === card.key && (
+                          <div className="mt-2 pt-2 border-t space-y-1" style={{ borderColor: `${card.color}30` }}>
+                            {card.reasons.map((r: string, ri: number) => (
+                              <p key={ri} className="text-[10px] leading-relaxed" style={{ color: "var(--color-text-secondary)" }}>
+                                • {r}
+                              </p>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
                   </div>
-                  <div className="rounded-xl p-3" style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.25)" }}>
-                    <p className="text-[10px] font-bold text-[#ef4444] mb-1">손절</p>
-                    <p className="text-lg font-black text-[#ef4444]">{fmt(stopPrice)}</p>
-                    <p className="text-[10px] text-[#ef4444]/70 mt-0.5">{pct(stopPrice)} 이하 시 손절</p>
-                  </div>
+
+                  {/* Strategy signals — chart indicator analysis */}
+                  {tradingTargets.strategy_signals?.length > 0 && (
+                    <div className="px-3 py-2.5 rounded-xl bg-[var(--color-bg-hover)]">
+                      <p className="text-[10px] font-bold text-[var(--color-text-muted)] mb-1.5">차트 지표 분석</p>
+                      <div className="space-y-1">
+                        {tradingTargets.strategy_signals.map((sig: string, si: number) => (
+                          <p key={si} className="text-[10px] text-[var(--color-text-secondary)] leading-relaxed">
+                            {sig.includes("과매수") || sig.includes("데드크로스") || sig.includes("역배열") || sig.includes("하락") ? "🔴" :
+                             sig.includes("과매도") || sig.includes("골든크로스") || sig.includes("정배열") || sig.includes("상승") || sig.includes("강함") ? "🟢" : "🟡"}{" "}
+                            {sig}
+                          </p>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })()}
@@ -698,8 +749,8 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                               )}
                               {moveInfo?.news?.length > 0 && (
                                 <div className="mt-1.5 space-y-1">
-                                  {moveInfo.news.slice(0, 2).map((n: string, ni: number) => (
-                                    <p key={ni} className="text-[10px] text-[var(--color-text-secondary)] leading-snug pl-2 border-l-2 border-[var(--color-border)]">{n}</p>
+                                  {moveInfo.news.slice(0, 2).map((n: any, ni: number) => (
+                                    <p key={ni} className="text-[10px] text-[var(--color-text-secondary)] leading-snug pl-2 border-l-2 border-[var(--color-border)]">{typeof n === "string" ? n : n.title}{typeof n === "object" && n.source ? ` (${n.source})` : ""}</p>
                                   ))}
                                 </div>
                               )}
@@ -872,6 +923,76 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                   </div>
                 );
               })()}
+            </div>
+          )}
+
+          {/* ═══ MACRO / GEOPOLITICAL EVENTS ═══ */}
+          {macroEvents?.events?.length > 0 && (
+            <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-2xl p-5">
+              <div className="flex items-center gap-2 mb-4">
+                <div className="w-8 h-8 rounded-xl flex items-center justify-center bg-[rgba(239,68,68,0.1)] border border-[rgba(239,68,68,0.2)]">
+                  <Globe size={16} className="text-[#ef4444]" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-[var(--color-text-primary)]">글로벌 매크로 & 지정학 이슈</h3>
+                  <p className="text-[10px] text-[var(--color-text-muted)]">한국 증시에 영향을 미치는 글로벌 이벤트</p>
+                </div>
+                {macroEvents.summary && (
+                  <div className="ml-auto flex items-center gap-2">
+                    <span className={`text-xs font-bold px-2 py-1 rounded-lg ${
+                      macroEvents.summary.market_sentiment.includes("부정") ? "bg-[rgba(239,68,68,0.1)] text-[#ef4444]"
+                      : macroEvents.summary.market_sentiment.includes("긍정") ? "bg-[rgba(34,197,94,0.1)] text-[#22c55e]"
+                      : "bg-[rgba(234,179,8,0.1)] text-[#eab308]"
+                    }`}>
+                      시장 분위기: {macroEvents.summary.market_sentiment}
+                    </span>
+                  </div>
+                )}
+              </div>
+              {macroEvents.summary && (
+                <div className="mb-4 px-3 py-2.5 rounded-xl bg-[var(--color-bg-hover)]">
+                  <div className="flex items-center gap-3">
+                    <span className="text-xs font-bold text-[#22c55e]">호재 {macroEvents.summary.positive}</span>
+                    <div className="flex-1 h-2 rounded-full bg-[var(--color-bg-primary)] overflow-hidden flex">
+                      {macroEvents.summary.positive > 0 && <div className="h-full bg-[#22c55e]" style={{ width: `${macroEvents.summary.positive / macroEvents.summary.total * 100}%` }} />}
+                      {macroEvents.summary.neutral > 0 && <div className="h-full bg-[#eab308]" style={{ width: `${macroEvents.summary.neutral / macroEvents.summary.total * 100}%` }} />}
+                      {macroEvents.summary.negative > 0 && <div className="h-full bg-[#ef4444]" style={{ width: `${macroEvents.summary.negative / macroEvents.summary.total * 100}%` }} />}
+                    </div>
+                    <span className="text-xs font-bold text-[#ef4444]">악재 {macroEvents.summary.negative}</span>
+                  </div>
+                  <p className="text-[10px] text-[var(--color-text-muted)] mt-1.5">{macroEvents.summary.sentiment_detail}</p>
+                </div>
+              )}
+              <div className="space-y-3">
+                {Object.entries(macroEvents.by_category || {}).map(([category, events]: [string, any]) => (
+                  <div key={category}>
+                    <p className="text-[10px] font-bold text-[var(--color-text-muted)] uppercase tracking-widest mb-2 flex items-center gap-1">
+                      {category === "지정학" ? "🌍" : category === "유가/원자재" ? "🛢️" : category === "금리/통화" ? "💵" : category === "관세/무역" ? "📦" : category === "경기/물가" ? "📊" : "📈"} {category}
+                    </p>
+                    <div className="space-y-1.5">
+                      {events.slice(0, 4).map((e: any, i: number) => (
+                        <div key={`${category}-${i}`} className="px-3 py-2.5 rounded-xl" style={{
+                          background: e.impact_direction === "negative" ? "rgba(239,68,68,0.06)" : e.impact_direction === "positive" ? "rgba(34,197,94,0.06)" : "rgba(234,179,8,0.04)",
+                          border: `1px solid ${e.impact_direction === "negative" ? "rgba(239,68,68,0.15)" : e.impact_direction === "positive" ? "rgba(34,197,94,0.15)" : "rgba(234,179,8,0.12)"}`,
+                        }}>
+                          <div className="flex items-start gap-2">
+                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded mt-0.5 ${
+                              e.impact_direction === "negative" ? "bg-[rgba(239,68,68,0.15)] text-[#ef4444]"
+                              : e.impact_direction === "positive" ? "bg-[rgba(34,197,94,0.15)] text-[#22c55e]"
+                              : "bg-[rgba(234,179,8,0.15)] text-[#eab308]"
+                            }`}>{e.impact_direction === "negative" ? "악재" : e.impact_direction === "positive" ? "호재" : "중립"}</span>
+                            <div className="flex-1">
+                              <p className="text-sm font-semibold text-[var(--color-text-primary)]">{e.title}</p>
+                              {e.explanation && <p className="text-xs text-[var(--color-text-secondary)] mt-1">{e.explanation}</p>}
+                              {e.source && <p className="text-[10px] text-[var(--color-text-muted)] mt-1">{e.source}{e.published_at ? ` · ${e.published_at}` : ""}</p>}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 

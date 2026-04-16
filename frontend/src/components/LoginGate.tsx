@@ -29,6 +29,12 @@ export default function LoginGate({ children }: { children: React.ReactNode }) {
         if (data.allowed) {
           localStorage.setItem("stock-role", data.role);
           setAuthenticated(true);
+          // Record visit silently
+          fetch("/api/members/visit", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ nickname: saved }),
+          }).catch(() => {});
         } else {
           localStorage.removeItem("stock-nickname");
           localStorage.removeItem("stock-role");
@@ -62,6 +68,12 @@ export default function LoginGate({ children }: { children: React.ReactNode }) {
         localStorage.setItem("stock-role", data.role);
         setAuthenticated(true);
         setError("");
+        // Record visit
+        fetch("/api/members/visit", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ nickname: trimmed }),
+        }).catch(() => {});
         if (window.location.pathname !== "/") {
           window.location.href = "/";
         }

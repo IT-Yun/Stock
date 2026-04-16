@@ -2,6 +2,8 @@
 
 import json
 import re
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -188,3 +190,95 @@ async def remove_member(
         raise HTTPException(status_code=404, detail=f"'{name}'을(를) 찾을 수 없습니다")
     _write_json(data)
     return {"message": f"'{name}' 멤버 삭제 완료", "total": len(data["members"])}
+
+
+# ── Visit tracking ──
+
+VISITS_FILE = Path(__file__).resolve().parent.parent / "data" / "visits.json"
+
+
+def _read_visits_json() -> dict:
+    try:
+        return json.loads(VISITS_FILE.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _write_visits_json(data: dict):
+    VISITS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    VISITS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+@router.post("/visit")
+async def record_visit(body: VerifyRequest):
+    """Record a user visit. Called on each login/page load."""
+    name = body.nickname.strip()
+    if not name:
+        return {"ok": True}
+
+    now = datetime.now(timezone.utc).isoformat()
+
+    sb = _get_supabase()
+    if sb:
+        try:
+            sb.table("visits").insert({"nickname": name, "visited_at": now}).execute()
+            return {"ok": True}
+        except Exception as e:
+            print(f"[VISITS] Supabase insert failed: {e}")
+            # Fall through to JSON
+
+    # JSON fallback
+    visits = _read_visits_json()
+    if name not in visits:
+        visits[name] = {"count": 0, "last_visit": None, "history": []}
+    visits[name]["count"] += 1
+    visits[name]["last_visit"] = now
+    # Keep last 100 visits per user
+    visits[name].setdefault("history", []).append(now)
+    visits[name]["history"] = visits[name]["history"][-100:]
+    _write_visits_json(visits)
+    return {"ok": True}
+
+
+@router.get("/stats")
+async def get_visit_stats(x_auth_nickname: str = Header("")):
+    """Admin only: get visit counts per member."""
+    decoded = unquote(x_auth_nickname)
+    _require_admin(decoded)
+
+    sb = _get_supabase()
+    if sb:
+        try:
+            # Get visit counts grouped by nickname
+            rows = sb.table("visits").select("nickname, visited_at").execute().data
+            stats: dict[str, dict] = {}
+            for row in rows:
+                nick = row["nickname"]
+                if nick not in stats:
+                    stats[nick] = {"count": 0, "last_visit": None}
+                stats[nick]["count"] += 1
+                visit_time = row.get("visited_at")
+                if visit_time and (stats[nick]["last_visit"] is None or visit_time > stats[nick]["last_visit"]):
+                    stats[nick]["last_visit"] = visit_time
+
+            result = []
+            for nick, info in sorted(stats.items(), key=lambda x: x[1]["count"], reverse=True):
+                result.append({
+                    "nickname": nick,
+                    "visit_count": info["count"],
+                    "last_visit": info["last_visit"],
+                })
+            return {"stats": result, "total_visits": sum(s["count"] for s in stats.values())}
+        except Exception as e:
+            print(f"[VISITS] Supabase stats failed: {e}")
+
+    # JSON fallback
+    visits = _read_visits_json()
+    result = []
+    for nick, info in sorted(visits.items(), key=lambda x: x[1].get("count", 0), reverse=True):
+        result.append({
+            "nickname": nick,
+            "visit_count": info.get("count", 0),
+            "last_visit": info.get("last_visit"),
+        })
+    return {"stats": result, "total_visits": sum(v.get("count", 0) for v in visits.values())}

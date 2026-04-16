@@ -1656,7 +1656,7 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                     <span className="text-[9px] text-[var(--color-text-muted)] ml-auto px-2 py-0.5 rounded bg-[var(--color-bg-hover)]">수집 중</span>
                   </div>
                   <div className="mt-3 h-16 bg-[var(--color-bg-hover)] rounded-lg overflow-hidden relative">
-                    <div className="absolute inset-0 bg-gradient-to-r from-transparent via-[rgba(99,102,241,0.05)] to-transparent" style={{ animation: "shimmer 2s infinite" }} />
+                    <div className="absolute inset-0 bg-gradient-to-r from-transparent via-[rgba(99,102,241,0.05)] to-transparent" style={{ animation: "skeletonShimmer 2s infinite" }} />
                   </div>
                 </div>
               ))}

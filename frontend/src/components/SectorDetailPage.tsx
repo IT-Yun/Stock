@@ -130,7 +130,9 @@ function analyzeFundamentals(earnings: any, patternData: any, checklistLive: any
   // The checklist already evaluates earnings, commodities, sector health, and news per stock
   if (checklistLive?.summary?.score != null) {
     const clScore = checklistLive.summary.score as number;
-    const items = checklistLive?.checklist ?? [];
+    const items = (checklistLive?.checklist ?? []).filter((c: any) =>
+      !c.is_news_item && !c.name?.startsWith("뉴스:") && !c.name?.startsWith("이슈 모니터링:")
+    );
     const positives = items.filter((c: any) => c.status === "positive").length;
     const negatives = items.filter((c: any) => c.status === "negative").length;
     const reasons: string[] = [];
@@ -1251,17 +1253,20 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                 </div>
               )}
               {checklistLive?.checklist && (() => {
-                const total = checklistLive.checklist.length;
-                const passed = checklistLive.checklist.filter((c: any) => c.status === "positive").length;
+                const filtered = checklistLive.checklist.filter((c: any) =>
+                  !c.is_news_item && !c.name?.startsWith("뉴스:") && !c.name?.startsWith("이슈 모니터링:")
+                );
+                const total = filtered.length;
+                const passed = filtered.filter((c: any) => c.status === "positive").length;
                 const ratio = total > 0 ? passed / total : 0;
                 const safetyColor = ratio >= 0.7 ? "#22c55e" : ratio >= 0.4 ? "#eab308" : "#ef4444";
                 const safetyLabel = ratio >= 0.7 ? "안전" : ratio >= 0.4 ? "주의" : "위험";
                 return (
                   <div className="flex items-center gap-2 ml-auto">
                     <div className="flex gap-0.5">
-                      {checklistLive.checklist.map((_: any, ci: number) => (
+                      {filtered.map((_: any, ci: number) => (
                         <div key={ci} className="w-3 h-6 rounded-sm" style={{
-                          background: checklistLive.checklist[ci].status === "positive" ? "#22c55e" : checklistLive.checklist[ci].status === "negative" ? "#ef4444" : "#eab30850"
+                          background: filtered[ci].status === "positive" ? "#22c55e" : filtered[ci].status === "negative" ? "#ef4444" : "#eab30850"
                         }} />
                       ))}
                     </div>
@@ -1305,7 +1310,10 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                   </div>
                 </div>
               )}
-              {checklistLive?.checklist?.map((item: any, i: number) => {
+              {checklistLive?.checklist?.filter((item: any) =>
+                // Filter out legacy news items from cached data — news is now in the dedicated section
+                !item.is_news_item && !item.name?.startsWith("뉴스:") && !item.name?.startsWith("이슈 모니터링:")
+              ).map((item: any, i: number) => {
                 const statusColor = item.status === "positive" ? "#22c55e" : item.status === "negative" ? "#ef4444" : "#eab308";
                 const hasTrend = item.trend_data?.length > 3;
 

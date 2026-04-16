@@ -57,6 +57,25 @@ def _get_cached_ttl(key: str, ttl: int):
     return None
 
 
+def _strip_news_from_checklist(response: dict) -> dict:
+    """Remove legacy news items from checklist responses (cached data may still contain them)."""
+    if not isinstance(response, dict) or "checklist" not in response:
+        return response
+    items = response.get("checklist")
+    if not isinstance(items, list):
+        return response
+    filtered = [
+        item for item in items
+        if not item.get("is_news_item")
+        and not str(item.get("name", "")).startswith("뉴스:")
+        and not str(item.get("name", "")).startswith("이슈 모니터링:")
+    ]
+    if len(filtered) == len(items):
+        return response  # nothing changed
+    result = {**response, "checklist": filtered}
+    return result
+
+
 def _analysis_cache_path(key: str) -> Path:
     digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
     return _ANALYSIS_CACHE_DIR / f"{digest}.json"
@@ -4384,9 +4403,9 @@ def get_checklist_live(ticker: str) -> dict:
             if time.time() - _ANALYSIS_CACHE[cache_key][0] > 300:
                 pass  # Expired fallback — retry below
             else:
-                return cached
+                return _strip_news_from_checklist(cached)
         else:
-            return cached
+            return _strip_news_from_checklist(cached)
 
     # Also keep a "last good" cache that never expires, for rate limit fallback
     stale_key = f"checklist-stale:{ticker}"

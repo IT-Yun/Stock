@@ -2019,12 +2019,24 @@ export default function SectorDetailPage() {
 
   // Auto-select stock from URL query param (?stock=NVDA)
   useEffect(() => {
-    if (stockParam && sector) {
-      const match = sector.picks.find((pk) => pk.ticker === stockParam || pk.ticker === decodeURIComponent(stockParam));
-      if (match) {
-        setSelectedPick(match);
-        return;
+    if (stockParam) {
+      // First check if it's a top pick in the current sector
+      if (sector) {
+        const match = sector.picks.find((pk) => pk.ticker === stockParam || pk.ticker === decodeURIComponent(stockParam));
+        if (match) {
+          setSelectedPick(match);
+          return;
+        }
       }
+      // Also check ALL sectors for the stock
+      for (const s of SECTORS) {
+        const match = s.picks.find((pk) => pk.ticker === stockParam || pk.ticker === decodeURIComponent(stockParam));
+        if (match) {
+          setSelectedPick(match);
+          return;
+        }
+      }
+      // Dynamic stock: not a top pick in any sector
       const dynamicName = searchParams.get("name") || stockParam;
       const dynamicFlag = searchParams.get("flag") === "KR" ? "KR" : "US";
       setSelectedPick({
@@ -2036,16 +2048,7 @@ export default function SectorDetailPage() {
     }
   }, [sector, stockParam, searchParams]);
 
-  if (!sector) {
-    return (
-      <div className="flex flex-col items-center justify-center py-20 space-y-4">
-        <p className="text-lg text-[var(--color-text-secondary)]">섹터를 찾을 수 없습니다.</p>
-        <Link to="/" className="text-sm text-[var(--color-accent-blue)] hover:underline">마인드맵으로 돌아가기</Link>
-      </div>
-    );
-  }
-
-  // Dynamic stock: full-screen analysis without sector sidebar
+  // Dynamic stock: full-screen analysis (works even without a valid sector)
   if (isDynamic && selectedPick) {
     return (
       <div className="h-full overflow-y-auto">
@@ -2059,6 +2062,27 @@ export default function SectorDetailPage() {
           </button>
           <StockAnalysisCard pick={selectedPick} sectorColor="#3b82f6" />
         </div>
+      </div>
+    );
+  }
+
+  // Dynamic stock loading: stock param exists but selectedPick not yet set
+  if (isDynamic && stockParam && !selectedPick) {
+    return (
+      <div className="h-full flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-8 h-8 border-2 border-[#3b82f6] border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+          <p className="text-sm text-[var(--color-text-secondary)]">종목 정보를 불러오는 중...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!sector) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 space-y-4">
+        <p className="text-lg text-[var(--color-text-secondary)]">섹터를 찾을 수 없습니다.</p>
+        <Link to="/" className="text-sm text-[var(--color-accent-blue)] hover:underline">마인드맵으로 돌아가기</Link>
       </div>
     );
   }

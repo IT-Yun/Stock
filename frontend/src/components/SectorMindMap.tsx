@@ -224,7 +224,9 @@ export default function SectorMindMap() {
         flag: resolvedFlag,
         dynamic: "1",
       });
-      navigate(`/sector/${sectorId}?${params.toString()}`);
+      // Use _dynamic as fallback sector ID for non-top-pick stocks
+      const navSectorId = SECTORS.some(s => s.id === sectorId) ? sectorId : "_dynamic";
+      navigate(`/sector/${navSectorId}?${params.toString()}`);
     })();
   }, [navigate]);
 

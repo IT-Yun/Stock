@@ -5977,7 +5977,15 @@ def get_checklist_live(ticker: str) -> dict:
             else:
                 return _strip_news_from_checklist(cached)
         else:
-            return _strip_news_from_checklist(cached)
+            # Invalidate cache if commodity trend_data has all-zero close values (bad cache)
+            has_bad_commodity = any(
+                item.get("type") == "commodity" and
+                item.get("trend_data") and
+                all(d.get("close", 1) == 0 for d in item["trend_data"])
+                for item in cached.get("checklist", [])
+            )
+            if not has_bad_commodity:
+                return _strip_news_from_checklist(cached)
 
     # Also keep a "last good" cache that never expires, for rate limit fallback
     stale_key = f"checklist-stale:{ticker}"
@@ -6442,8 +6450,19 @@ def get_checklist_live(ticker: str) -> dict:
                     sym = src["symbol"]
                     positive_if = src.get("positive_if", "up")
                     hist = commodity_cache.get(sym, pd.DataFrame())
+                    # If cached hist has bad data (all zeros), retry once
+                    if not hist.empty and len(hist) > 20:
+                        closes_check = hist["Close"].values.astype(float)
+                        if closes_check.max() == 0:
+                            try:
+                                hist = StockDataService.get_stock_history(sym, period="1y")
+                                commodity_cache[sym] = hist
+                            except Exception:
+                                pass
                     if not hist.empty and len(hist) > 20:
                         closes = hist["Close"].values.astype(float)
+                        if closes.max() == 0:
+                            raise ValueError(f"All-zero close prices for {sym}")
                         last_price = float(closes[-1])
                         first_price = float(closes[0])
                         change_pct = (last_price - first_price) / first_price * 100

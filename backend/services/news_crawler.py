@@ -189,6 +189,26 @@ class NewsCrawlerService:
         _set_cached(cache_key, unique_articles)
         return unique_articles
 
+    # Korean name mapping for earnings search — yfinance returns English names
+    _KOREAN_NAMES: dict[str, str] = {
+        "005930.KS": "삼성전자", "000660.KS": "SK하이닉스",
+        "006400.KS": "삼성SDI", "373220.KS": "LG에너지솔루션",
+        "086520.KS": "에코프로", "247540.KS": "에코프로비엠",
+        "012450.KS": "한화에어로스페이스", "047810.KS": "한국항공우주",
+        "207940.KS": "삼성바이오로직스", "068270.KS": "셀트리온",
+        "005380.KS": "현대자동차", "000270.KS": "기아",
+        "003670.KS": "포스코퓨처엠", "066970.KS": "엘앤에프",
+        "035420.KS": "NAVER", "035720.KS": "카카오",
+        "051910.KS": "LG화학", "105560.KS": "KB금융",
+        "055550.KS": "신한지주", "000810.KS": "삼성화재",
+        "028260.KS": "삼성물산", "018260.KS": "삼성에스디에스",
+        "009150.KS": "삼성전기", "042700.KS": "한미반도체",
+        "003550.KS": "LG", "066570.KS": "LG전자",
+        "034730.KS": "SK", "017670.KS": "SK텔레콤",
+        "030200.KS": "KT", "036570.KS": "엔씨소프트",
+        "259960.KS": "크래프톤", "352820.KS": "하이브",
+    }
+
     @staticmethod
     def crawl_preliminary_earnings(company_name: str, ticker: str) -> dict:
         """
@@ -203,17 +223,32 @@ class NewsCrawlerService:
 
         result: dict = {"found": False, "source": "", "data": {}, "headlines": []}
 
+        # Resolve Korean name — yfinance may give English name
+        ko_name = NewsCrawlerService._KOREAN_NAMES.get(ticker)
+        if not ko_name:
+            code = ticker.split(".")[0]
+            ko_name = NewsCrawlerService._KOREAN_NAMES.get(f"{code}.KS")
+        # If still no Korean name but company_name has Korean chars, use it
+        if not ko_name and any("\uac00" <= ch <= "\ud7a3" for ch in company_name):
+            ko_name = company_name
+        search_name = ko_name or company_name
+
         try:
             # Korean search: 잠정실적, 실적발표
             ko_keywords = [
-                f"{company_name} 잠정실적",
-                f"{company_name} 영업이익 실적",
-                f"{company_name} 매출 실적발표",
+                f"{search_name} 잠정실적",
+                f"{search_name} 영업이익 실적",
+                f"{search_name} 매출 실적발표",
+                f"{search_name} 1분기 실적",
+                f"{search_name} 실적 서프라이즈",
             ]
+            # Also try original company name if different
+            if search_name != company_name and company_name:
+                ko_keywords.append(f"{company_name} 잠정실적")
             # English search
             en_keywords = [
-                f"{ticker} preliminary earnings results",
-                f"{ticker} quarterly revenue operating profit",
+                f"{ticker.replace('.KS','').replace('.KQ','')} preliminary earnings results",
+                f"{ticker.replace('.KS','').replace('.KQ','')} quarterly revenue operating profit",
             ]
 
             all_articles: list[NewsArticle] = []

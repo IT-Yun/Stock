@@ -5010,6 +5010,79 @@ def get_checklist_live(ticker: str) -> dict:
         # News analysis is served separately via /analysis/{ticker}/news-analysis endpoint
         # and displayed in the dedicated "실시간 뉴스 분석" section on the frontend.
 
+        # ── PRELIMINARY EARNINGS — auto-inject if found ──
+        # This is NOT a news item — it's actual financial data extracted from earnings announcements
+        if preliminary_earnings.get("found"):
+            pe_data = preliminary_earnings["data"]
+            pe_headlines = preliminary_earnings.get("headlines", [])[:3]
+
+            # Build detail text from actual numbers
+            detail_parts = []
+            if "revenue_억" in pe_data:
+                rev = pe_data["revenue_억"]
+                if rev >= 10000:
+                    detail_parts.append(f"매출 {rev/10000:.1f}조원")
+                else:
+                    detail_parts.append(f"매출 {rev:,.0f}억원")
+            if "operating_profit_억" in pe_data:
+                op = pe_data["operating_profit_억"]
+                if op >= 10000:
+                    detail_parts.append(f"영업이익 {op/10000:.1f}조원")
+                else:
+                    detail_parts.append(f"영업이익 {op:,.0f}억원")
+            if "net_income_억" in pe_data:
+                ni = pe_data["net_income_억"]
+                if ni >= 10000:
+                    detail_parts.append(f"순이익 {ni/10000:.1f}조원")
+                else:
+                    detail_parts.append(f"순이익 {ni:,.0f}억원")
+            if "revenue_usd_b" in pe_data:
+                detail_parts.append(f"매출 ${pe_data['revenue_usd_b']:.1f}B")
+            if "op_profit_usd_b" in pe_data:
+                detail_parts.append(f"영업이익 ${pe_data['op_profit_usd_b']:.1f}B")
+
+            detail_text = " / ".join(detail_parts) if detail_parts else "잠정실적 발표 확인됨"
+
+            # Determine status: positive if revenue/profit numbers are present (earnings announcements are usually bullish signals)
+            # The actual sentiment is determined by whether results beat expectations
+            has_growth_signal = False
+            if pe_headlines:
+                headline_text = " ".join(pe_headlines).lower()
+                if any(kw in headline_text for kw in ["사상최대", "호실적", "서프라이즈", "beat", "record", "증가", "성장", "흑자전환"]):
+                    has_growth_signal = True
+                    earnings_status = "positive"
+                    earnings_score = 85
+                elif any(kw in headline_text for kw in ["부진", "감소", "적자", "miss", "하락", "축소"]):
+                    earnings_status = "negative"
+                    earnings_score = 25
+                else:
+                    earnings_status = "neutral"
+                    earnings_score = 55
+            else:
+                earnings_status = "neutral"
+                earnings_score = 55
+
+            results.append({
+                "name": "잠정실적 발표",
+                "status": earnings_status,
+                "value": None,
+                "detail": detail_text,
+                "trend_data": [],
+                "stock_overlay": stock_overlay,
+                "correlation": 0.0,
+                "corr_label": "실적 직접 반영",
+                "thresholds": {},
+                "source": preliminary_earnings.get("source", "뉴스 잠정실적 크롤링"),
+                "importance": 95,  # Highest importance — earnings are the #1 driver
+                "window": "당분기",
+                "why_it_matters": "잠정실적은 주가에 가장 직접적인 영향을 미치는 데이터입니다. 시장 컨센서스 대비 서프라이즈 여부가 핵심입니다.",
+                "expected_condition": "컨센서스 대비 매출/영업이익 초과 시 주가 상승 압력, 미달 시 하락 압력",
+                "item_score": earnings_score,
+                "lead_signal": "실적 호조" if earnings_status == "positive" else ("실적 부진" if earnings_status == "negative" else "실적 확인 필요"),
+                "preliminary_data": pe_data,
+                "preliminary_headlines": pe_headlines,
+            })
+
         # Sort by importance (highest correlation first)
         results.sort(key=lambda r: r.get("importance", 0), reverse=True)
         summary = _build_checklist_summary(results)

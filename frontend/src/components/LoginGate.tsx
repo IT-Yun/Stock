@@ -21,7 +21,7 @@ const ALLOWED_NICKNAMES = [
   "차를 사자", "초코바나나", "카피머신 1호 팬", "카피머신 비서",
   "피카츄", "하트뽀뽀 어피치", "홀인원 강자", ".",
   // 추가 멤버
-  "김경호", "이건원", "김종철", "다빈",
+  "김경호", "이건원", "김종철", "다빈", "진희",
 ];
 
 export default function LoginGate({ children }: { children: React.ReactNode }) {

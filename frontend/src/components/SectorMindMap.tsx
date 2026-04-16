@@ -80,7 +80,7 @@ export default function SectorMindMap() {
   }>(null);
   const [showTopRanked, setShowTopRanked] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
-  const [dims, setDims] = useState({ w: 1200, h: 800 });
+  const [dims, setDims] = useState({ w: typeof window !== "undefined" ? window.innerWidth : 1200, h: typeof window !== "undefined" ? window.innerHeight : 800 });
   const isMobile = dims.w < 768;
   const navigate = useNavigate();
   const navigationTimeoutRef = useRef<number | null>(null);

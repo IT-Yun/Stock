@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { fetchSectors } from "@/api/client";
+import { useLanguage } from "@/i18n";
 import StockCard from "./StockCard";
 import type { Sector } from "@/types";
 
@@ -7,6 +8,7 @@ export default function SectorList() {
   const [sectors, setSectors] = useState<Sector[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const { t } = useLanguage();
 
   useEffect(() => {
     setLoading(true);
@@ -15,7 +17,7 @@ export default function SectorList() {
         setSectors(data);
         setError(null);
       })
-      .catch(() => setError("섹터 데이터를 불러오는 데 실패했습니다."))
+      .catch(() => setError(t("sectorLoadFailed")))
       .finally(() => setLoading(false));
   }, []);
 
@@ -44,7 +46,7 @@ export default function SectorList() {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="text-center">
-          <p className="text-[var(--color-accent-red)] text-lg mb-2">오류</p>
+          <p className="text-[var(--color-accent-red)] text-lg mb-2">{t("error")}</p>
           <p className="text-[var(--color-text-secondary)]">{error}</p>
         </div>
       </div>
@@ -53,7 +55,7 @@ export default function SectorList() {
 
   return (
     <div className="space-y-6">
-      <h2 className="text-xl font-bold">미래 성장 섹터</h2>
+      <h2 className="text-xl font-bold">{t("futureGrowthSectors")}</h2>
       {sectors.map((sector) => (
         <div
           key={sector.name}

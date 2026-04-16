@@ -19,14 +19,14 @@ export default function AnalysisDashboard({ ticker }: AnalysisDashboardProps) {
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const { t, lang } = useLanguage();
+  const { t } = useLanguage();
 
   const recommendationLabels: Record<string, string> = {
     strong_buy: t("strongBuy"),
-    buy: lang === "ko" ? "매수" : "Buy",
-    hold: lang === "ko" ? "보유" : "Hold",
-    sell: lang === "ko" ? "매도" : "Sell",
-    strong_sell: lang === "ko" ? "강력 매도" : "Strong Sell",
+    buy: t("buy"),
+    hold: t("holdPosition"),
+    sell: t("sell"),
+    strong_sell: t("strongSell"),
   };
 
   useEffect(() => {
@@ -95,26 +95,26 @@ export default function AnalysisDashboard({ ticker }: AnalysisDashboardProps) {
           <IndicatorRow
             label="RSI"
             value={ind.rsi.toFixed(1)}
-            interpretation={ind.rsi > 70 ? (lang === "ko" ? "과매수" : "Overbought") : ind.rsi < 30 ? (lang === "ko" ? "과매도" : "Oversold") : (lang === "ko" ? "중립" : "Neutral")}
+            interpretation={ind.rsi > 70 ? t("overbought") : ind.rsi < 30 ? t("oversold") : t("neutral")}
           />
         )}
         {ind.macd != null && macdSignal != null && (
           <IndicatorRow
             label="MACD"
             value={`${ind.macd.toFixed(2)} / ${macdSignal.toFixed(2)}`}
-            interpretation={ind.macd > macdSignal ? (lang === "ko" ? "상승 모멘텀" : "Bullish") : (lang === "ko" ? "하락 모멘텀" : "Bearish")}
+            interpretation={ind.macd > macdSignal ? t("bullishMomentum") : t("bearishMomentum")}
           />
         )}
         {bollingerLower != null && bollingerUpper != null && (
           <IndicatorRow
-            label={lang === "ko" ? "볼린저 밴드" : "Bollinger"}
+            label={t("bollingerBands")}
             value={`${bollingerLower.toFixed(1)} - ${bollingerUpper.toFixed(1)}`}
-            interpretation={`${lang === "ko" ? "중심" : "Mid"}: ${bollingerMiddle?.toFixed(1) ?? "N/A"}`}
+            interpretation={`${t("bollingerMid")}: ${bollingerMiddle?.toFixed(1) ?? "N/A"}`}
           />
         )}
         {sma20 != null && (
           <IndicatorRow
-            label={lang === "ko" ? "이동평균" : "SMA"}
+            label={t("movingAverage")}
             value={`SMA20: ${sma20.toFixed(1)}`}
             interpretation={`SMA50: ${sma50?.toFixed(1) ?? "N/A"}`}
           />

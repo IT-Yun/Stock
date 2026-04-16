@@ -115,6 +115,35 @@ class NewsCrawlerService:
         except Exception:
             return []
 
+    @staticmethod
+    def crawl_naver_finance_news(stock_code: str, count: int = 15) -> list[NewsArticle]:
+        """
+        Crawl stock-SPECIFIC news from Naver Finance item news page.
+        Every article is guaranteed to be about this stock — no relevance filtering needed.
+        Uses NaverFinanceService as the data source.
+        """
+        cache_key = f"naver_finance_news:{stock_code}"
+        cached = _get_cached(cache_key)
+        if cached is not None:
+            return cached
+
+        try:
+            from services.naver_finance import NaverFinanceService
+            raw = NaverFinanceService.fetch_stock_news(stock_code, count=count)
+            articles = []
+            for item in raw:
+                articles.append(NewsArticle(
+                    title=item.get("title", ""),
+                    url=item.get("url", ""),
+                    source=item.get("source", "네이버 금융"),
+                    published_at=item.get("date"),
+                    summary=None,
+                ))
+            _set_cached(cache_key, articles)
+            return articles
+        except Exception:
+            return []
+
     # Mapping Korean keywords → English equivalents for dual-language search
     KEYWORD_EN_MAP: dict[str, str] = {
         "반도체": "semiconductor AI chip",
@@ -129,13 +158,21 @@ class NewsCrawlerService:
 
     @staticmethod
     def search_news(keyword: str) -> list[NewsArticle]:
-        """Aggregate news from configured sources for a keyword."""
+        """Aggregate news from configured sources for a keyword.
+        For Korean stock codes (6-digit), prioritizes Naver Finance stock-specific news.
+        """
         cache_key = f"search:{keyword}"
         cached = _get_cached(cache_key)
         if cached is not None:
             return cached
 
         articles: list[NewsArticle] = []
+
+        # If keyword looks like a Korean stock code, use Naver Finance stock news first
+        stock_code = re.sub(r"\.(KS|KQ)$", "", keyword.strip())
+        if re.match(r"^\d{6}$", stock_code):
+            nf_articles = NewsCrawlerService.crawl_naver_finance_news(stock_code)
+            articles.extend(nf_articles)
 
         sources = {source.strip().lower() for source in settings.NEWS_SOURCES if source.strip()}
 

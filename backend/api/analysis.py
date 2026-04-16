@@ -1754,7 +1754,7 @@ _KRX_INDUSTRY_MAP: dict[str, dict] = {
 def _fetch_stock_industry(ticker: str) -> dict:
     """
     Actively fetch industry/sector info for a stock when yfinance is empty.
-    Korean stocks: check static map first, then scrape Naver Finance.
+    Korean stocks: static map → NaverFinanceService.fetch_company_profile() (single HTTP).
     US stocks: scrape Yahoo Finance summary page.
     Returns dict with keys: industry, sector, name, market_cap.
     """
@@ -1776,44 +1776,19 @@ def _fetch_stock_industry(ticker: str) -> dict:
             return result
 
     if is_krx:
+        # Delegate to NaverFinanceService — single HTTP request for all data
         code = ticker.split(".")[0]
         try:
-            url = f"https://finance.naver.com/item/main.naver?code={code}"
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-            with limit_http():
-                r = requests.get(url, headers=headers, timeout=8)
-            if r.status_code == 200:
-                soup = BeautifulSoup(r.text, "html.parser")
-                # 종목명
-                name_el = soup.select_one("div.wrap_company h2 a")
-                if name_el:
-                    result["name"] = name_el.get_text(strip=True)
-                # 업종 (sector category)
-                blind_els = soup.select("div.section div.sub_section")
-                for section in blind_els:
-                    text = section.get_text()
-                    if "업종" in text:
-                        a_tag = section.select_one("a")
-                        if a_tag:
-                            result["industry"] = a_tag.get_text(strip=True)
-                            break
-                # Also check the "belongs to" category link
-                category_el = soup.select_one("div.trade_compare em a")
-                if category_el:
-                    result["industry"] = category_el.get_text(strip=True)
-                # Try 종목 프로필 for more detail
-                profile_url = f"https://finance.naver.com/item/coinfo.naver?code={code}"
-                with limit_http():
-                    r2 = requests.get(profile_url, headers=headers, timeout=8)
-                if r2.status_code == 200:
-                    soup2 = BeautifulSoup(r2.text, "html.parser")
-                    for td in soup2.select("td"):
-                        t = td.get_text(strip=True)
-                        if "업종" in t:
-                            next_td = td.find_next_sibling("td")
-                            if next_td:
-                                result["industry"] = next_td.get_text(strip=True)
-                                break
+            from services.naver_finance import NaverFinanceService
+            profile = NaverFinanceService.fetch_company_profile(code)
+            if profile.get("name"):
+                result["name"] = profile["name"]
+            if profile.get("industry"):
+                result["industry"] = profile["industry"]
+            if profile.get("market_cap_억"):
+                result["market_cap"] = profile["market_cap_억"] * 100_000_000  # 억→원
+            if profile.get("business_summary"):
+                result["business_summary"] = profile["business_summary"]
         except Exception:
             pass
     else:
@@ -1847,7 +1822,587 @@ def _fetch_stock_industry(ticker: str) -> dict:
     return result
 
 
-_AI_CHECKLIST_CACHE: dict[str, tuple[float, list[dict]]] = {}
+# ═══════════════════════════════════════════════════════════
+# 6-Phase Analysis Pipeline
+# Phase 1: Identify stock → Phase 2: Verify company → Phase 3: Collect news
+# Phase 4: Collect data → Phase 5: Gemini AI verify → Phase 6: Finalize
+# ═══════════════════════════════════════════════════════════
+
+
+def _phase1_identify_stock(ticker: str) -> dict:
+    """
+    Phase 1: Identify what company this is.
+    KRX → NaverFinanceService.fetch_company_profile() as PRIMARY
+    US → get_yf_info() as primary
+    Returns: {name, industry, sector, market_cap, is_krx, code, per, pbr, roe, ...}
+    """
+    is_krx = ticker.endswith(".KS") or ticker.endswith(".KQ")
+    result = {"ticker": ticker, "is_krx": is_krx}
+
+    if is_krx:
+        code = ticker.split(".")[0]
+        result["code"] = code
+        try:
+            from services.naver_finance import NaverFinanceService
+            # Primary: Naver Pay Securities JSON API (clean, fast)
+            integ = NaverFinanceService.fetch_stock_integration(code)
+            if integ and len(integ) > 2:
+                result.update(integ)
+            # Supplement with HTML profile for business_summary, industry
+            profile = NaverFinanceService.fetch_company_profile(code)
+            if profile:
+                for k, v in profile.items():
+                    if k not in result or result[k] is None:
+                        result[k] = v
+        except Exception:
+            pass
+        # Supplement with yfinance if needed
+        if not result.get("name") or not result.get("industry"):
+            try:
+                info = get_yf_info(ticker)
+                if info:
+                    if not result.get("name"):
+                        result["name"] = info.get("shortName") or info.get("longName") or ticker
+                    if not result.get("industry"):
+                        result["industry"] = info.get("industry", "")
+                    if not result.get("sector"):
+                        result["sector"] = info.get("sector", "")
+                    result["_yf_info"] = info
+            except Exception:
+                pass
+    else:
+        # US stocks: yfinance primary
+        try:
+            info = get_yf_info(ticker)
+            if info and len(info) > 3:
+                result["name"] = info.get("shortName") or info.get("longName") or ticker
+                result["industry"] = info.get("industry", "")
+                result["sector"] = info.get("sector", "")
+                result["market_cap"] = info.get("marketCap", 0)
+                result["profit_margin"] = info.get("profitMargins")
+                result["revenue_growth"] = info.get("revenueGrowth")
+                result["_yf_info"] = info
+            else:
+                result["name"] = ticker
+                result["_yf_info"] = info or {}
+        except Exception:
+            result["name"] = ticker
+            result["_yf_info"] = {}
+
+    return result
+
+
+def _phase2_verify_company(ticker: str, phase1: dict) -> dict:
+    """
+    Phase 2: Verify and enrich company identity.
+    Cross-references with static maps and alternative sources.
+    """
+    verified = dict(phase1)
+    is_krx = verified.get("is_krx", False)
+
+    if is_krx:
+        code = verified.get("code", ticker.split(".")[0])
+        # Cross-check with _KRX_INDUSTRY_MAP
+        static = _KRX_INDUSTRY_MAP.get(code)
+        if static:
+            if not verified.get("name"):
+                verified["name"] = static.get("name", ticker)
+            if not verified.get("industry"):
+                verified["industry"] = static.get("industry", "")
+    else:
+        # US: supplement with _fetch_stock_industry if needed
+        if not verified.get("industry"):
+            fetched = _fetch_stock_industry(ticker)
+            if fetched:
+                verified.update({k: v for k, v in fetched.items() if not verified.get(k)})
+
+    # Infer sector_id
+    info = verified.get("_yf_info") or {}
+    if not info.get("industry") and verified.get("industry"):
+        info["industry"] = verified["industry"]
+    if not info.get("shortName") and verified.get("name"):
+        info["shortName"] = verified["name"]
+    verified["sector_id"] = _infer_sector_id_from_profile(ticker, info=info)
+
+    return verified
+
+
+def _phase3_collect_news(ticker: str, company_info: dict) -> dict:
+    """
+    Phase 3: Collect stock-specific news.
+    KRX → Naver Finance stock news (100% relevant) + general search
+    US → general search (existing)
+    """
+    is_krx = company_info.get("is_krx", False)
+    info = company_info.get("_yf_info") or {}
+    sector_id = company_info.get("sector_id")
+    company_name = company_info.get("name", ticker)
+
+    naver_finance_articles = []
+    general_articles = []
+
+    # KRX: get stock-specific news from Naver Finance
+    if is_krx:
+        code = company_info.get("code", ticker.split(".")[0])
+        try:
+            from services.naver_finance import NaverFinanceService
+            raw = NaverFinanceService.fetch_stock_news(code, count=15)
+            for item in raw:
+                naver_finance_articles.append({
+                    "title": item.get("title", ""),
+                    "source": item.get("source", "네이버 금융"),
+                    "published_at": item.get("date"),
+                    "url": item.get("url", ""),
+                    "relevance_score": 10.0,  # stock-specific = highest relevance
+                })
+        except Exception:
+            pass
+
+    # General news (Naver search + Google RSS) — same as existing
+    try:
+        general_articles = _extract_live_impact_news(ticker, info=info, sector_id=sector_id)
+    except Exception:
+        pass
+
+    # Merge: Naver Finance news first (higher relevance), then general
+    all_news = naver_finance_articles + general_articles
+
+    # Deduplicate by title
+    seen = set()
+    unique = []
+    for art in all_news:
+        title = art.get("title", "")
+        if title and title not in seen:
+            seen.add(title)
+            unique.append(art)
+
+    # Build headlines for Gemini
+    headlines = [art["title"] for art in unique[:15] if art.get("title")]
+
+    # Simple sentiment count
+    pos = sum(1 for a in unique[:10] if a.get("impact_direction") == "positive")
+    neg = sum(1 for a in unique[:10] if a.get("impact_direction") == "negative")
+    if pos > neg * 2:
+        sentiment = "매우 긍정적"
+    elif pos > neg:
+        sentiment = "긍정적"
+    elif neg > pos * 2:
+        sentiment = "매우 부정적"
+    elif neg > pos:
+        sentiment = "부정적"
+    else:
+        sentiment = "중립"
+
+    return {
+        "verified_news": unique[:15],
+        "naver_finance_count": len(naver_finance_articles),
+        "general_count": len(general_articles),
+        "news_headlines": headlines,
+        "news_sentiment": sentiment,
+    }
+
+
+def _phase4_collect_data(ticker: str, company_info: dict) -> dict:
+    """
+    Phase 4: Fetch all quantitative data in parallel.
+    Fundamentals, commodity histories, stock price history, preliminary earnings, research.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    info = company_info.get("_yf_info") or {}
+    is_krx = company_info.get("is_krx", False)
+
+    # Earnings data from multiple sources
+    alt_data = {}
+    try:
+        alt_data = fetch_fundamentals(ticker)
+    except Exception:
+        pass
+
+    # yfinance financials
+    try:
+        qf, qbs = get_yf_financials(ticker)
+        stock_stub = type("_S", (), {"quarterly_financials": qf, "quarterly_balance_sheet": qbs})()
+        earnings_fallback = _derive_earnings_fallbacks(stock_stub)
+    except Exception:
+        earnings_fallback = {}
+        stock_stub = type("_S", (), {"quarterly_financials": pd.DataFrame(), "quarterly_balance_sheet": pd.DataFrame()})()
+
+    def _pick(info_key, fb_key, alt_key=None):
+        v = info.get(info_key)
+        if v is not None:
+            return v
+        v = earnings_fallback.get(fb_key)
+        if v is not None:
+            return v
+        return alt_data.get(alt_key or fb_key)
+
+    earnings_data = {
+        "revenue_growth": _pick("revenueGrowth", "revenue_growth"),
+        "earnings_growth": _pick("earningsGrowth", "earnings_growth"),
+        "profit_margin": _pick("profitMargins", "profit_margin"),
+        "operating_margin": _pick("operatingMargins", "operating_margin"),
+        "roe": _pick("returnOnEquity", "roe"),
+        "dividend_yield": _pick("dividendYield", "dividend_yield"),
+        "price_to_book": _pick("priceToBook", "price_to_book"),
+        "pe_ratio": _pick("trailingPE", "pe_ratio"),
+        "forward_pe": _pick("forwardPE", "forward_pe"),
+    }
+
+    # Stock history
+    stock_hist = pd.DataFrame()
+    try:
+        with limit_yfinance():
+            stock_hist = StockDataService.get_stock_history(ticker, period="1y")
+    except Exception:
+        pass
+
+    # Preliminary earnings
+    company_name = company_info.get("name") or info.get("shortName") or ticker
+    preliminary_earnings = {}
+    try:
+        preliminary_earnings = NewsCrawlerService.crawl_preliminary_earnings(company_name, ticker)
+    except Exception:
+        pass
+
+    # Research reports
+    research = {}
+    try:
+        research = fetch_all_research(ticker)
+    except Exception:
+        pass
+
+    # KRX: investor trend (수급) + financials from Naver Pay API
+    investor_trend = {}
+    npay_financials = {}
+    if is_krx:
+        code = company_info.get("code", ticker.split(".")[0])
+        try:
+            from services.naver_finance import NaverFinanceService
+            investor_trend = NaverFinanceService.fetch_investor_trend(code)
+            npay_financials = NaverFinanceService.fetch_financials(code, "annual")
+        except Exception:
+            pass
+
+    return {
+        "earnings_data": earnings_data,
+        "alt_data": alt_data,
+        "stock_hist": stock_hist,
+        "stock_stub": stock_stub,
+        "earnings_fallback": earnings_fallback,
+        "preliminary_earnings": preliminary_earnings,
+        "research": research,
+        "info": info,
+        "investor_trend": investor_trend,
+        "npay_financials": npay_financials,
+    }
+
+
+def _phase5_gemini_verify(
+    ticker: str,
+    company_info: dict,
+    draft_sources: list[dict],
+    news_result: dict,
+    data_result: dict,
+) -> dict:
+    """
+    Phase 5: Enhanced Gemini AI verification.
+    Validates checklist AND generates investment thesis, key risks, news alignment.
+    """
+    api_key = settings.GEMINI_API_KEY
+    name = company_info.get("name", ticker)
+    industry = company_info.get("industry", "")
+    sector = company_info.get("sector", "")
+    sector_id = company_info.get("sector_id", "")
+    business_summary = company_info.get("business_summary", "")
+    is_profitable = (company_info.get("profit_margin") or 0) > 0
+    profit_margin = company_info.get("profit_margin")
+    revenue_growth = company_info.get("revenue_growth")
+    market_cap = company_info.get("market_cap") or company_info.get("_yf_info", {}).get("marketCap", 0) or 0
+    if company_info.get("market_cap_억"):
+        market_cap = company_info["market_cap_억"] * 100_000_000
+
+    # Fallback: use old _ai_validate_checklist for just checklist
+    default_result = {
+        "validated_sources": draft_sources,
+        "investment_thesis": "",
+        "key_risks": [],
+        "news_alignment": "insufficient",
+        "ai_confidence": 0,
+    }
+
+    if not api_key:
+        return default_result
+
+    cache_key = f"ai-verify:{ticker}"
+    cached = _AI_CHECKLIST_CACHE.get(cache_key)
+    if cached and time.time() - cached[0] < _AI_CHECKLIST_TTL:
+        return cached[1]
+
+    # Build concise draft description
+    draft_desc = []
+    for i, src in enumerate(draft_sources):
+        item_type = src.get("type", "")
+        if item_type == "commodity":
+            draft_desc.append(f"{i}: {src.get('name','')} (symbol:{src.get('symbol','')}, 방향:{src.get('positive_if','')}, 가중치:{src.get('weight',0)})")
+        else:
+            draft_desc.append(f"{i}: {src.get('name','')} (metric:{src.get('metric','')}, 기준:{src.get('threshold','')}, 가중치:{src.get('weight',0)})")
+
+    # News section
+    headlines = news_result.get("news_headlines", [])[:10]
+    news_section = "\n".join(f"- {h}" for h in headlines) if headlines else "최근 뉴스 없음"
+    news_sentiment = news_result.get("news_sentiment", "중립")
+
+    # Research section
+    research = data_result.get("research", {})
+    analyst_reports = research.get("analyst_reports", [])[:5]
+    research_section = ""
+    if analyst_reports:
+        for rpt in analyst_reports:
+            tp = f"목표가 {rpt.get('target_price', 'N/A'):,}원" if rpt.get("target_price") else ""
+            research_section += f"- [{rpt.get('broker','')}] {rpt.get('title','')} ({rpt.get('opinion','')}) {tp}\n"
+    else:
+        research_section = "애널리스트 리포트 없음"
+
+    profit_desc = "흑자" if is_profitable else "적자"
+    margin_str = f"{profit_margin*100:.1f}%" if profit_margin is not None else "N/A"
+    growth_str = f"{revenue_growth*100:.1f}%" if revenue_growth is not None else "N/A"
+    if market_cap > 1e12:
+        mcap_str = f"{market_cap/1e12:.1f}조원"
+    elif market_cap > 1e8:
+        mcap_str = f"{market_cap/1e8:.0f}억원"
+    elif market_cap > 1e9:
+        mcap_str = f"${market_cap/1e9:.1f}B"
+    elif market_cap > 1e6:
+        mcap_str = f"${market_cap/1e6:.0f}M"
+    else:
+        mcap_str = "N/A"
+
+    business_desc = f"\n- 사업 개요: {business_summary}" if business_summary else ""
+
+    # ── Build consensus section ──
+    consensus_section = ""
+    ct = company_info.get("consensus_target_price")
+    co = company_info.get("consensus_opinion")
+    cp = company_info.get("current_price")
+    if ct and cp:
+        upside = (ct - cp) / cp * 100
+        consensus_section = f"\n## 컨센서스\n- 목표가: {ct:,.0f}원 (현재가 대비 {upside:+.1f}%)\n- 투자의견: {co or 'N/A'}"
+    elif ct:
+        consensus_section = f"\n## 컨센서스\n- 목표가: {ct:,.0f}원\n- 투자의견: {co or 'N/A'}"
+
+    # ── Build investor flow section ──
+    investor_section = ""
+    inv_trend = data_result.get("investor_trend", {})
+    inv_summary = inv_trend.get("summary")
+    if inv_summary:
+        f5 = inv_summary.get("foreign_net_5d", 0)
+        i5 = inv_summary.get("institution_net_5d", 0)
+        investor_section = f"\n## 투자자 수급 (최근 5일)\n- 외국인: {f5:+,.0f}주 ({'순매수' if f5 > 0 else '순매도'})\n- 기관: {i5:+,.0f}주 ({'순매수' if i5 > 0 else '순매도'})"
+        fh = company_info.get("foreign_ownership_pct")
+        if fh:
+            investor_section += f"\n- 외인 보유율: {fh:.1f}%"
+
+    # ── Build peers section ──
+    peers_section = ""
+    peers = company_info.get("peers", [])
+    if peers:
+        peers_section = "\n## 동종업종 비교"
+        for p in peers[:5]:
+            chg = p.get("change_pct")
+            chg_str = f" ({chg:+.1f}%)" if chg is not None else ""
+            peers_section += f"\n- {p.get('name','')} ({p.get('code','')}) {p.get('price',0):,.0f}원{chg_str}"
+
+    # ── Build financials section ──
+    fin_section = ""
+    npay_fin = data_result.get("npay_financials", {})
+    if npay_fin.get("revenue"):
+        fin_section = "\n## 연간 재무제표 (억원)"
+        periods = npay_fin.get("periods", [])
+        for p in periods:
+            key = p["key"]
+            consensus_mark = " (E)" if p.get("is_consensus") else ""
+            rev = (npay_fin.get("revenue") or {}).get(key)
+            op = (npay_fin.get("operating_profit") or {}).get(key)
+            ni = (npay_fin.get("net_income") or {}).get(key)
+            rev_str = f"매출 {rev:,.0f}" if rev else ""
+            op_str = f"영업이익 {op:,.0f}" if op else ""
+            ni_str = f"순이익 {ni:,.0f}" if ni else ""
+            fin_section += f"\n- {p['title']}{consensus_mark}: {rev_str} / {op_str} / {ni_str}"
+        rg = npay_fin.get("revenue_growth")
+        eg = npay_fin.get("earnings_growth")
+        crg = npay_fin.get("consensus_revenue_growth")
+        if rg is not None:
+            fin_section += f"\n- 매출 성장률: {rg*100:.1f}%"
+        if eg is not None:
+            fin_section += f"\n- 순이익 성장률: {eg*100:.1f}%"
+        if crg is not None:
+            fin_section += f"\n- 컨센서스 매출 성장률 (다음해): {crg*100:.1f}%"
+
+    prompt = f"""당신은 주식 투자 분석 전문가입니다. 아래 기업을 종합적으로 분석해주세요.
+
+## 기업 정보
+- 종목: {ticker} ({name})
+- 업종: {industry} / 섹터: {sector}
+- 분류 ID: {sector_id}
+- 시가총액: {mcap_str}
+- 수익성: {profit_desc} (이익률: {margin_str})
+- 매출성장률: {growth_str}{business_desc}
+{consensus_section}
+{investor_section}
+{fin_section}
+{peers_section}
+
+## 최근 뉴스 (검증됨, 감성: {news_sentiment})
+{news_section}
+
+## 애널리스트 리포트
+{research_section}
+
+## 현재 체크리스트 초안
+{chr(10).join(draft_desc)}
+
+## 작업 1: 체크리스트 검증
+각 항목에 대해:
+1. 이 기업의 실제 사업과 **논리적으로 직접 연결**되는지 판단
+2. 관련 없는 항목 제거 (예: 원자력 기업에 유가, 소프트웨어 기업에 금가격 등)
+3. 빠진 핵심 항목이 있으면 추가 제안
+4. 기업 단계(스타트업/성숙기업)에 맞게 기준값 조정
+
+## 작업 2: 투자 논점 (3-4문장)
+이 기업에 지금 투자할 핵심 논점을 작성하세요. 강점, 리스크, 시장 위치를 포함.
+
+## 작업 3: 핵심 리스크 (최대 3개)
+현재 가장 주의해야 할 리스크 요인을 구체적으로 기술.
+
+## 작업 4: 뉴스-데이터 정합성
+뉴스 흐름이 재무 데이터와 일치하는지 판단. (aligned/contradictory/insufficient)
+
+## 응답 형식 (JSON만 출력, 설명 없이)
+```json
+{{
+  "checklist": {{
+    "keep": [0, 2, 3],
+    "remove": [{{"index": 1, "reason": "원자력 기업에 유가는 무관"}}],
+    "adjust": [{{"index": 3, "weight": 60, "threshold": 0.0, "reason": "적자기업이므로 기준 하향"}}],
+    "add": [
+      {{"name": "추가할 항목명", "type": "commodity", "symbol": "URA", "positive_if": "up", "weight": 85, "thesis": "왜 중요한지", "window": "향후 1~3개월"}},
+      {{"name": "추가할 항목명", "type": "earnings_metric", "metric": "revenue_growth", "positive_if": "above", "threshold": 0.05, "weight": 80, "thesis": "왜 중요한지", "window": "향후 1~2분기"}}
+    ]
+  }},
+  "investment_thesis": "이 기업에 대한 투자 논점 3-4문장...",
+  "key_risks": ["리스크1", "리스크2", "리스크3"],
+  "news_alignment": "aligned",
+  "confidence": 0.85
+}}
+```"""
+
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+        resp = requests.post(url, json={
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": 0.2,
+                "maxOutputTokens": 3000,
+                "thinkingConfig": {"thinkingBudget": 1024},
+            },
+        }, timeout=30)
+
+        if resp.status_code != 200:
+            return default_result
+
+        data = resp.json()
+        text = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[-1].get("text", "")
+
+        # Extract JSON from response
+        json_match = re.search(r'\{[\s\S]*\}', text)
+        if not json_match:
+            return default_result
+        parsed = json.loads(json_match.group())
+
+        # ── Apply checklist decisions ──
+        checklist = parsed.get("checklist", parsed)  # handle both nested and flat format
+        remove_indices = {r["index"] for r in checklist.get("remove", []) if isinstance(r, dict) and "index" in r}
+        adjustments = {a["index"]: a for a in checklist.get("adjust", []) if isinstance(a, dict) and "index" in a}
+
+        keep_raw = checklist.get("keep", [])
+        keep_indices: set[int] | None = None
+        if keep_raw and isinstance(keep_raw, list):
+            keep_indices = set()
+            for k in keep_raw:
+                if isinstance(k, int):
+                    keep_indices.add(k)
+                elif isinstance(k, dict) and "index" in k:
+                    keep_indices.add(k["index"])
+            keep_indices.update(adjustments.keys())
+
+        validated: list[dict] = []
+        for i, src in enumerate(draft_sources):
+            if i in remove_indices:
+                continue
+            if keep_indices is not None and i not in keep_indices:
+                continue
+            if i in adjustments:
+                adj = adjustments[i]
+                if "weight" in adj:
+                    src = {**src, "weight": adj["weight"]}
+                if "threshold" in adj:
+                    src = {**src, "threshold": adj["threshold"]}
+            validated.append(src)
+
+        # Add AI-suggested items
+        VALID_METRICS = {"revenue_growth", "operating_margin", "profit_margin", "roe",
+                         "dividend_yield", "price_to_book", "debt_to_equity"}
+        for item in checklist.get("add", []):
+            if not isinstance(item, dict) or not item.get("name"):
+                continue
+            item_type = item.get("type", "commodity")
+            if item_type == "commodity" and item.get("symbol"):
+                validated.append(
+                    ck(item["name"], "commodity", symbol=item["symbol"],
+                       positive_if=item.get("positive_if", "up"),
+                       weight=min(item.get("weight", 70), 88),
+                       thesis=item.get("thesis", ""), window=item.get("window", "향후 1~3개월"))
+                )
+            elif item_type in ("earnings_metric", "metric", "quantitative") and item.get("metric"):
+                metric = item["metric"]
+                if metric not in VALID_METRICS:
+                    continue
+                validated.append(
+                    ck(item["name"], "earnings_metric", metric=metric,
+                       positive_if=item.get("positive_if", "above"),
+                       threshold=item.get("threshold", 0.05),
+                       weight=min(item.get("weight", 70), 88),
+                       thesis=item.get("thesis", ""), window=item.get("window", "향후 1~2분기"))
+                )
+
+        # Ensure minimum items
+        if len(validated) < 4:
+            core_metrics = {"revenue_growth", "operating_margin", "profit_margin", "roe"}
+            existing = {s.get("metric") for s in validated if s.get("type") == "earnings_metric"}
+            for src in draft_sources:
+                if len(validated) >= 5:
+                    break
+                if src.get("type") == "earnings_metric" and src.get("metric") in core_metrics:
+                    if src.get("metric") not in existing:
+                        validated.append(src)
+                        existing.add(src.get("metric"))
+
+        result = {
+            "validated_sources": validated,
+            "investment_thesis": parsed.get("investment_thesis", ""),
+            "key_risks": parsed.get("key_risks", [])[:3],
+            "news_alignment": parsed.get("news_alignment", "insufficient"),
+            "ai_confidence": min(1.0, max(0, parsed.get("confidence", 0))),
+        }
+
+        _AI_CHECKLIST_CACHE[cache_key] = (time.time(), result)
+        return result
+
+    except Exception:
+        return default_result
+
+
+_AI_CHECKLIST_CACHE: dict[str, tuple[float, object]] = {}
 _AI_CHECKLIST_TTL = 60 * 60 * 12  # 12h cache
 
 
@@ -5267,71 +5822,53 @@ def get_checklist_live(ticker: str) -> dict:
     stale_key = f"checklist-stale:{ticker}"
 
     try:
-        sources = CHECKLIST_SOURCES.get(ticker, CHECKLIST_SOURCES.get(ticker.replace(".KS", "").replace(".KQ", ""), []))
+        # ═══ 6-Phase Analysis Pipeline ═══
+        # Phase 1: Identify stock
+        company_info = _phase1_identify_stock(ticker)
 
-        # Fetch stock data — use GLOBAL CACHE to avoid duplicate yfinance calls
-        info = get_yf_info(ticker)
-        # If info is empty/rate-limited, still proceed with history-based analysis
-        info_available = isinstance(info, dict) and len(info) > 3
-        if not info_available:
-            # Try stale cache first
+        # Phase 2: Verify company
+        company_info = _phase2_verify_company(ticker, company_info)
+        info = company_info.get("_yf_info") or {}
+        if not info or len(info) <= 3:
+            info_available = False
             stale = _ANALYSIS_CACHE.get(stale_key)
-            if stale:
+            if stale and not company_info.get("name"):
                 return stale[1]
-            # Proceed without info — earnings metrics will be empty but commodity items still work
-            info = {"shortName": ticker}
-        sector_id = _infer_sector_id_from_profile(ticker, info=info)
+            if not info:
+                info = {"shortName": company_info.get("name", ticker)}
+        else:
+            info_available = True
+        sector_id = company_info.get("sector_id")
+
+        # Build checklist sources
+        sources = CHECKLIST_SOURCES.get(ticker, CHECKLIST_SOURCES.get(ticker.replace(".KS", "").replace(".KQ", ""), []))
         if not sources:
             sources = _build_dynamic_checklist_sources(ticker, info=info)
-        # Use global cached financials — avoids separate yfinance call
+
+        # Phase 3 & 4: Collect news and data in parallel
+        _phase3_result = {}
+        _phase4_result = {}
         try:
-            qf, qbs = get_yf_financials(ticker)
-            stock = type("_S", (), {"quarterly_financials": qf, "quarterly_balance_sheet": qbs})()
-            earnings_fallback = _derive_earnings_fallbacks(stock)
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                f3 = pool.submit(_phase3_collect_news, ticker, company_info)
+                f4 = pool.submit(_phase4_collect_data, ticker, company_info)
+                _phase3_result = f3.result(timeout=30)
+                _phase4_result = f4.result(timeout=60)
         except Exception:
-            earnings_fallback = {}
+            if not _phase3_result:
+                _phase3_result = {"verified_news": [], "news_headlines": [], "news_sentiment": "중립", "naver_finance_count": 0, "general_count": 0}
+            if not _phase4_result:
+                _phase4_result = _phase4_collect_data(ticker, company_info)
+
+        # Unpack Phase 4 data
+        earnings_data = _phase4_result.get("earnings_data", {})
+        stock_hist = _phase4_result.get("stock_hist", pd.DataFrame())
+        stock = _phase4_result.get("stock_stub")
+        if stock is None:
             stock = type("_S", (), {"quarterly_financials": pd.DataFrame(), "quarterly_balance_sheet": pd.DataFrame()})()
-        # Build earnings_data from 3 sources (priority order):
-        #   1. yfinance stock.info (fastest, but rate-limited on servers)
-        #   2. yfinance quarterly_financials computed fallback
-        #   3. Alternative sources: Naver Finance (KR) / Yahoo web scraping (US)
-        alt_data = {}
-        try:
-            alt_data = fetch_fundamentals(ticker)
-        except Exception:
-            pass
-
-        def _pick(info_key: str, fb_key: str, alt_key: str | None = None):
-            """Pick first non-None value from info → yf fallback → alt source."""
-            v = info.get(info_key)
-            if v is not None:
-                return v
-            v = earnings_fallback.get(fb_key)
-            if v is not None:
-                return v
-            if alt_key:
-                return alt_data.get(alt_key)
-            return alt_data.get(fb_key)
-
-        earnings_data = {
-            "revenue_growth": _pick("revenueGrowth", "revenue_growth"),
-            "earnings_growth": _pick("earningsGrowth", "earnings_growth"),
-            "profit_margin": _pick("profitMargins", "profit_margin"),
-            "operating_margin": _pick("operatingMargins", "operating_margin"),
-            "roe": _pick("returnOnEquity", "roe"),
-            "dividend_yield": _pick("dividendYield", "dividend_yield"),
-            "price_to_book": _pick("priceToBook", "price_to_book"),
-            "pe_ratio": _pick("trailingPE", "pe_ratio"),
-            "forward_pe": _pick("forwardPE", "forward_pe"),
-        }
-
-        # Fetch stock's own 1-year price history for correlation analysis
-        stock_hist = pd.DataFrame()
-        try:
-            with limit_yfinance():
-                stock_hist = stock.history(period="1y")
-        except Exception:
-            pass
+        preliminary_earnings = _phase4_result.get("preliminary_earnings", {})
+        alt_data = _phase4_result.get("alt_data", {})
+        earnings_fallback = _phase4_result.get("earnings_fallback", {})
 
         # Pre-fetch all commodity data in parallel (1 year for correlation)
         commodity_symbols = list(set(s["symbol"] for s in sources if s["type"] == "commodity"))
@@ -5353,13 +5890,7 @@ def get_checklist_live(ticker: str) -> dict:
                 except Exception:
                     pass
 
-        # Pre-crawl preliminary earnings from news (once per request)
-        company_name = info.get("shortName") or info.get("longName") or ticker
-        preliminary_earnings = {}
-        try:
-            preliminary_earnings = NewsCrawlerService.crawl_preliminary_earnings(company_name, ticker)
-        except Exception:
-            pass
+        company_name = company_info.get("name") or info.get("shortName") or info.get("longName") or ticker
 
         # Normalize stock price to 0-100 scale for overlay on each chart
         stock_overlay = []
@@ -6048,14 +6579,270 @@ def get_checklist_live(ticker: str) -> dict:
                 "catalyst_type": True,
             })
 
+        # ── AUTO-INJECT: Consensus / Investor Flow / Revenue Trend / Peers ──
+        # Works for both KRX (Naver Pay API) and US (Finnhub/yfinance) stocks
+        existing_names = {r["name"] for r in results}
+
+        def _inject_item(name: str, status: str, value, detail: str,
+                         importance: int, score: int, why: str, window: str = "향후 1~3개월",
+                         expected_condition: str = "", lead_signal: str = ""):
+            if name in existing_names:
+                return
+            results.append({
+                "name": name,
+                "status": status,
+                "value": value,
+                "detail": detail,
+                "trend_data": [],
+                "stock_overlay": stock_overlay,
+                "correlation": 0.0,
+                "corr_label": "시장 데이터",
+                "thresholds": {},
+                "source": "Naver Pay 증권" if is_krx_ticker else "Finnhub / Yahoo Finance",
+                "importance": importance,
+                "window": window,
+                "why_it_matters": why,
+                "expected_condition": expected_condition,
+                "item_score": max(5, min(95, score)),
+                "lead_signal": lead_signal or ("긍정" if status == "positive" else "부정" if status == "negative" else "중립"),
+            })
+
+        # 1) Consensus target price
+        cons_tp = company_info.get("consensus_target_price")
+        cons_opinion = company_info.get("consensus_opinion", "")
+        cur_price = company_info.get("current_price")
+        if not cur_price and stock_overlay:
+            try:
+                cur_price = float(stock_overlay[-1][1]) if stock_overlay[-1][1] else None
+            except Exception:
+                pass
+        if cons_tp and cur_price and cur_price > 0:
+            upside = (cons_tp - cur_price) / cur_price * 100
+            if upside > 30:
+                c_status, c_score = "positive", 82
+            elif upside > 10:
+                c_status, c_score = "positive", 68
+            elif upside > 0:
+                c_status, c_score = "neutral", 55
+            elif upside > -10:
+                c_status, c_score = "neutral", 42
+            else:
+                c_status, c_score = "negative", 25
+            _inject_item(
+                name="컨센서스 목표가",
+                status=c_status,
+                value=f"{cons_tp:,.0f}",
+                detail=f"목표가 {cons_tp:,.0f}원 (현재가 대비 {upside:+.1f}%) · 투자의견: {cons_opinion}",
+                importance=88,
+                score=c_score,
+                why="애널리스트 컨센서스 목표가는 기관의 밸류에이션 판단을 반영합니다. 현재가 대비 괴리율이 클수록 상승 여력이 크다고 볼 수 있습니다.",
+                expected_condition="목표가 하향 조정 또는 투자의견 하향 시 주의",
+                lead_signal=f"목표가 {upside:+.1f}%",
+            )
+
+        # 2) Investor flow (5-day foreign + institutional)
+        inv_trend = _phase4_result.get("investor_trend", {})
+        inv_summary = inv_trend.get("summary")
+        if inv_summary:
+            f5 = inv_summary.get("foreign_net_5d", 0)
+            i5 = inv_summary.get("institution_net_5d", 0)
+            net = f5 + i5
+            if net > 0 and (f5 > 0 or i5 > 0):
+                fl_status = "positive"
+                fl_score = min(80, 55 + int(abs(net) / 500000))
+            elif net < 0 and (f5 < 0 or i5 < 0):
+                fl_status = "negative"
+                fl_score = max(20, 45 - int(abs(net) / 500000))
+            else:
+                fl_status = "neutral"
+                fl_score = 50
+
+            def _fmt_qty(q: float) -> str:
+                if abs(q) >= 1_000_000:
+                    return f"{q/1_000_000:+.1f}M주"
+                if abs(q) >= 1_000:
+                    return f"{q/1_000:+.0f}K주"
+                return f"{q:+.0f}주"
+
+            fh_pct = company_info.get("foreign_ownership_pct")
+            fh_str = f" · 외인보유 {fh_pct:.1f}%" if fh_pct else ""
+            _inject_item(
+                name="수급 동향 (외인·기관)",
+                status=fl_status,
+                value=f"외인 {_fmt_qty(f5)} / 기관 {_fmt_qty(i5)}",
+                detail=f"5일 외국인 {_fmt_qty(f5)}, 기관 {_fmt_qty(i5)}{fh_str}",
+                importance=82,
+                score=fl_score,
+                why="외국인과 기관의 순매수/매도는 스마트머니의 방향성을 나타냅니다. 동시 순매수는 강한 수급 신호입니다.",
+                expected_condition="외인·기관 동반 매도 전환 시 조정 가능성",
+                lead_signal="수급 양호" if fl_status == "positive" else "수급 약화" if fl_status == "negative" else "수급 혼조",
+            )
+
+        # 3) Revenue / earnings growth trend
+        npay_fin = _phase4_result.get("npay_financials", {})
+        rev_growth = npay_fin.get("revenue_growth") or earnings_data.get("revenue_growth")
+        earn_growth = npay_fin.get("earnings_growth") or earnings_data.get("earnings_growth")
+        cons_rev_growth = npay_fin.get("consensus_revenue_growth")
+        if rev_growth is not None or earn_growth is not None:
+            rg = rev_growth or 0
+            eg = earn_growth or 0
+            if rg > 0.15 or eg > 0.2:
+                gr_status, gr_score = "positive", min(85, 60 + int(max(rg, eg) * 100))
+            elif rg > 0 or eg > 0:
+                gr_status, gr_score = "positive", 58
+            elif rg > -0.05 and eg > -0.05:
+                gr_status, gr_score = "neutral", 48
+            else:
+                gr_status, gr_score = "negative", max(15, 40 - int(abs(min(rg, eg)) * 100))
+
+            parts = []
+            if rev_growth is not None:
+                parts.append(f"매출 {rev_growth*100:+.1f}%")
+            if earn_growth is not None:
+                parts.append(f"순이익 {earn_growth*100:+.1f}%")
+            if cons_rev_growth is not None:
+                parts.append(f"다음해 매출 전망 {cons_rev_growth*100:+.1f}%")
+            _inject_item(
+                name="실적 성장 추이",
+                status=gr_status,
+                value=" / ".join(parts),
+                detail=" · ".join(parts),
+                importance=90,
+                score=gr_score,
+                why="매출과 이익의 성장 추세는 기업 가치의 핵심 동인입니다. 컨센서스 대비 실적 서프라이즈가 주가에 가장 큰 영향을 줍니다.",
+                expected_condition="성장률 둔화 또는 컨센서스 하회 시 밸류에이션 조정 가능",
+                window="향후 1~2분기",
+                lead_signal=f"성장 {'+' if rg > 0 else ''}{rg*100:.0f}%",
+            )
+
+        # 4) Peer comparison (동종업종)
+        peers = company_info.get("peers", [])
+        if peers and len(peers) >= 2:
+            peer_changes = [p.get("change_pct") for p in peers if p.get("change_pct") is not None]
+            if peer_changes:
+                avg_chg = sum(peer_changes) / len(peer_changes)
+                if avg_chg > 1:
+                    p_status, p_score = "positive", min(75, 55 + int(avg_chg * 5))
+                elif avg_chg > -1:
+                    p_status, p_score = "neutral", 50
+                else:
+                    p_status, p_score = "negative", max(25, 45 + int(avg_chg * 5))
+                peer_names = [f"{p['name']}({p.get('change_pct',0):+.1f}%)" for p in peers[:4]]
+                _inject_item(
+                    name="동종업종 흐름",
+                    status=p_status,
+                    value=f"업종 평균 {avg_chg:+.1f}%",
+                    detail=" · ".join(peer_names),
+                    importance=65,
+                    score=p_score,
+                    why="동종업종 전반의 흐름이 해당 종목에도 영향을 미칩니다. 업종 전체 상승은 섹터 로테이션 수혜를, 하락은 업종 리스크를 시사합니다.",
+                    expected_condition="업종 디레이팅 또는 경쟁사 악재 전이 시 동반 하락 가능",
+                    lead_signal=f"업종 {avg_chg:+.1f}%",
+                )
+
         # Sort by importance (highest correlation first)
         results.sort(key=lambda r: r.get("importance", 0), reverse=True)
         summary = _build_checklist_summary(results)
         summary["sector_id"] = sector_id
         summary["analysis_mode"] = "prebuilt_top_pick" if _ticker_key(ticker) in TOP_PICK_SECTOR_MAP else "dynamic_live"
         summary["reference_candidates"] = _discover_reference_candidates(ticker, stock_hist, sector_id, sources, commodity_cache)
-        summary["live_impact_news"] = _extract_live_impact_news(ticker, info=info, sector_id=sector_id)
+
+        # Phase 3 news: use Naver Finance stock-specific news if available
+        if _phase3_result.get("verified_news"):
+            summary["live_impact_news"] = _phase3_result["verified_news"][:5]
+        else:
+            summary["live_impact_news"] = _extract_live_impact_news(ticker, info=info, sector_id=sector_id)
+
         summary = _merge_catalysts(ticker, summary)
+
+        # ═══ Phase 5: Gemini AI Verification ═══
+        ai_result = {}
+        try:
+            ai_result = _phase5_gemini_verify(ticker, company_info, sources, _phase3_result, _phase4_result)
+        except Exception:
+            pass
+        if ai_result.get("investment_thesis"):
+            summary["ai_investment_thesis"] = ai_result["investment_thesis"]
+        if ai_result.get("key_risks"):
+            summary["ai_key_risks"] = ai_result["key_risks"]
+        if ai_result.get("news_alignment"):
+            summary["ai_news_alignment"] = ai_result["news_alignment"]
+        if ai_result.get("ai_confidence"):
+            summary["ai_confidence"] = ai_result["ai_confidence"]
+        summary["naver_finance_news_count"] = _phase3_result.get("naver_finance_count", 0)
+
+        # ── Market data for frontend (KRX: Naver Pay API, US: yfinance/Finnhub) ──
+        _cur_price = company_info.get("current_price")
+        if not _cur_price:
+            _cur_price = info.get("currentPrice") or info.get("regularMarketPrice")
+        if not _cur_price and stock_overlay:
+            try:
+                _cur_price = float(stock_overlay[-1][1])
+            except Exception:
+                pass
+
+        # Consensus
+        _cons_tp = company_info.get("consensus_target_price") or info.get("targetMeanPrice")
+        _cons_opinion = company_info.get("consensus_opinion", "")
+        if not _cons_opinion and _cons_tp:
+            rec = info.get("recommendationKey", "")
+            _cons_opinion = {"strong_buy": "적극매수", "buy": "매수", "hold": "중립",
+                             "sell": "매도", "strong_sell": "적극매도"}.get(rec, rec)
+        if _cons_tp and _cur_price and _cur_price > 0:
+            summary["consensus_target_price"] = _cons_tp
+            summary["consensus_opinion"] = _cons_opinion
+            summary["consensus_upside"] = round((_cons_tp - _cur_price) / _cur_price * 100, 1)
+
+        # Peers
+        if company_info.get("peers"):
+            summary["peers"] = company_info["peers"][:5]
+
+        # Investor flow (KRX only — Naver Pay API)
+        inv_trend = _phase4_result.get("investor_trend", {})
+        if inv_trend.get("summary"):
+            summary["investor_flow"] = inv_trend["summary"]
+            summary["investor_flow"]["trend"] = inv_trend.get("trend", [])[:5]
+
+        # 52-week high/low
+        _h52 = company_info.get("high_52w") or info.get("fiftyTwoWeekHigh")
+        _l52 = company_info.get("low_52w") or info.get("fiftyTwoWeekLow")
+        if _h52:
+            summary["high_52w"] = _h52
+        if _l52:
+            summary["low_52w"] = _l52
+
+        # Valuation metrics (uniform for KRX and US)
+        summary["valuation"] = {}
+        for vk, ik, ck in [
+            ("per", "trailingPE", "per"), ("forward_per", "forwardPE", "forward_per"),
+            ("pbr", "priceToBook", "pbr"), ("eps", "trailingEps", "eps"),
+            ("dividend_yield", "dividendYield", "dividend_yield"),
+        ]:
+            v = company_info.get(ck) or info.get(ik)
+            if v is not None:
+                summary["valuation"][vk] = v
+
+        # Annual financials
+        npay_fin = _phase4_result.get("npay_financials", {})
+        if npay_fin.get("revenue"):
+            summary["annual_financials"] = {
+                "periods": npay_fin.get("periods", []),
+                "revenue": npay_fin.get("revenue"),
+                "operating_profit": npay_fin.get("operating_profit"),
+                "net_income": npay_fin.get("net_income"),
+                "revenue_growth": npay_fin.get("revenue_growth"),
+                "earnings_growth": npay_fin.get("earnings_growth"),
+                "consensus_revenue_growth": npay_fin.get("consensus_revenue_growth"),
+            }
+        elif not is_krx_ticker:
+            # US stocks: build from earnings_data
+            ed = _phase4_result.get("earnings_data", {})
+            if ed.get("revenue_growth") is not None or ed.get("earnings_growth") is not None:
+                summary["annual_financials"] = {
+                    "revenue_growth": ed.get("revenue_growth"),
+                    "earnings_growth": ed.get("earnings_growth"),
+                }
+
         response = {
             "ticker": ticker.upper(),
             "checklist": results,
@@ -6101,37 +6888,69 @@ def search_stocks(query: str) -> dict:
 
     results: list[dict] = []
     seen = set()
-    try:
-        lookup = yf.Search(normalized_query, max_results=12)
-        quotes = getattr(lookup, "quotes", []) or []
-        for quote in quotes:
-            if str(quote.get("quoteType") or quote.get("typeDisp") or "").upper() != "EQUITY":
-                continue
-            symbol = _ticker_key(str(quote.get("symbol") or ""))
-            if not symbol or symbol in seen:
-                continue
-            exchange = str(quote.get("exchange") or "")
-            if exchange and exchange not in {"NMS", "NGM", "NYQ", "ASE", "PCX", "OQX", "KSC", "KOE", "KOS", "NCM"}:
-                continue
-            seen.add(symbol)
-            sector_id = _infer_sector_id_from_profile(symbol, quote=quote)
-            results.append({
-                "ticker": symbol,
-                "name": quote.get("shortname") or quote.get("longname") or symbol,
-                "exchange": exchange,
-                "flag": "KR" if symbol.endswith(".KS") or symbol.endswith(".KQ") else "US",
-                "sector_id": sector_id,
-                "sector_name": SECTOR_NAME_MAP.get(sector_id or "", "실시간 분석"),
-                "is_top_pick": symbol in TOP_PICK_SECTOR_MAP,
-                "analysis_mode": "prebuilt_top_pick" if symbol in TOP_PICK_SECTOR_MAP else "dynamic_live",
-            })
-            if len(results) >= 8:
-                break
-    except Exception:
-        pass
 
-    # Korean stock fallback: yfinance search is weak for Korean names, so use cached KRX listing.
-    if len(results) < 8 and any("\uac00" <= ch <= "\ud7a3" for ch in normalized_query):
+    is_korean_query = any("\uac00" <= ch <= "\ud7a3" for ch in normalized_query)
+
+    # Korean query → Naver Finance search FIRST (much better than yfinance for Korean names)
+    if is_korean_query:
+        try:
+            from services.naver_finance import NaverFinanceService
+            naver_results = NaverFinanceService.search_stocks(normalized_query)
+            for nr in naver_results:
+                suffix = ".KS" if nr.get("market") == "KOSPI" else ".KQ"
+                symbol = nr["code"] + suffix
+                if symbol in seen:
+                    continue
+                seen.add(symbol)
+                sector_id = _infer_sector_id_from_profile(symbol, info={"shortName": nr["name"]})
+                results.append({
+                    "ticker": symbol,
+                    "name": nr["name"],
+                    "exchange": "KSC" if suffix == ".KS" else "KOE",
+                    "flag": "KR",
+                    "sector_id": sector_id,
+                    "sector_name": SECTOR_NAME_MAP.get(sector_id or "", "실시간 분석"),
+                    "is_top_pick": symbol in TOP_PICK_SECTOR_MAP,
+                    "analysis_mode": "prebuilt_top_pick" if symbol in TOP_PICK_SECTOR_MAP else "dynamic_live",
+                })
+                if len(results) >= 8:
+                    break
+        except Exception:
+            pass
+
+    # yfinance search (primary for English queries, fallback for Korean)
+    if len(results) < 8:
+        try:
+            lookup = yf.Search(normalized_query, max_results=12)
+            quotes = getattr(lookup, "quotes", []) or []
+            for quote in quotes:
+                if str(quote.get("quoteType") or quote.get("typeDisp") or "").upper() != "EQUITY":
+                    continue
+                symbol = _ticker_key(str(quote.get("symbol") or ""))
+                if not symbol or symbol in seen:
+                    continue
+                exchange = str(quote.get("exchange") or "")
+                if exchange and exchange not in {"NMS", "NGM", "NYQ", "ASE", "PCX", "OQX", "KSC", "KOE", "KOS", "NCM"}:
+                    continue
+                seen.add(symbol)
+                sector_id = _infer_sector_id_from_profile(symbol, quote=quote)
+                results.append({
+                    "ticker": symbol,
+                    "name": quote.get("shortname") or quote.get("longname") or symbol,
+                    "exchange": exchange,
+                    "flag": "KR" if symbol.endswith(".KS") or symbol.endswith(".KQ") else "US",
+                    "sector_id": sector_id,
+                    "sector_name": SECTOR_NAME_MAP.get(sector_id or "", "실시간 분석"),
+                    "is_top_pick": symbol in TOP_PICK_SECTOR_MAP,
+                    "analysis_mode": "prebuilt_top_pick" if symbol in TOP_PICK_SECTOR_MAP else "dynamic_live",
+                })
+                if len(results) >= 8:
+                    break
+        except Exception:
+            pass
+
+    # Korean stock fallback: KRX listing (existing, still useful as last resort)
+    if len(results) < 8 and is_korean_query:
         query_kr = normalized_query.replace(" ", "")
         matched_rows = []
         for row in _get_krx_listing():
@@ -6296,6 +7115,128 @@ def get_top_ranked() -> dict:
 
             price = float(hist["Close"].iloc[-1])
             name = TOP_PICK_NAME_MAP.get(_ticker_key(ticker), "")
+
+            # ── Try to use cached checklist-live score + compute combined 종합점수 ──
+            cl_cached = _ANALYSIS_CACHE.get(f"checklist-live:{ticker}")
+            cl_score = None
+            if cl_cached and isinstance(cl_cached, tuple) and len(cl_cached) >= 2:
+                cl_data = cl_cached[1]
+                if isinstance(cl_data, dict):
+                    cl_score = cl_data.get("summary", {}).get("score")
+
+            if cl_score is not None:
+                if not name:
+                    name = ticker
+                sector_id = TOP_PICK_SECTOR_MAP.get(ticker, "")
+                ret_1m = 0
+                rsi = None
+                if len(hist) >= 21:
+                    ret_1m = (price - float(hist["Close"].iloc[-21])) / float(hist["Close"].iloc[-21]) * 100
+                if len(hist) >= 14:
+                    delta = hist["Close"].diff()
+                    gain = delta.where(delta > 0, 0).rolling(14).mean()
+                    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+                    rs = gain.iloc[-1] / loss.iloc[-1] if loss.iloc[-1] != 0 else 1
+                    rsi = 100 - (100 / (1 + rs))
+
+                # ── Compute chart/technical score (same logic as frontend analyzeChart) ──
+                chart_score_raw = 0
+                chart_checks = 0
+
+                # RSI
+                if rsi is not None:
+                    chart_checks += 1
+                    if rsi < 30: chart_score_raw += 2
+                    elif rsi < 40: chart_score_raw += 1
+                    elif rsi > 70: chart_score_raw -= 2
+                    elif rsi > 60: chart_score_raw -= 1
+
+                # SMA trend (5d vs 20d)
+                if len(hist) >= 20:
+                    chart_checks += 1
+                    sma5 = float(hist["Close"].iloc[-5:].mean())
+                    sma20 = float(hist["Close"].iloc[-20:].mean())
+                    chart_score_raw += 1 if sma5 > sma20 else -1
+
+                # SMA 20 vs 50
+                if len(hist) >= 50:
+                    chart_checks += 1
+                    sma_20 = float(hist["Close"].rolling(20).mean().iloc[-1])
+                    sma_50 = float(hist["Close"].rolling(50).mean().iloc[-1])
+                    chart_score_raw += 1 if sma_20 > sma_50 else -1
+
+                # Price vs SMA20 distance
+                if len(hist) >= 20:
+                    chart_checks += 1
+                    sma_20 = float(hist["Close"].rolling(20).mean().iloc[-1])
+                    pct_dist = ((price - sma_20) / sma_20) * 100
+                    if pct_dist < -5: chart_score_raw += 1
+                    elif pct_dist > 5: chart_score_raw -= 1
+
+                # Momentum (1mo)
+                if len(hist) >= 21:
+                    chart_checks += 1
+                    price_5d_ago = float(hist["Close"].iloc[-5])
+                    vol_recent = float(hist["Volume"].iloc[-5:].mean()) if "Volume" in hist.columns else 0
+                    vol_prev = float(hist["Volume"].iloc[-10:-5].mean()) if "Volume" in hist.columns and len(hist) >= 10 else 0
+                    price_up = price > price_5d_ago
+                    vol_up = vol_recent > vol_prev * 1.2 if vol_prev > 0 else False
+                    if price_up and vol_up: chart_score_raw += 1
+                    elif not price_up and vol_up: chart_score_raw -= 1
+
+                # Normalize chart score to 0-100
+                chart_norm = chart_score_raw / chart_checks if chart_checks > 0 else 0
+                chart_score100 = round(max(0, min(100, (chart_norm + 1) * 50)))
+
+                # ── Compute fundamentals score from earnings cache ──
+                fund_score100 = 50
+                try:
+                    fund = fetch_fundamentals(ticker)
+                    fund_raw = 0
+                    fund_checks = 0
+                    rg = fund.get("revenue_growth")
+                    if rg is not None:
+                        fund_checks += 1
+                        if rg > 0.2: fund_raw += 2
+                        elif rg > 0: fund_raw += 1
+                        else: fund_raw -= 1
+                    eg = fund.get("earnings_growth")
+                    if eg is not None:
+                        fund_checks += 1
+                        if eg > 0.2: fund_raw += 2
+                        elif eg > 0: fund_raw += 1
+                        else: fund_raw -= 1
+                    pm = fund.get("profit_margin")
+                    if pm is not None:
+                        fund_checks += 1
+                        if pm > 0.2: fund_raw += 1
+                        elif pm < 0: fund_raw -= 2
+                    roe_val = fund.get("roe")
+                    if roe_val is not None:
+                        fund_checks += 1
+                        if roe_val > 0.2: fund_raw += 1
+                        elif roe_val < 0: fund_raw -= 1
+                    if fund_checks > 0:
+                        fn = fund_raw / fund_checks
+                        fund_score100 = round(max(0, min(100, (fn + 1) * 50)))
+                except Exception:
+                    pass
+
+                # ── Combined 종합점수: chart 30% + checklist 45% + fund 25% ──
+                combined = round(chart_score100 * 0.30 + cl_score * 0.45 + fund_score100 * 0.25)
+                combined = max(5, min(98, combined))
+
+                return {
+                    "ticker": ticker,
+                    "name": name,
+                    "price": round(price, 2),
+                    "change_1m": round(ret_1m, 1) if len(hist) >= 21 else None,
+                    "score": combined,
+                    "rsi": round(rsi, 1) if rsi else None,
+                    "sector_id": sector_id,
+                    "sector_name": SECTOR_NAME_MAP.get(sector_id, ""),
+                    "flag": "KR" if ticker.endswith(".KS") or ticker.endswith(".KQ") else "US",
+                }
 
             # Only fall back to cached info name if TOP_PICK_NAME_MAP didn't have it
             if not name:
@@ -6871,18 +7812,61 @@ def get_news_analysis(ticker: str) -> dict:
     info = None
     sector_id = None
     company_name = ticker
+    is_krx = ticker.endswith(".KS") or ticker.endswith(".KQ")
+
+    # Phase 1: Identify company (lightweight)
+    if is_krx:
+        try:
+            from services.naver_finance import NaverFinanceService
+            code = ticker.split(".")[0]
+            profile = NaverFinanceService.fetch_company_profile(code)
+            if profile.get("name"):
+                company_name = profile["name"]
+        except Exception:
+            pass
     try:
         info = get_yf_info(ticker)
         sector_id = _infer_sector_id_from_profile(ticker, info)
-        company_name = str(info.get("shortName") or info.get("longName") or ticker).strip()
+        if company_name == ticker:
+            company_name = str(info.get("shortName") or info.get("longName") or ticker).strip()
     except Exception:
         pass
     if not sector_id:
         sector_id = TOP_PICK_SECTOR_MAP.get(_ticker_key(ticker))
 
-    # Fast: news crawling + sentiment classification
+    # Collect news: Naver Finance stock-specific news (KRX) + general sources
+    naver_finance_news = []
+    if is_krx:
+        try:
+            from services.naver_finance import NaverFinanceService
+            code = ticker.split(".")[0]
+            raw = NaverFinanceService.fetch_stock_news(code, count=10)
+            for item in raw:
+                naver_finance_news.append({
+                    "title": item.get("title", ""),
+                    "source": item.get("source", "네이버 금융"),
+                    "published_at": item.get("date"),
+                    "url": item.get("url", ""),
+                    "impact_score": 8.0,
+                    "impact_direction": "neutral",
+                    "issue_label": "뉴스",
+                    "explanation": "",
+                })
+        except Exception:
+            pass
+
     live_news = _extract_live_impact_news(ticker, info=info, sector_id=sector_id)
     news_drivers = _extract_news_drivers(ticker, info=info, sector_id=sector_id)
+
+    # Merge: Naver Finance news first, then general (deduplicated)
+    if naver_finance_news:
+        seen_titles = {n["title"] for n in naver_finance_news}
+        merged = list(naver_finance_news)
+        for n in live_news:
+            if n.get("title") not in seen_titles:
+                seen_titles.add(n.get("title", ""))
+                merged.append(n)
+        live_news = merged
 
     # Deep analysis for each news item
     deep_articles = []

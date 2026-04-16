@@ -36,21 +36,24 @@ const useIsMobile = () => {
 /* ── Internal analysis engine (user never sees raw indicators) ── */
 
 /** Convert a 0-100 score to label + color. Single source of truth for all verdicts. */
-function scoreToVerdict(score: number): { label: string; color: string; action: string } {
-  if (score >= 80) return { label: "적극 매수", color: "#16a34a", action: "목표 비중 80~100% 투자" };
-  if (score >= 65) return { label: "매수 추천", color: "#22c55e", action: "목표 비중 50~70% 분할 매수" };
-  if (score >= 45) return { label: "관망", color: "#eab308", action: "신규 진입 보류, 기존 보유 유지" };
-  if (score >= 30) return { label: "비중 축소", color: "#ef4444", action: "보유분 30~50% 익절 고려" };
-  return { label: "매도 권고", color: "#dc2626", action: "보유분 전량 정리 검토" };
+type TFn = (key: string) => string;
+function scoreToVerdict(score: number, t?: TFn): { label: string; color: string; action: string } {
+  const tr = t ?? ((k: string) => k);
+  if (score >= 80) return { label: tr("verdictStrongBuy"), color: "#16a34a", action: tr("actionStrongBuy") };
+  if (score >= 65) return { label: tr("verdictBuy"), color: "#22c55e", action: tr("actionBuy") };
+  if (score >= 45) return { label: tr("verdictHold"), color: "#eab308", action: tr("actionHold") };
+  if (score >= 30) return { label: tr("verdictReduce"), color: "#ef4444", action: tr("actionReduce") };
+  return { label: tr("verdictSell"), color: "#dc2626", action: tr("actionSell") };
 }
 
-function analyzeChart(analysis: AnalysisResult | null, chartData: ChartDataPoint[]): {
+function analyzeChart(analysis: AnalysisResult | null, chartData: ChartDataPoint[], t?: TFn): {
   score100: number;
   label: string;
   color: string;
   reason: string;
 } {
-  if (!analysis) return { score100: 50, label: "분석 중", color: "#64748b", reason: "데이터 로딩 중" };
+  const tr = t ?? ((k: string) => k);
+  if (!analysis) return { score100: 50, label: tr("analyzing"), color: "#64748b", reason: tr("dataLoadingMsg") };
   const ind = analysis.indicators;
   const price = chartData.length > 0 ? chartData[chartData.length - 1].close : null;
   let score = 0;
@@ -118,20 +121,21 @@ function analyzeChart(analysis: AnalysisResult | null, chartData: ChartDataPoint
   const score100 = Math.round(Math.max(0, Math.min(100, (norm + 1) * 50)));
 
   const reasons: string[] = [];
-  if (ind.rsi != null) reasons.push(`RSI ${ind.rsi.toFixed(0)}${ind.rsi > 70 ? "(과매수)" : ind.rsi < 30 ? "(과매도)" : ""}`);
-  if (ind.macd != null && ind.macd_signal != null) reasons.push(`MACD ${ind.macd > ind.macd_signal ? "골든" : "데드"}크로스`);
-  if (ind.sma_20 != null && ind.sma_50 != null) reasons.push(`SMA ${ind.sma_20 > ind.sma_50 ? "상승" : "하락"}추세`);
+  if (ind.rsi != null) reasons.push(`RSI ${ind.rsi.toFixed(0)}${ind.rsi > 70 ? `(${tr("overbought")})` : ind.rsi < 30 ? `(${tr("oversold")})` : ""}`);
+  if (ind.macd != null && ind.macd_signal != null) reasons.push(`MACD ${ind.macd > ind.macd_signal ? tr("goldenCross") : tr("deadCross")}`);
+  if (ind.sma_20 != null && ind.sma_50 != null) reasons.push(`SMA ${ind.sma_20 > ind.sma_50 ? tr("uptrendSMA") : tr("downtrendSMA")}`);
 
-  const v = scoreToVerdict(score100);
+  const v = scoreToVerdict(score100, t);
   return { score100, label: v.label, color: v.color, reason: reasons.join(" · ") };
 }
 
-function analyzeFundamentals(earnings: any, patternData: any, checklistLive: any): {
+function analyzeFundamentals(earnings: any, patternData: any, checklistLive: any, t?: TFn): {
   score100: number;
   label: string;
   color: string;
   reason: string;
 } {
+  const tr = t ?? ((k: string) => k);
   // ── PRIMARY: Use checklist score if available (most comprehensive, per-stock analysis) ──
   // The checklist already evaluates earnings, commodities, sector health, and news per stock
   if (checklistLive?.summary?.score != null) {
@@ -147,9 +151,9 @@ function analyzeFundamentals(earnings: any, patternData: any, checklistLive: any
     let earningsBonus = 0;
     if (earnings && !earnings.error) {
       if (earnings.revenue_growth != null) {
-        if (earnings.revenue_growth > 0.2) { earningsBonus += 5; reasons.push(`매출 +${(earnings.revenue_growth * 100).toFixed(0)}%`); }
-        else if (earnings.revenue_growth > 0.05) { earningsBonus += 2; reasons.push(`매출 +${(earnings.revenue_growth * 100).toFixed(0)}%`); }
-        else if (earnings.revenue_growth < -0.05) { earningsBonus -= 5; reasons.push(`매출 ${(earnings.revenue_growth * 100).toFixed(0)}%`); }
+        if (earnings.revenue_growth > 0.2) { earningsBonus += 5; reasons.push(`${tr("revenueShort")} +${(earnings.revenue_growth * 100).toFixed(0)}%`); }
+        else if (earnings.revenue_growth > 0.05) { earningsBonus += 2; reasons.push(`${tr("revenueShort")} +${(earnings.revenue_growth * 100).toFixed(0)}%`); }
+        else if (earnings.revenue_growth < -0.05) { earningsBonus -= 5; reasons.push(`${tr("revenueShort")} ${(earnings.revenue_growth * 100).toFixed(0)}%`); }
       }
       if (earnings.earnings_growth != null) {
         if (earnings.earnings_growth > 0.3) earningsBonus += 4;
@@ -166,29 +170,29 @@ function analyzeFundamentals(earnings: any, patternData: any, checklistLive: any
       }
       if (earnings.profit_margin != null) {
         if (earnings.profit_margin > 0.2) earningsBonus += 2;
-        else if (earnings.profit_margin < 0) { earningsBonus -= 3; reasons.push("순손실 상태"); }
+        else if (earnings.profit_margin < 0) { earningsBonus -= 3; reasons.push(tr("netLossState")); }
       }
     }
 
     // Pattern analysis bonus
     if (patternData?.summary) {
-      if (patternData.summary.up_probability > 65) { earningsBonus += 3; reasons.push(`패턴 상승확률 ${patternData.summary.up_probability}%`); }
-      else if (patternData.summary.up_probability < 35) { earningsBonus -= 3; reasons.push(`패턴 상승확률 ${patternData.summary.up_probability}%`); }
+      if (patternData.summary.up_probability > 65) { earningsBonus += 3; reasons.push(`${tr("patternUpProb")} ${patternData.summary.up_probability}%`); }
+      else if (patternData.summary.up_probability < 35) { earningsBonus -= 3; reasons.push(`${tr("patternUpProb")} ${patternData.summary.up_probability}%`); }
     }
 
     // Combine: checklist score (primary) + earnings/pattern bonus (secondary)
     // Checklist score is 0-100; earningsBonus is small adjustment ±15 max
     const finalScore = Math.round(Math.max(0, Math.min(100, clScore + earningsBonus)));
 
-    if (positives > 0) reasons.push(`핵심지표 ${positives}개 긍정`);
-    if (negatives > 0) reasons.push(`${negatives}개 위험`);
+    if (positives > 0) reasons.push(`${positives} ${tr("keyIndicatorsPositive")}`);
+    if (negatives > 0) reasons.push(`${negatives} ${tr("riskIndicators")}`);
 
-    const v = scoreToVerdict(finalScore);
+    const v = scoreToVerdict(finalScore, t);
     return { score100: finalScore, label: v.label, color: v.color, reason: reasons.join(" · ") };
   }
 
   // ── FALLBACK: earnings-only scoring when checklist not loaded yet ──
-  if (!earnings || earnings.error) return { score100: 50, label: "데이터 없음", color: "#64748b", reason: "" };
+  if (!earnings || earnings.error) return { score100: 50, label: tr("noData"), color: "#64748b", reason: "" };
 
   let score = 0;
   let checks = 0;
@@ -196,9 +200,9 @@ function analyzeFundamentals(earnings: any, patternData: any, checklistLive: any
 
   if (earnings.revenue_growth != null) {
     checks++;
-    if (earnings.revenue_growth > 0.2) { score += 2; reasons.push(`매출 +${(earnings.revenue_growth * 100).toFixed(0)}%`); }
-    else if (earnings.revenue_growth > 0) { score += 1; reasons.push(`매출 +${(earnings.revenue_growth * 100).toFixed(0)}%`); }
-    else { score -= 1; reasons.push(`매출 ${(earnings.revenue_growth * 100).toFixed(0)}%`); }
+    if (earnings.revenue_growth > 0.2) { score += 2; reasons.push(`${tr("revenueShort")} +${(earnings.revenue_growth * 100).toFixed(0)}%`); }
+    else if (earnings.revenue_growth > 0) { score += 1; reasons.push(`${tr("revenueShort")} +${(earnings.revenue_growth * 100).toFixed(0)}%`); }
+    else { score -= 1; reasons.push(`${tr("revenueShort")} ${(earnings.revenue_growth * 100).toFixed(0)}%`); }
   }
   if (earnings.earnings_growth != null) {
     checks++;
@@ -214,7 +218,7 @@ function analyzeFundamentals(earnings: any, patternData: any, checklistLive: any
   if (earnings.profit_margin != null) {
     checks++;
     if (earnings.profit_margin > 0.2) score += 1;
-    else if (earnings.profit_margin < 0) { score -= 2; reasons.push("순손실 상태"); }
+    else if (earnings.profit_margin < 0) { score -= 2; reasons.push(tr("netLossState")); }
   }
   if (earnings.roe != null) {
     checks++;
@@ -223,14 +227,14 @@ function analyzeFundamentals(earnings: any, patternData: any, checklistLive: any
   }
   if (patternData?.summary) {
     checks++;
-    if (patternData.summary.up_probability > 60) { score += 1; reasons.push(`패턴 상승확률 ${patternData.summary.up_probability}%`); }
-    else if (patternData.summary.up_probability < 40) { score -= 1; reasons.push(`패턴 상승확률 ${patternData.summary.up_probability}%`); }
+    if (patternData.summary.up_probability > 60) { score += 1; reasons.push(`${tr("patternUpProb")} ${patternData.summary.up_probability}%`); }
+    else if (patternData.summary.up_probability < 40) { score -= 1; reasons.push(`${tr("patternUpProb")} ${patternData.summary.up_probability}%`); }
   }
 
   const norm = checks > 0 ? score / checks : 0;
   const score100 = Math.round(Math.max(0, Math.min(100, (norm + 1) * 50)));
 
-  const v = scoreToVerdict(score100);
+  const v = scoreToVerdict(score100, t);
   return { score100, label: v.label, color: v.color, reason: reasons.join(" · ") };
 }
 
@@ -1042,7 +1046,7 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
             <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-2xl p-3 sm:p-5 space-y-5">
               <div className="flex items-center gap-2">
                 <Activity size={16} style={{ color: sectorColor }} />
-                <h3 className="text-sm font-bold text-[var(--color-text-primary)]">재무 데이터</h3>
+                <h3 className="text-sm font-bold text-[var(--color-text-primary)]">{t("financialData")}</h3>
               </div>
 
               {/* ── Row 1: Valuation + Consensus ── */}
@@ -1050,15 +1054,15 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                 {(() => {
                   const val = checklistLive.summary.valuation || {};
                   const cards: {label: string; value: string; sub?: string}[] = [];
-                  if (val.per != null) cards.push({ label: "PER", value: val.per.toFixed(1) + "배", sub: val.forward_per ? `추정 ${val.forward_per.toFixed(1)}배` : undefined });
-                  else if (val.forward_per != null) cards.push({ label: "추정PER", value: val.forward_per.toFixed(1) + "배" });
-                  if (val.pbr != null) cards.push({ label: "PBR", value: val.pbr.toFixed(2) + "배" });
+                  if (val.per != null) cards.push({ label: "PER", value: val.per.toFixed(1) + t("timesUnit"), sub: val.forward_per ? `${t("estimatedPrefix")} ${val.forward_per.toFixed(1)}${t("timesUnit")}` : undefined });
+                  else if (val.forward_per != null) cards.push({ label: t("estimatedPER"), value: val.forward_per.toFixed(1) + t("timesUnit") });
+                  if (val.pbr != null) cards.push({ label: "PBR", value: val.pbr.toFixed(2) + t("timesUnit") });
                   if (val.eps != null) cards.push({ label: "EPS", value: `${currency}${Math.round(val.eps).toLocaleString()}` });
-                  if (val.dividend_yield != null) cards.push({ label: "배당수익률", value: `${(val.dividend_yield * 100).toFixed(2)}%` });
+                  if (val.dividend_yield != null) cards.push({ label: t("dividendYieldLabel"), value: `${(val.dividend_yield * 100).toFixed(2)}%` });
                   // 52w range
                   const h52 = checklistLive.summary.high_52w;
                   const l52 = checklistLive.summary.low_52w;
-                  if (h52 && l52) cards.push({ label: "52주 범위", value: `${currency}${Math.round(l52).toLocaleString()}`, sub: `~ ${currency}${Math.round(h52).toLocaleString()}` });
+                  if (h52 && l52) cards.push({ label: t("52wRange"), value: `${currency}${Math.round(l52).toLocaleString()}`, sub: `~ ${currency}${Math.round(h52).toLocaleString()}` });
                   if (!cards.length) return null;
                   return cards.map((c, i) => (
                     <div key={i} className="px-3 py-2.5 rounded-xl bg-[var(--color-bg-hover)]">
@@ -1080,10 +1084,10 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                   <div className="flex items-center gap-3 flex-wrap px-1">
                     <div className="flex items-center gap-2">
                       <Globe size={14} style={{ color: sectorColor }} />
-                      <span className="text-[10px] font-bold text-[var(--color-text-muted)]">컨센서스</span>
+                      <span className="text-[10px] font-bold text-[var(--color-text-muted)]">{t("consensusLabel")}</span>
                     </div>
                     <div className="px-3 py-1.5 rounded-lg" style={{ background: `${uColor}08`, border: `1px solid ${uColor}18` }}>
-                      <span className="text-xs font-black text-[var(--color-text-primary)]">목표가 {currency}{Math.round(tp).toLocaleString()}</span>
+                      <span className="text-xs font-black text-[var(--color-text-primary)]">{t("targetPriceLabel")} {currency}{Math.round(tp).toLocaleString()}</span>
                       {upside != null && <span className="text-xs font-black ml-2" style={{ color: uColor }}>({upside > 0 ? "+" : ""}{upside.toFixed(1)}%)</span>}
                     </div>
                     {opinion && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full" style={{ background: `${sectorColor}12`, color: sectorColor }}>{opinion}</span>}
@@ -1095,9 +1099,9 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
               {checklistLive.summary.investor_flow && (() => {
                 const flow = checklistLive.summary.investor_flow;
                 const items = [
-                  { label: "외국인", value: flow.foreign_net_5d },
-                  { label: "기관", value: flow.institution_net_5d },
-                  { label: "개인", value: flow.individual_net_5d },
+                  { label: t("foreignInvestor"), value: flow.foreign_net_5d },
+                  { label: t("institutionInvestor"), value: flow.institution_net_5d },
+                  { label: t("individualInvestor"), value: flow.individual_net_5d },
                 ];
                 const fmtQ = (v: number) => {
                   if (Math.abs(v) >= 1e6) return `${(v/1e6).toFixed(1)}M`;
@@ -1108,7 +1112,7 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                   <div>
                     <div className="flex items-center gap-2 mb-2 px-1">
                       <TrendingUp size={14} style={{ color: sectorColor }} />
-                      <span className="text-[10px] font-bold text-[var(--color-text-muted)]">수급 (최근 5일)</span>
+                      <span className="text-[10px] font-bold text-[var(--color-text-muted)]">{t("supplyDemand5d")}</span>
                     </div>
                     <div className="grid grid-cols-3 gap-2">
                       {items.map((item) => {
@@ -1117,7 +1121,7 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                         return (
                           <div key={item.label} className="px-2 py-2 rounded-lg text-center" style={{ background: `${c}06`, border: `1px solid ${c}12` }}>
                             <p className="text-[10px] text-[var(--color-text-muted)]">{item.label}</p>
-                            <p className="text-xs font-black" style={{ color: c }}>{v > 0 ? "+" : ""}{fmtQ(v)}주</p>
+                            <p className="text-xs font-black" style={{ color: c }}>{v > 0 ? "+" : ""}{fmtQ(v)}{t("sharesUnit")}</p>
                           </div>
                         );
                       })}
@@ -1135,10 +1139,10 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                   <div>
                     <div className="flex items-center gap-2 mb-2 px-1">
                       <CheckCircle2 size={14} style={{ color: sectorColor }} />
-                      <span className="text-[10px] font-bold text-[var(--color-text-muted)]">연간 실적</span>
+                      <span className="text-[10px] font-bold text-[var(--color-text-muted)]">{t("annualResults")}</span>
                       {fin.revenue_growth != null && (
                         <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: fin.revenue_growth > 0 ? "rgba(34,197,94,0.1)" : "rgba(239,68,68,0.1)", color: fin.revenue_growth > 0 ? "#22c55e" : "#ef4444" }}>
-                          매출 {fin.revenue_growth > 0 ? "+" : ""}{(fin.revenue_growth * 100).toFixed(1)}%
+                          {t("revenuePrefix")}{fin.revenue_growth > 0 ? "+" : ""}{(fin.revenue_growth * 100).toFixed(1)}%
                         </span>
                       )}
                     </div>
@@ -1156,9 +1160,9 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                         </thead>
                         <tbody>
                           {[
-                            { label: "매출", data: fin.revenue },
-                            { label: "영업이익", data: fin.operating_profit },
-                            { label: "순이익", data: fin.net_income },
+                            { label: t("revenueLabel"), data: fin.revenue },
+                            { label: t("operatingProfitLabel"), data: fin.operating_profit },
+                            { label: t("netIncomeLabel"), data: fin.net_income },
                           ].filter(row => row.data).map((row) => (
                             <tr key={row.label} className="border-b border-[var(--color-border)]/30">
                               <td className="py-1.5 text-[var(--color-text-secondary)] font-medium">{row.label}</td>
@@ -1179,8 +1183,8 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
               {!checklistLive.summary.annual_financials?.periods && checklistLive.summary.annual_financials && (() => {
                 const fin = checklistLive.summary.annual_financials;
                 const items: {label: string; value: number}[] = [];
-                if (fin.revenue_growth != null) items.push({ label: "매출 성장률", value: fin.revenue_growth });
-                if (fin.earnings_growth != null) items.push({ label: "이익 성장률", value: fin.earnings_growth });
+                if (fin.revenue_growth != null) items.push({ label: t("revenueGrowthRate"), value: fin.revenue_growth });
+                if (fin.earnings_growth != null) items.push({ label: t("earningsGrowthRate"), value: fin.earnings_growth });
                 if (!items.length) return null;
                 return (
                   <div className="flex gap-3 px-1">
@@ -1202,7 +1206,7 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                 <div>
                   <div className="flex items-center gap-2 mb-2 px-1">
                     <Shield size={14} style={{ color: sectorColor }} />
-                    <span className="text-[10px] font-bold text-[var(--color-text-muted)]">동종업종</span>
+                    <span className="text-[10px] font-bold text-[var(--color-text-muted)]">{t("peerGroup")}</span>
                   </div>
                   <div className="flex flex-wrap gap-1.5">
                     {checklistLive.summary.peers.map((p: any) => {
@@ -1268,12 +1272,9 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
             </div>
           )}
 
-          {/* ═══ 실시간 뉴스 심층 분석 ═══ */}
+          {/* ═══ 실시간 뉴스 ═══ */}
           {(() => {
             const deepArticles = newsAnalysis?.deep_articles ?? [];
-            const overallView = newsAnalysis?.overall_news_view;
-            const overallDetail = newsAnalysis?.overall_news_detail;
-            const sentSum = newsAnalysis?.sentiment_summary;
             const hasDeep = deepArticles.length > 0;
             const articles = hasDeep ? deepArticles : liveImpactNews;
 
@@ -1281,16 +1282,11 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
               return (
                 <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-2xl p-3 sm:p-5">
                   <div className="flex items-center gap-2 mb-3">
-                    <div className="w-8 h-8 rounded-xl flex items-center justify-center bg-[rgba(99,102,241,0.1)] border border-[rgba(99,102,241,0.2)] shrink-0">
-                      <Newspaper size={16} className="text-[#6366f1]" />
-                    </div>
-                    <div className="min-w-0">
-                      <h3 className="text-sm font-bold text-[var(--color-text-primary)]">{t("liveNewsDeepAnalysis")}</h3>
-                      <p className="text-[10px] text-[var(--color-text-muted)]">{t("collectingNewsAnalysis")}</p>
-                    </div>
+                    <Newspaper size={16} className="text-[#6366f1]" />
+                    <h3 className="text-sm font-bold text-[var(--color-text-primary)]">{t("liveNewsDeepAnalysis")}</h3>
                   </div>
-                  <div className="px-4 py-6 text-center">
-                    <Newspaper size={20} className="text-[#6366f1] mx-auto mb-2 animate-pulse" />
+                  <div className="py-4 text-center">
+                    <Newspaper size={18} className="text-[#6366f1] mx-auto mb-2 animate-pulse" />
                     <p className="text-xs text-[var(--color-text-muted)] animate-pulse">{t("collectingForwardPricing")}</p>
                   </div>
                 </div>
@@ -1299,139 +1295,47 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
 
             if (articles.length === 0) return null;
 
-            const posCount = hasDeep ? (sentSum?.positive ?? 0) : articles.filter((a: any) => a.impact_direction === "positive").length;
-            const negCount = hasDeep ? (sentSum?.negative ?? 0) : articles.filter((a: any) => a.impact_direction === "negative").length;
-            const total = articles.length;
-
             const dirColor = (d: string) => d === "positive" ? "#22c55e" : d === "negative" ? "#ef4444" : "#eab308";
-            const dirIcon = (d: string) => d === "positive" ? "▲" : d === "negative" ? "▼" : "●";
             const dirLabel = (d: string) => d === "positive" ? t("positive") : d === "negative" ? t("negative") : t("neutral");
-            const pricedLabel = (l: string) => l === "fully_priced" ? t("fullyPriced") : l === "partially_priced" ? t("partiallyPriced") : l === "not_priced" ? t("notPriced") : t("needsCheck");
-            const pricedColor = (l: string) => l === "not_priced" ? "#f59e0b" : l === "partially_priced" ? "#6366f1" : l === "fully_priced" ? "#6b7280" : "#9ca3af";
 
             return (
               <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-2xl p-3 sm:p-5">
-                <div className="flex flex-wrap items-center gap-2 mb-4">
-                  <div className="w-8 h-8 rounded-xl flex items-center justify-center bg-[rgba(99,102,241,0.1)] border border-[rgba(99,102,241,0.2)] shrink-0">
-                    <Newspaper size={16} className="text-[#6366f1]" />
-                  </div>
-                  <div className="min-w-0">
-                    <h3 className="text-sm font-bold text-[var(--color-text-primary)]">{t("liveNewsDeepAnalysis")}</h3>
-                    <p className="text-[10px] text-[var(--color-text-muted)]">{t("newsInterpretation")}</p>
-                  </div>
-                  {overallView && (
-                    <span className={`ml-auto text-xs font-bold px-2.5 py-1 rounded-lg ${
-                      overallView.includes("부정") ? "bg-[rgba(239,68,68,0.1)] text-[#ef4444]"
-                      : overallView.includes("긍정") ? "bg-[rgba(34,197,94,0.1)] text-[#22c55e]"
-                      : "bg-[rgba(234,179,8,0.1)] text-[#eab308]"
-                    }`}>
-                      {t("newsFlow")} {overallView}
-                    </span>
-                  )}
+                <div className="flex items-center gap-2 mb-4">
+                  <Newspaper size={16} className="text-[#6366f1]" />
+                  <h3 className="text-sm font-bold text-[var(--color-text-primary)]">{t("liveNewsDeepAnalysis")}</h3>
+                  <span className="text-[10px] text-[var(--color-text-muted)] ml-auto">{articles.length}{t("articlesCount")}</span>
                 </div>
 
-                {/* Overall summary bar */}
-                <div className="mb-4 px-3 py-2.5 rounded-xl bg-[var(--color-bg-hover)]">
-                  <div className="flex items-center gap-3">
-                    <span className="text-xs font-bold text-[#22c55e]">{t("positive")} {posCount}</span>
-                    <div className="flex-1 h-2 rounded-full bg-[var(--color-bg-primary)] overflow-hidden flex">
-                      {posCount > 0 && <div className="h-full bg-[#22c55e]" style={{ width: `${posCount / total * 100}%` }} />}
-                      {total - posCount - negCount > 0 && <div className="h-full bg-[#eab308]" style={{ width: `${(total - posCount - negCount) / total * 100}%` }} />}
-                      {negCount > 0 && <div className="h-full bg-[#ef4444]" style={{ width: `${negCount / total * 100}%` }} />}
-                    </div>
-                    <span className="text-xs font-bold text-[#ef4444]">{t("negative")} {negCount}</span>
-                  </div>
-                  {overallDetail && <p className="text-[10px] text-[var(--color-text-muted)] mt-1.5">{overallDetail}</p>}
-                </div>
-
-                {/* Deep article cards */}
-                <div className="space-y-3">
+                <div className="space-y-2">
                   {articles.map((a: any, i: number) => {
                     const dir = a.direction ?? a.impact_direction ?? "neutral";
                     const color = dirColor(dir);
-                    const hasPricedIn = hasDeep && a.priced_in_level;
-                    const hasPrediction = hasDeep && a.forward_prediction;
 
                     return (
-                      <div key={i} className="rounded-xl overflow-hidden" style={{ border: `1px solid ${color}25` }}>
-                        {/* Header: direction badge + title */}
-                        <div className="px-4 py-3" style={{ background: `${color}08` }}>
-                          <div className="flex items-start gap-2">
-                            <span className="text-xs font-bold px-2 py-0.5 rounded-md mt-0.5 shrink-0" style={{ background: `${color}18`, color }}>
-                              {dirIcon(dir)} {a.category ?? dirLabel(dir)}
-                            </span>
-                            <p className="text-sm font-semibold text-[var(--color-text-primary)] leading-snug">{a.title}</p>
-                          </div>
-                          {(a.explanation) && <p className="text-xs text-[var(--color-text-secondary)] mt-1.5 ml-0.5">{a.explanation}</p>}
+                      <div key={i} className="flex gap-3 px-3 py-2.5 rounded-xl" style={{ background: `${color}06`, border: `1px solid ${color}15` }}>
+                        {/* Verdict badge */}
+                        <div className="shrink-0 pt-0.5">
+                          <span className="inline-block text-[10px] font-bold px-2 py-0.5 rounded-md text-white" style={{ background: color }}>
+                            {dirLabel(dir)}
+                          </span>
                         </div>
 
-                        {/* Deep analysis section */}
-                        {(hasPricedIn || hasPrediction) && (
-                          <div className="px-4 py-3 space-y-2" style={{ borderTop: `1px solid ${color}12` }}>
-                            {/* Priced-in assessment */}
-                            {hasPricedIn && (
-                              <div className="flex items-start gap-2">
-                                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0 mt-0.5" style={{ background: `${pricedColor(a.priced_in_level)}18`, color: pricedColor(a.priced_in_level) }}>
-                                  {t("forwardPricingLabel")} {pricedLabel(a.priced_in_level)}
-                                </span>
-                                <p className="text-[11px] text-[var(--color-text-secondary)]">{a.priced_in_reason}</p>
-                              </div>
-                            )}
-
-                            {/* Forward prediction */}
-                            {hasPrediction && (
-                              <div className="flex items-start gap-2">
-                                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0 mt-0.5" style={{ background: `${sectorColor}15`, color: sectorColor }}>
-                                  {t("forwardOutlook")}
-                                </span>
-                                <p className="text-[11px] text-[var(--color-text-secondary)]">{a.forward_prediction}</p>
-                              </div>
-                            )}
-
-                            {/* Action recommendation */}
-                            {a.action_label && (
-                              <div className="flex items-start gap-2">
-                                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0 mt-0.5 bg-[var(--color-bg-hover)] text-[var(--color-text-muted)]">
-                                  {t("investmentJudgment")}
-                                </span>
-                                <p className="text-[11px] text-[var(--color-text-secondary)]">
-                                  <span className="font-semibold" style={{ color }}>{a.action_label}</span> — {a.action_detail}
-                                </p>
-                              </div>
-                            )}
-                          </div>
-                        )}
-
-                        {/* Source + date */}
-                        <div className="px-4 py-1.5 flex items-center gap-2 flex-wrap" style={{ borderTop: `1px solid ${color}08`, background: `${color}03` }}>
-                          {a.published_at && (
-                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-[var(--color-bg-hover)] text-[var(--color-text-secondary)]">
-                              {a.published_at}
-                            </span>
+                        {/* Content */}
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-semibold text-[var(--color-text-primary)] leading-snug">{a.title}</p>
+                          {a.explanation && (
+                            <p className="text-xs text-[var(--color-text-secondary)] mt-1 leading-relaxed">{a.explanation}</p>
                           )}
-                          {a.source && <p className="text-[10px] text-[var(--color-text-muted)]">{a.source}</p>}
-                          {a.url && <a href={a.url} target="_blank" rel="noopener noreferrer" className="text-[10px] text-[#6366f1] hover:underline ml-auto shrink-0">{t("articleSource")}</a>}
+                          <div className="flex items-center gap-2 mt-1.5 text-[10px] text-[var(--color-text-muted)]">
+                            {a.published_at && <span>{a.published_at}</span>}
+                            {a.source && <span>· {a.source}</span>}
+                            {a.url && <a href={a.url} target="_blank" rel="noopener noreferrer" className="text-[#6366f1] hover:underline ml-auto">{t("articleSource")}</a>}
+                          </div>
                         </div>
                       </div>
                     );
                   })}
                 </div>
-
-                {/* Key catalysts from news drivers */}
-                {newsAnalysis?.news_drivers?.length > 0 && (
-                  <div className="mt-4 pt-3" style={{ borderTop: "1px solid var(--color-border)" }}>
-                    <p className="text-[10px] font-bold text-[var(--color-text-muted)] uppercase tracking-widest mb-2">{t("keyCatalysts")}</p>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                      {newsAnalysis.news_drivers.map((d: any, di: number) => (
-                        <div key={di} className="px-3 py-2 rounded-lg bg-[var(--color-bg-hover)]">
-                          <p className="text-xs font-bold text-[var(--color-text-primary)]">{d.name}</p>
-                          <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">{t("relatedArticles")} {d.article_count}</p>
-                          {d.why_it_matters && <p className="text-[10px] text-[var(--color-text-secondary)] mt-1">{d.why_it_matters}</p>}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
               </div>
             );
           })()}
@@ -1906,10 +1810,10 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                                 <p className="text-[11px] sm:text-xs mt-0.5 text-[var(--color-text-muted)]">
                                   {lastExpected != null && currentVal != null
                                     ? belowExpected
-                                      ? `현재 주가 유지하려면 ${unit}${lastExpected.toLocaleString()} 필요 → 실제 ${unit}${currentVal.toLocaleString()} (부족)`
-                                      : `${unit}${lastExpected.toLocaleString()} 이상이면 주가 상승 가능 → 실제 ${unit}${currentVal.toLocaleString()} (충족)`
-                                    : `현재 ${unit}${currentVal?.toLocaleString()}`}
-                                  {futureExpected != null ? ` · 향후 예상 ${unit}${futureExpected.toLocaleString()}` : ""}
+                                      ? `${t("needIndicatorForPrice")} ${unit}${lastExpected.toLocaleString()} ${t("needSuffix")} ${unit}${currentVal.toLocaleString()} ${t("insufficientLabel")}`
+                                      : `${unit}${lastExpected.toLocaleString()} ${t("aboveForUpside")} ${unit}${currentVal.toLocaleString()} ${t("sufficientLabel")}`
+                                    : `${t("currentPrefix")} ${unit}${currentVal?.toLocaleString()}`}
+                                  {futureExpected != null ? `${t("futureExpectedPrefix")} ${unit}${futureExpected.toLocaleString()}` : ""}
                                 </p>
                               </div>
                               <span className="text-lg sm:text-xl font-black font-mono" style={{ color: isInDanger ? "#ef4444" : belowExpected ? "#d97706" : "#1e293b" }}>

@@ -644,10 +644,17 @@ def _search_stock_latest_news(queries: list[str], max_per_query: int = 8, ticker
     # Build name variants for relevance scoring
     name_variants = _build_name_variants(ticker, company_name) if ticker else []
 
+    # Date filter: only last 7 days
+    from datetime import datetime, timedelta
+    _now = datetime.now()
+    _week_ago = _now - timedelta(days=7)
+    ds = _week_ago.strftime("%Y.%m.%d")
+    de = _now.strftime("%Y.%m.%d")
+
     for query in queries:
-        # Naver News — sorted by latest
+        # Naver News — sorted by latest, filtered to last 7 days
         try:
-            url = f"https://search.naver.com/search.naver?where=news&query={quote(query)}&sm=tab_opt&sort=1"
+            url = f"https://search.naver.com/search.naver?where=news&query={quote(query)}&sm=tab_opt&sort=1&ds={ds}&de={de}&nso=so:dd,p:from{_week_ago.strftime('%Y%m%d')}to{_now.strftime('%Y%m%d')}"
             headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
             with limit_http():
                 r = requests.get(url, headers=headers, timeout=8)
@@ -670,11 +677,11 @@ def _search_stock_latest_news(queries: list[str], max_per_query: int = 8, ticker
         except Exception:
             pass
 
-        # Google News RSS — latest
+        # Google News RSS — latest, filtered to last 7 days via 'when:7d'
         try:
             encoded = quote(query)
             for lang, hl, gl, ceid in [("ko", "ko", "KR", "KR:ko"), ("en", "en", "US", "US:en")]:
-                feed_url = f"https://news.google.com/rss/search?q={encoded}&hl={hl}&gl={gl}&ceid={ceid}"
+                feed_url = f"https://news.google.com/rss/search?q={encoded}+when:7d&hl={hl}&gl={gl}&ceid={ceid}"
                 feed = feedparser.parse(feed_url)
                 for entry in feed.entries[:max_per_query]:
                     title = entry.get("title", "")
@@ -690,6 +697,67 @@ def _search_stock_latest_news(queries: list[str], max_per_query: int = 8, ticker
                     })
         except Exception:
             pass
+
+    # ── Filter out old articles (>7 days) based on published_at ──
+    def _is_recent(pub: str | None) -> bool:
+        if not pub:
+            return True  # keep if unknown date
+        pub_lower = pub.lower().strip()
+        # Naver relative dates: "X시간 전", "X분 전", "X일 전"
+        if "전" in pub_lower:
+            day_match = re.search(r"(\d+)일\s*전", pub_lower)
+            if day_match and int(day_match.group(1)) > 7:
+                return False
+            return True  # hours/minutes ago = recent
+        # RFC 2822 dates from Google RSS (e.g. "Tue, 15 Apr 2026 08:30:00 GMT")
+        try:
+            from email.utils import parsedate_to_datetime
+            dt = parsedate_to_datetime(pub)
+            if (_now - dt.replace(tzinfo=None)).days > 7:
+                return False
+        except Exception:
+            pass
+        # Korean date (2026.01.15)
+        date_match = re.search(r"(\d{4})\.(\d{1,2})\.(\d{1,2})", pub_lower)
+        if date_match:
+            try:
+                dt = datetime(int(date_match.group(1)), int(date_match.group(2)), int(date_match.group(3)))
+                if (_now - dt).days > 7:
+                    return False
+            except Exception:
+                pass
+        return True
+
+    def _normalize_date(pub: str | None) -> str:
+        """Convert published_at to human-readable Korean format."""
+        if not pub:
+            return ""
+        pub_lower = pub.strip()
+        # Already Korean relative ("3시간 전", "1일 전")
+        if "전" in pub_lower:
+            return pub_lower
+        # RFC 2822
+        try:
+            from email.utils import parsedate_to_datetime
+            dt = parsedate_to_datetime(pub)
+            delta = _now - dt.replace(tzinfo=None)
+            if delta.days == 0:
+                hours = delta.seconds // 3600
+                if hours == 0:
+                    return f"{delta.seconds // 60}분 전"
+                return f"{hours}시간 전"
+            elif delta.days == 1:
+                return "어제"
+            elif delta.days <= 7:
+                return f"{delta.days}일 전"
+            return dt.strftime("%m/%d")
+        except Exception:
+            pass
+        return pub_lower
+
+    raw_articles = [a for a in raw_articles if _is_recent(a.get("published_at"))]
+    for a in raw_articles:
+        a["published_at"] = _normalize_date(a.get("published_at"))
 
     # ── Apply comprehensive relevance filtering ──
     if name_variants:
@@ -717,22 +785,32 @@ def _search_stock_latest_news(queries: list[str], max_per_query: int = 8, ticker
 
 
 def _summarize_english_title(title: str, company_name: str) -> str:
-    """Translate/summarize English news title to Korean explanation."""
+    """Translate/summarize English news title to Korean explanation.
+    Extracts entities, numbers, and context to build a meaningful Korean summary."""
     t = title.lower()
+    original = title.strip()
     parts = []
 
-    # Extract key info from English title
-    # Target price
-    tp_match = re.search(r'tp\s*(?:to\s*)?(?:krw|usd|\$)?\s*([\d,.]+)', t)
-    if tp_match:
-        parts.append(f"목표주가 {tp_match.group(1)}")
+    # Extract specific numbers (%, $, amounts)
+    pct_matches = re.findall(r'(\d+\.?\d*)%', t)
+    dollar_matches = re.findall(r'\$\s*([\d,.]+)\s*(billion|million|trillion|B|M)?', t, re.IGNORECASE)
 
-    # Rating
+    # Extract analyst/firm names
+    firm_match = re.search(r'(morgan stanley|goldman sachs|jp morgan|jpmorgan|barclays|citi|citigroup|ubs|deutsche bank|bofa|bank of america|wells fargo|rbc|bernstein|jefferies|wedbush|piper sandler|needham|truist|stifel|cowen|loop capital|mizuho|hsbc|nomura|daiwa|macquarie|samsung securities|merrill|oppenheimer)', t)
+    firm_name = firm_match.group(1).title() if firm_match else ""
+
+    # Target price
+    tp_match = re.search(r'(?:target|price target|pt|tp)\s*(?:to\s*)?(?:of\s*)?(?:krw|usd|\$)?\s*([\d,.]+)', t)
+    if tp_match:
+        tp_val = tp_match.group(1)
+        parts.append(f"목표주가 ${tp_val}" if not any(c in t for c in ["krw", "원"]) else f"목표주가 {tp_val}")
+
+    # Rating changes
     if "buy" in t or "outperform" in t:
         parts.append("매수 의견")
     elif "sell" in t or "underperform" in t:
         parts.append("매도 의견")
-    elif "hold" in t or "neutral" in t:
+    elif "hold" in t or "neutral" in t or "equal.weight" in t:
         parts.append("중립 의견")
     if "initiates" in t or "initiate" in t:
         parts.append("신규 커버리지 개시")
@@ -742,33 +820,88 @@ def _summarize_english_title(title: str, company_name: str) -> str:
         parts.append("투자의견 하향")
     elif "maintains" in t or "reiterate" in t:
         parts.append("투자의견 유지")
-    elif "raises" in t:
+    elif "raises" in t and "target" in t:
         parts.append("목표주가 상향")
+    elif "lowers" in t or "cuts" in t:
+        parts.append("목표주가 하향")
 
-    # Specific events
-    if "record" in t and ("high" in t or "breaking" in t):
-        parts.append("사상 최고치 기록")
-    if "surge" in t or "soar" in t or "jump" in t:
-        pct_m = re.search(r'(\d+\.?\d*)%', t)
-        parts.append(f"{pct_m.group(1)}% 급등" if pct_m else "급등")
-    if "falls" in t or "drop" in t or "plunge" in t:
-        pct_m = re.search(r'(\d+\.?\d*)%', t)
-        parts.append(f"{pct_m.group(1)}% 하락" if pct_m else "하락")
-    if "partnership" in t or "deal" in t:
+    if firm_name:
+        parts.insert(0, f"{firm_name}")
+
+    # Revenue/earnings specifics
+    rev_match = re.search(r'revenue\s*(?:of\s*)?\$?([\d,.]+)\s*(billion|million|B|M)?', t, re.IGNORECASE)
+    if rev_match:
+        parts.append(f"매출 ${rev_match.group(1)}{rev_match.group(2) or ''}")
+    eps_match = re.search(r'eps\s*(?:of\s*)?\$?([\d,.]+)', t, re.IGNORECASE)
+    if eps_match:
+        parts.append(f"EPS ${eps_match.group(1)}")
+
+    # Percentage moves
+    if "surge" in t or "soar" in t or "jump" in t or "rally" in t or "gain" in t:
+        pct = pct_matches[0] if pct_matches else ""
+        parts.append(f"{pct}% 급등" if pct else "급등세")
+    elif "falls" in t or "drop" in t or "plunge" in t or "tumble" in t or "slide" in t or "slump" in t:
+        pct = pct_matches[0] if pct_matches else ""
+        parts.append(f"{pct}% 급락" if pct else "급락세")
+
+    # Specific business events
+    if "partnership" in t or "deal" in t or "signs" in t:
         parts.append("파트너십/계약 체결")
-    if "asml" in t or "equipment" in t:
-        parts.append("장비 투자 관련")
-    if "ai chip" in t or "ai boom" in t:
-        parts.append("AI 반도체 수혜")
+    if "acquisition" in t or "acquire" in t or "merger" in t:
+        parts.append("인수합병(M&A)")
+    if "layoff" in t or "cut" in t and "job" in t:
+        parts.append("구조조정/감원")
+    if "buyback" in t or "repurchase" in t:
+        parts.append("자사주 매입")
+    if "dividend" in t:
+        parts.append("배당 관련")
+    if "split" in t and "stock" in t:
+        parts.append("주식 분할")
+    if "ipo" in t:
+        parts.append("IPO 관련")
+
+    # Industry-specific
+    if "ai chip" in t or "ai boom" in t or "artificial intelligence" in t:
+        parts.append("AI 수혜")
     if "hbm" in t:
-        parts.append("HBM 수요 관련")
-    if "upcycle" in t:
-        parts.append("메모리 업사이클 기대")
-    if "sandisk" in t or "western digital" in t:
-        parts.append("낸드 업황 관련")
+        parts.append("HBM 수요")
+    if "data center" in t or "datacenter" in t:
+        parts.append("데이터센터 수요")
+    if "foundry" in t or "tsmc" in t:
+        parts.append("파운드리 관련")
+    if "ev" in t or "electric vehicle" in t:
+        parts.append("전기차 관련")
+    if "battery" in t or "lithium" in t:
+        parts.append("배터리/리튬")
+    if "tariff" in t or "trade war" in t or "sanctions" in t:
+        parts.append("관세/무역 리스크")
+    if "fda" in t and ("approv" in t or "clear" in t):
+        parts.append("FDA 승인")
+    if "clinical" in t or "trial" in t:
+        parts.append("임상시험")
+    if "record" in t and ("high" in t or "breaking" in t):
+        parts.append("사상 최고치")
+    if "guidance" in t and ("raise" in t or "above" in t or "beat" in t):
+        parts.append("가이던스 상향")
+    if "miss" in t and ("estimate" in t or "expectation" in t):
+        parts.append("시장 기대 하회")
+    if "beat" in t and ("estimate" in t or "expectation" in t):
+        parts.append("시장 기대 상회")
 
     if parts:
-        return " · ".join(parts)
+        return " · ".join(parts[:5])  # max 5 points
+
+    # Fallback: simple word-level translation for common patterns
+    simple_map = {
+        "reports": "실적 발표", "quarterly": "분기", "annual": "연간",
+        "growth": "성장", "decline": "하락", "strong": "호조",
+        "weak": "부진", "outlook": "전망", "demand": "수요",
+        "supply": "공급", "shortage": "부족", "expansion": "확장",
+        "contract": "수주", "order": "주문", "shipment": "출하",
+    }
+    found = [v for k, v in simple_map.items() if k in t]
+    if found:
+        return " · ".join(found[:4])
     return ""
 
 
@@ -6014,19 +6147,50 @@ def _build_deep_news_item(news: dict, ticker: str, info: dict | None, company_na
     category = news.get("issue_label", "뉴스")
     explanation = news.get("explanation", "")
 
+    # Check if English — build Korean interpretation
+    is_english = all(ord(c) < 0x1100 or ord(c) > 0xD7AF for c in title.replace(" ", "")[:20]) if title else False
+    if is_english:
+        ko_summary = _summarize_english_title(title, company_name)
+        if ko_summary:
+            # Replace generic explanation with specific Korean interpretation
+            explanation = f"[기사 해석] {ko_summary}. {explanation}"
+        else:
+            # At minimum, note it's English and provide category context
+            explanation = f"[영문 기사] {title[:80]}... — {explanation}"
+
     # Assess priced-in level
     priced_in = _assess_priced_in(title, ticker, info, direction)
 
-    # Build actionable takeaway
+    # Build actionable takeaway — specific to category
     if direction == "positive":
-        action_label = "매수 관점 고려"
-        action_detail = "호재가 선반영되지 않았다면 진입 기회. 선반영 되었다면 추가 카탈리스트 대기."
+        if "실적" in category:
+            action_label = "실적 호조 — 매수 관점"
+            action_detail = f"{company_name}의 실적 호조가 확인됨. 컨센서스 대비 서프라이즈 폭에 따라 추가 상승 여력 판단. 선반영 여부 확인 후 분할매수 검토."
+        elif "수주" in category or "계약" in category:
+            action_label = "신규 수주 — 매수 관점"
+            action_detail = f"신규 수주·계약은 {company_name}의 매출 가시성을 높이는 핵심 이벤트. 수주 규모와 기간을 확인하고 밸류에이션 재평가."
+        elif "애널리스트" in category or "목표가" in category:
+            action_label = "투자의견 개선 — 긍정적"
+            action_detail = f"애널리스트 의견 개선은 기관 자금 유입의 선행 신호. 목표주가와 현재가 괴리율 확인 후 대응."
+        else:
+            action_label = "호재 — 매수 검토"
+            action_detail = f"긍정적 뉴스 확인. 선반영 정도와 후속 모멘텀 가능성을 종합해 진입 시점 판단."
     elif direction == "negative":
-        action_label = "리스크 관리"
-        action_detail = "포지션 있다면 손절/비중축소 검토. 미보유 시 저가매수 기회인지 구조적 악재인지 판단 필요."
+        if "실적" in category:
+            action_label = "실적 부진 — 리스크 관리"
+            action_detail = f"{company_name} 실적이 기대에 미치지 못함. 일시적 부진인지 구조적 둔화인지 판단 필요. 보유 중이면 비중 축소 고려."
+        elif "규제" in category or "법적" in category:
+            action_label = "규제 리스크 — 주의"
+            action_detail = f"규제·법적 이슈는 불확실성을 키워 주가를 장기간 압박할 수 있음. 과징금 규모와 사업 영향도 파악 필요."
+        elif "지정학" in category:
+            action_label = "지정학 리스크 — 방어적 접근"
+            action_detail = f"지정학적 불안은 시장 전체 위험회피 심리를 자극. {company_name}의 직접 영향 범위(수출비중, 원자재 비용 등) 점검."
+        else:
+            action_label = "악재 — 비중 조절"
+            action_detail = f"부정적 뉴스 확인. 보유 중이면 손절/비중축소 검토, 미보유 시 저가매수 기회인지 구조적 악재인지 판단 필요."
     else:
-        action_label = "관망"
-        action_detail = "추가 정보 확인 후 포지션 결정. 단기 변동성에 대비."
+        action_label = "중립 — 모니터링"
+        action_detail = f"방향성이 불분명한 뉴스. 후속 발표나 시장 반응을 관찰한 후 포지션 결정."
 
     return {
         "title": title,

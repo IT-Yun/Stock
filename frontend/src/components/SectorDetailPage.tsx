@@ -1136,10 +1136,15 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                           </div>
                         )}
 
-                        {/* Source */}
-                        <div className="px-4 py-1.5 flex items-center gap-2" style={{ borderTop: `1px solid ${color}08`, background: `${color}03` }}>
-                          {a.source && <p className="text-[10px] text-[var(--color-text-muted)]">{a.source}{a.published_at ? ` · ${a.published_at}` : ""}</p>}
-                          {a.url && <a href={a.url} target="_blank" rel="noopener noreferrer" className="text-[10px] text-[#6366f1] hover:underline ml-auto">기사 원문 →</a>}
+                        {/* Source + date */}
+                        <div className="px-4 py-1.5 flex items-center gap-2 flex-wrap" style={{ borderTop: `1px solid ${color}08`, background: `${color}03` }}>
+                          {a.published_at && (
+                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-[var(--color-bg-hover)] text-[var(--color-text-secondary)]">
+                              {a.published_at}
+                            </span>
+                          )}
+                          {a.source && <p className="text-[10px] text-[var(--color-text-muted)]">{a.source}</p>}
+                          {a.url && <a href={a.url} target="_blank" rel="noopener noreferrer" className="text-[10px] text-[#6366f1] hover:underline ml-auto shrink-0">기사 원문 →</a>}
                         </div>
                       </div>
                     );

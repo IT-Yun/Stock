@@ -6,7 +6,7 @@ const ALLOWED_NICKNAMES = [
   // 관리자
   "admin", "seungyun", "이승윤",
   // 멤버
-  "2차전지 네오", "공학관복사기", "퓨차차",
+  "2차전지 네오", "공학관복사기", "퓨챠챠",
   "pk 난 중국이 좋아(cweb)", "pk 미래로", "pk 뿅뿅 네오",
   "pk ㅇㅇ", "pk_coriny", "pk.", "pknu흥",
   "pk고고 xx", "pk기타치는 튜브", "pk마블",

@@ -346,6 +346,19 @@ function getStockMeta(ticker: string) {
   };
 }
 
+/* ── Elapsed timer for loading states ── */
+function ElapsedTimer({ active }: { active: boolean }) {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (!active) { setElapsed(0); return; }
+    const start = Date.now();
+    const id = window.setInterval(() => setElapsed(Math.floor((Date.now() - start) / 1000)), 1000);
+    return () => window.clearInterval(id);
+  }, [active]);
+  if (!active || elapsed < 3) return null;
+  return <span className="text-[10px] text-[var(--color-text-muted)] tabular-nums">{elapsed}초 경과</span>;
+}
+
 /* ── StockAnalysisCard ── */
 
 function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor: string }) {
@@ -934,11 +947,20 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
               </div>
             </div>
             {!momentumNotes ? (
-              <div className="px-4 py-6 text-center">
-                <div className="w-8 h-8 rounded-full mx-auto mb-2 flex items-center justify-center" style={{ background: `${sectorColor}15` }}>
-                  <Zap size={14} style={{ color: sectorColor }} className="animate-pulse" />
+              <div className="px-4 py-5">
+                {/* Animated progress bar */}
+                <div className="w-full h-1.5 rounded-full bg-[var(--color-bg-hover)] overflow-hidden mb-3">
+                  <div className="h-full rounded-full animate-pulse" style={{ background: sectorColor, width: "60%", animation: "pulse 1.5s ease-in-out infinite" }} />
                 </div>
-                <p className="text-xs text-[var(--color-text-muted)] animate-pulse">최신 뉴스를 분석하여 기대감을 생성 중...</p>
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0" style={{ background: `${sectorColor}15` }}>
+                    <Zap size={14} style={{ color: sectorColor }} className="animate-spin" />
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold text-[var(--color-text-primary)]">뉴스를 수집하고 기대감을 분석 중입니다</p>
+                    <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">보통 5~15초 소요 · Naver/Google 뉴스 크롤링 → 감성 분석 → 선반영 판단</p>
+                  </div>
+                </div>
               </div>
             ) : (
               <div className="grid grid-cols-1 gap-2">
@@ -1221,7 +1243,13 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                 <h3 className="text-sm font-bold text-[var(--color-text-primary)]">투자 체크리스트 (실시간 모니터링)</h3>
                 <p className="text-[10px] text-[var(--color-text-muted)]">주가와의 상관관계 분석 기반 — 중요도순 정렬</p>
               </div>
-              {checklistLive === null && <span className="text-[10px] text-[var(--color-text-muted)] ml-auto animate-pulse">데이터 로딩 중...</span>}
+              {checklistLive === null && (
+                <div className="ml-auto flex items-center gap-2">
+                  <div className="w-4 h-4 border-2 border-[#6366f1] border-t-transparent rounded-full animate-spin" />
+                  <span className="text-[10px] text-[#6366f1] font-semibold">분석 중</span>
+                  <ElapsedTimer active={checklistLive === null} />
+                </div>
+              )}
               {checklistLive?.checklist && (() => {
                 const total = checklistLive.checklist.length;
                 const passed = checklistLive.checklist.filter((c: any) => c.status === "positive").length;
@@ -1246,6 +1274,37 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
               })()}
             </div>
             <div className="space-y-4">
+              {/* Loading progress banner when checklist is still loading */}
+              {checklistLive === null && (
+                <div className="rounded-xl p-4 bg-[rgba(99,102,241,0.06)] border border-[rgba(99,102,241,0.15)]">
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="w-6 h-6 border-2 border-[#6366f1] border-t-transparent rounded-full animate-spin shrink-0" />
+                    <div>
+                      <p className="text-xs font-bold text-[var(--color-text-primary)]">지표 데이터를 수집하고 분석 중입니다</p>
+                      <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">관련 지수/원자재 데이터 수집 → 상관관계 분석 → 위험/기회 판정</p>
+                    </div>
+                  </div>
+                  {/* Animated step indicator */}
+                  <div className="flex items-center gap-1.5 text-[10px]">
+                    <span className="px-2 py-0.5 rounded bg-[#6366f1] text-white font-bold">1</span>
+                    <span className="text-[var(--color-text-muted)]">데이터 수집</span>
+                    <span className="text-[var(--color-text-muted)]">→</span>
+                    <span className="px-2 py-0.5 rounded bg-[rgba(99,102,241,0.2)] text-[#6366f1] font-bold animate-pulse">2</span>
+                    <span className="text-[var(--color-text-muted)] animate-pulse">분석 중</span>
+                    <span className="text-[var(--color-text-muted)]">→</span>
+                    <span className="px-2 py-0.5 rounded bg-[var(--color-bg-hover)] text-[var(--color-text-muted)] font-bold">3</span>
+                    <span className="text-[var(--color-text-muted)]">완료</span>
+                    <span className="ml-auto flex items-center gap-2 text-[var(--color-text-muted)]">
+                      <ElapsedTimer active={checklistLive === null} />
+                      <span>/ 약 30~60초</span>
+                    </span>
+                  </div>
+                  {/* Progress bar */}
+                  <div className="w-full h-1 rounded-full bg-[var(--color-bg-hover)] mt-2 overflow-hidden">
+                    <div className="h-full bg-[#6366f1] rounded-full" style={{ width: "45%", animation: "checklistProgress 30s linear forwards" }} />
+                  </div>
+                </div>
+              )}
               {checklistLive?.checklist?.map((item: any, i: number) => {
                 const statusColor = item.status === "positive" ? "#22c55e" : item.status === "negative" ? "#ef4444" : "#eab308";
                 const hasTrend = item.trend_data?.length > 3;
@@ -1584,10 +1643,13 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
               }) || meta.checklist.map((item, i) => (
                 <div key={i} className="rounded-xl p-4 bg-[var(--color-bg-primary)] border border-[var(--color-border)]">
                   <div className="flex items-center gap-2">
-                    <MinusCircle size={16} className="text-[var(--color-text-muted)] animate-pulse" />
+                    <div className="w-4 h-4 border-2 border-[var(--color-text-muted)] border-t-transparent rounded-full animate-spin opacity-40" />
                     <span className="text-sm text-[var(--color-text-secondary)]">{item}</span>
+                    <span className="text-[9px] text-[var(--color-text-muted)] ml-auto px-2 py-0.5 rounded bg-[var(--color-bg-hover)]">수집 중</span>
                   </div>
-                  <div className="mt-3 h-20 bg-[var(--color-bg-hover)] rounded animate-pulse" />
+                  <div className="mt-3 h-16 bg-[var(--color-bg-hover)] rounded-lg overflow-hidden relative">
+                    <div className="absolute inset-0 bg-gradient-to-r from-transparent via-[rgba(99,102,241,0.05)] to-transparent" style={{ animation: "shimmer 2s infinite" }} />
+                  </div>
                 </div>
               ))}
               {/* Show missing meta items as "pending" when live checklist has fewer items */}

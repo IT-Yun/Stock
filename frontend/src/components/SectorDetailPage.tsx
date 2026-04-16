@@ -20,6 +20,16 @@ import type { SectorDef, StockPick } from "@/data/sectors";
 import { fetchChartData, fetchAnalysis, fetchEarnings, fetchPatternAnalysis, fetchCommodityHistory, searchNews, fetchPrediction, fetchMoveReasons, fetchChecklistLive, fetchSectorPulse, fetchMacroEvents, fetchTradingTargets, fetchNewsAnalysis } from "@/api/client";
 import type { ChartDataPoint, AnalysisResult, NewsArticle } from "@/types";
 
+const useIsMobile = () => {
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  useEffect(() => {
+    const h = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener("resize", h);
+    return () => window.removeEventListener("resize", h);
+  }, []);
+  return isMobile;
+};
+
 const periods = [
   { label: "1개월", value: "1mo" },
   { label: "3개월", value: "3mo" },
@@ -364,6 +374,7 @@ function ElapsedTimer({ active }: { active: boolean }) {
 /* ── StockAnalysisCard ── */
 
 function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor: string }) {
+  const mob = useIsMobile();
   const [chartData, setChartData] = useState<ChartDataPoint[]>([]);
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [earnings, setEarnings] = useState<any>(null);
@@ -851,11 +862,11 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
               </div>
               <div className="relative">
               {chartLoading && <div className="absolute inset-0 z-10 flex items-center justify-center bg-[var(--color-bg-card)]/60 rounded-lg"><span className="text-xs text-[var(--color-text-muted)] animate-pulse">차트 로딩중...</span></div>}
-              <ResponsiveContainer width="100%" height={260}>
-                <ComposedChart data={chartData}>
+              <ResponsiveContainer width="100%" height={mob ? 220 : 260}>
+                <ComposedChart data={chartData} margin={mob ? { top: 5, right: 5, bottom: 0, left: 0 } : undefined}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
-                  <XAxis dataKey="date" tick={{ fill: "var(--color-text-muted)", fontSize: 9 }} tickFormatter={(v: string) => v.slice(5)} />
-                  <YAxis domain={["auto", "auto"]} tick={{ fill: "var(--color-text-muted)", fontSize: 9 }} />
+                  <XAxis dataKey="date" tick={{ fill: "var(--color-text-muted)", fontSize: mob ? 8 : 9 }} tickFormatter={(v: string) => v.slice(5)} interval={mob ? "preserveStartEnd" : undefined} />
+                  <YAxis domain={["auto", "auto"]} tick={{ fill: "var(--color-text-muted)", fontSize: mob ? 8 : 9 }} width={mob ? 40 : undefined} />
                   <Tooltip
                     content={({ active, payload }: any) => {
                       if (!active || !payload?.length) return null;
@@ -921,12 +932,12 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                         key={`move-${i}`}
                         x={m.date}
                         y={dp.close}
-                        r={isBig ? 8 : 6}
+                        r={mob ? (isBig ? 5 : 4) : (isBig ? 8 : 6)}
                         fill={m.pctChange > 0 ? "#22c55e" : "#ef4444"}
                         stroke="#fff"
-                        strokeWidth={2}
-                        style={{ cursor: "pointer", filter: `drop-shadow(0 0 6px ${m.pctChange > 0 ? "rgba(34,197,94,0.7)" : "rgba(239,68,68,0.7)"})` }}
-                        label={{ value: labelText, position: "top", fontSize: 9, fill: m.pctChange > 0 ? "#22c55e" : "#ef4444", fontWeight: 700 }}
+                        strokeWidth={mob ? 1.5 : 2}
+                        style={{ cursor: "pointer", filter: `drop-shadow(0 0 ${mob ? 3 : 6}px ${m.pctChange > 0 ? "rgba(34,197,94,0.7)" : "rgba(239,68,68,0.7)"})` }}
+                        label={mob && !isBig ? undefined : { value: mob ? `${m.pctChange > 0 ? "+" : ""}${m.pctChange.toFixed(0)}%` : labelText, position: "top", fontSize: mob ? 7 : 9, fill: m.pctChange > 0 ? "#22c55e" : "#ef4444", fontWeight: 700 }}
                       />
                     );
                   })}
@@ -1261,19 +1272,27 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                 const filtered = checklistLive.checklist.filter((c: any) =>
                   !c.is_news_item && !c.name?.startsWith("뉴스:") && !c.name?.startsWith("이슈 모니터링:")
                 );
-                const total = filtered.length;
-                const passed = filtered.filter((c: any) => c.status === "positive").length;
+                // Only count items with real data for safety ratio
+                const withData = filtered.filter((c: any) => !c.data_missing && c.status !== "unknown");
+                const total = withData.length;
+                const passed = withData.filter((c: any) => c.status === "positive").length;
+                const failed = withData.filter((c: any) => c.status === "negative").length;
                 const ratio = total > 0 ? passed / total : 0;
-                const safetyColor = ratio >= 0.7 ? "#22c55e" : ratio >= 0.4 ? "#eab308" : "#ef4444";
-                const safetyLabel = ratio >= 0.7 ? "안전" : ratio >= 0.4 ? "주의" : "위험";
+                const failRatio = total > 0 ? failed / total : 0;
+                const safetyColor = failRatio >= 0.5 ? "#ef4444" : ratio >= 0.6 ? "#22c55e" : ratio >= 0.3 ? "#eab308" : "#ef4444";
+                const safetyLabel = failRatio >= 0.5 ? "위험" : ratio >= 0.6 ? "안전" : ratio >= 0.3 ? "주의" : "위험";
                 return (
                   <div className="flex items-center gap-2 w-full sm:w-auto sm:ml-auto mt-1 sm:mt-0">
                     <div className="flex gap-0.5 overflow-hidden">
-                      {filtered.map((_: any, ci: number) => (
-                        <div key={ci} className="w-2 sm:w-3 h-5 sm:h-6 rounded-sm" style={{
-                          background: filtered[ci].status === "positive" ? "#22c55e" : filtered[ci].status === "negative" ? "#ef4444" : "#eab30850"
-                        }} />
-                      ))}
+                      {filtered.map((_: any, ci: number) => {
+                        const s = filtered[ci].status;
+                        const missing = filtered[ci].data_missing || s === "unknown";
+                        return (
+                          <div key={ci} className="w-2 sm:w-3 h-5 sm:h-6 rounded-sm" style={{
+                            background: missing ? "#64748b30" : s === "positive" ? "#22c55e" : s === "negative" ? "#ef4444" : "#eab30850"
+                          }} />
+                        );
+                      })}
                     </div>
                     <span className="text-base sm:text-lg font-black" style={{ color: safetyColor }}>{passed}/{total}</span>
                     <span className="text-xs font-bold px-2.5 py-1 rounded-full" style={{ background: safetyColor + "18", color: safetyColor, border: `1px solid ${safetyColor}30` }}>
@@ -1319,7 +1338,8 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                 // Filter out legacy news items from cached data — news is now in the dedicated section
                 !item.is_news_item && !item.name?.startsWith("뉴스:") && !item.name?.startsWith("이슈 모니터링:")
               ).map((item: any, i: number) => {
-                const statusColor = item.status === "positive" ? "#22c55e" : item.status === "negative" ? "#ef4444" : "#eab308";
+                const isMissing = item.data_missing || item.status === "unknown";
+                const statusColor = isMissing ? "#64748b" : item.status === "positive" ? "#22c55e" : item.status === "negative" ? "#ef4444" : "#eab308";
                 const hasTrend = item.trend_data?.length > 3;
 
                 // Merge trend_data with stock overlay + compute moving averages
@@ -1342,7 +1362,7 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                     <div className="px-3 sm:px-4 py-3 flex items-start sm:items-center justify-between gap-2" style={{ background: `${statusColor}12` }}>
                       <div className="flex items-start sm:items-center gap-2 sm:gap-2.5 flex-1 min-w-0">
                         <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5 sm:mt-0" style={{ background: `${statusColor}20` }}>
-                          {item.status === "positive" ? <CheckCircle2 size={16} color="#22c55e" /> : item.status === "negative" ? <XCircle size={16} color="#ef4444" /> : <MinusCircle size={16} color="#eab308" />}
+                          {isMissing ? <MinusCircle size={16} color="#64748b" /> : item.status === "positive" ? <CheckCircle2 size={16} color="#22c55e" /> : item.status === "negative" ? <XCircle size={16} color="#ef4444" /> : <MinusCircle size={16} color="#eab308" />}
                         </div>
                         <div className="min-w-0">
                           <div className="flex flex-wrap items-center gap-1.5">
@@ -1518,7 +1538,7 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                           {/* Chart — clean white, line + dots + value labels */}
                           <div className="h-44 rounded-xl overflow-hidden bg-white border border-[#e5e7eb] shadow-sm">
                             <ResponsiveContainer width="100%" height="100%">
-                              <ComposedChart data={chartPts} margin={{ top: 28, right: 20, bottom: 6, left: 20 }}>
+                              <ComposedChart data={chartPts} margin={mob ? { top: 20, right: 8, bottom: 4, left: 4 } : { top: 28, right: 20, bottom: 6, left: 20 }}>
                                 <defs>
                                   <linearGradient id={`cg-${i}`} x1="0" y1="0" x2="0" y2="1">
                                     <stop offset="0%" stopColor={isInDanger ? "#ef4444" : "#1d4ed8"} stopOpacity={0.12} />
@@ -1528,17 +1548,19 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                                 <CartesianGrid horizontal vertical={false} stroke="#f1f5f9" />
                                 <XAxis
                                   dataKey="label"
-                                  tick={{ fill: "#475569", fontSize: 11, fontWeight: 600 }}
+                                  tick={{ fill: "#475569", fontSize: mob ? 9 : 11, fontWeight: 600 }}
                                   axisLine={{ stroke: "#cbd5e1" }}
                                   tickLine={false}
+                                  interval={mob ? "preserveStartEnd" : 0}
                                 />
                                 <YAxis
                                   domain={[yMin, yMax]}
-                                  tick={{ fill: "#94a3b8", fontSize: 9 }}
+                                  tick={{ fill: "#94a3b8", fontSize: mob ? 8 : 9 }}
                                   tickFormatter={(v: number) => `${unit}${v >= 1000 ? (v/1000).toFixed(0) + "k" : Number(v.toFixed(1))}`}
                                   axisLine={false}
                                   tickLine={false}
-                                  width={48}
+                                  width={mob ? 36 : 48}
+                                  tickCount={mob ? 4 : undefined}
                                 />
                                 {/* Danger zone — red fill */}
                                 {dangerLine != null && (
@@ -1548,8 +1570,8 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                                 )}
                                 {/* Danger line */}
                                 {dangerLine != null && (
-                                  <ReferenceLine y={dangerLine} stroke="#ef4444" strokeWidth={2} strokeDasharray="8 4"
-                                    label={{ value: `위험선 ${unit}${dangerLine}`, position: dangerDir === "below" ? "insideBottomLeft" : "insideTopLeft", fontSize: 9, fill: "#ef4444", fontWeight: 800 }} />
+                                  <ReferenceLine y={dangerLine} stroke="#ef4444" strokeWidth={mob ? 1.5 : 2} strokeDasharray="8 4"
+                                    label={{ value: mob ? `${unit}${dangerLine}` : `위험선 ${unit}${dangerLine}`, position: dangerDir === "below" ? "insideBottomLeft" : "insideTopLeft", fontSize: mob ? 8 : 9, fill: "#ef4444", fontWeight: 800 }} />
                                 )}
                                 {/* Expected trend line — dashed blue */}
                                 <Area type="monotone" dataKey="expected" stroke="#3b82f6" strokeWidth={2} strokeDasharray="6 3" fill="none" dot={false} />
@@ -1568,16 +1590,23 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                                     const isLast = di === actualPts.length - 1;
                                     const isPrelim = (payload.label || "").includes("잠정");
                                     const dotColor = isPrelim ? "#f59e0b" : isInDanger ? "#ef4444" : "#1e3a5f";
-                                    return <circle key={`d-${di}`} cx={cx} cy={cy} r={isLast ? 7 : 4} fill={isPrelim ? "#fef3c7" : "#fff"} stroke={dotColor} strokeWidth={isLast ? 3 : 2} />;
+                                    const r = mob ? (isLast ? 5 : 3) : (isLast ? 7 : 4);
+                                    return <circle key={`d-${di}`} cx={cx} cy={cy} r={r} fill={isPrelim ? "#fef3c7" : "#fff"} stroke={dotColor} strokeWidth={isLast ? 2.5 : 1.5} />;
                                   }}
                                   label={({ x, y, value, index }: any) => {
                                     if (value == null) return null;
                                     const isLast = index === actualPts.length - 1;
                                     const isPrelim = (chartPts[index]?.label || "").includes("잠정");
                                     const color = isPrelim ? "#d97706" : isLast ? (isInDanger ? "#ef4444" : "#1d4ed8") : "#334155";
+                                    // Mobile: only show label on last and preliminary points to avoid overlap
+                                    if (mob && !isLast && !isPrelim) return null;
+                                    const fs = mob ? (isLast ? 10 : 8) : (isLast ? 13 : 10);
+                                    // Alternate label position to reduce overlap
+                                    const offsetY = mob ? (index % 2 === 0 ? -8 : -16) : -12;
+                                    const fmtVal = typeof value === "number" ? (value >= 1000 ? `${(value/1000).toFixed(1)}k` : value.toFixed(value < 10 ? 2 : 1)) : value;
                                     return (
-                                      <text key={`l-${index}`} x={x} y={y - 12} textAnchor="middle" fill={color} fontSize={isLast ? 13 : 10} fontWeight={isLast ? 900 : 700}>
-                                        {isPrelim ? "⚡" : ""}{typeof value === "number" ? (value >= 1000 ? `${(value/1000).toFixed(1)}k` : value.toFixed(value < 10 ? 2 : 1)) : value}
+                                      <text key={`l-${index}`} x={x} y={y + offsetY} textAnchor="middle" fill={color} fontSize={fs} fontWeight={isLast ? 900 : 700}>
+                                        {isPrelim ? "⚡" : ""}{fmtVal}
                                       </text>
                                     );
                                   }}
@@ -1592,8 +1621,10 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                                   label={({ x, y, value, index }: any) => {
                                     // Only label future points (where value is null)
                                     if (chartPts[index]?.value != null || value == null) return null;
+                                    // On mobile, only show the last expected label
+                                    if (mob && index < chartPts.length - 1 && chartPts[index + 1]?.value == null) return null;
                                     return (
-                                      <text key={`el-${index}`} x={x} y={y - 10} textAnchor="middle" fill="#3b82f6" fontSize={10} fontWeight={700}>
+                                      <text key={`el-${index}`} x={x} y={y - (mob ? 6 : 10)} textAnchor="middle" fill="#3b82f6" fontSize={mob ? 8 : 10} fontWeight={700}>
                                         {typeof value === "number" ? (value >= 1000 ? `${(value/1000).toFixed(1)}k` : value.toFixed(value < 10 ? 2 : 1)) : value}
                                       </text>
                                     );

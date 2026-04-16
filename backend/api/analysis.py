@@ -788,47 +788,122 @@ def _summarize_english_title(title: str, company_name: str) -> str:
     """Translate/summarize English news title to Korean explanation.
     Extracts entities, numbers, and context to build a meaningful Korean summary."""
     t = title.lower()
-    original = title.strip()
     parts = []
 
     # Extract specific numbers (%, $, amounts)
     pct_matches = re.findall(r'(\d+\.?\d*)%', t)
-    dollar_matches = re.findall(r'\$\s*([\d,.]+)\s*(billion|million|trillion|B|M)?', t, re.IGNORECASE)
 
-    # Extract analyst/firm names
-    firm_match = re.search(r'(morgan stanley|goldman sachs|jp morgan|jpmorgan|barclays|citi|citigroup|ubs|deutsche bank|bofa|bank of america|wells fargo|rbc|bernstein|jefferies|wedbush|piper sandler|needham|truist|stifel|cowen|loop capital|mizuho|hsbc|nomura|daiwa|macquarie|samsung securities|merrill|oppenheimer)', t)
+    # ── 1. Institutional ownership / share purchases ──
+    # "X Buys/Purchases/Acquires N Shares of Y" pattern
+    inst_buy_match = re.search(
+        r'([\w\s&.\']+?)\s+(?:buys|purchases|acquires|bought|adds|increases?\s+(?:stake|position|holdings?))\s+'
+        r'(?:(\d[\d,]*)\s+shares?\s+(?:of|in)\s+)?',
+        t, re.IGNORECASE
+    )
+    # Passive form: "Shares Purchased by X" / "Shares Bought by X"
+    passive_buy_match = re.search(
+        r'shares?\s+(?:purchased|bought|acquired)\s+by\s+([\w\s&.\']+?)(?:\s*[-–—]|\s*$)',
+        t, re.IGNORECASE
+    )
+    inst_sell_match = re.search(
+        r'([\w\s&.\']+?)\s+(?:sells|reduces|decreases|trims|cuts|dumps|liquidates)\s+'
+        r'(?:(\d[\d,]*)\s+shares?\s+(?:of|in)\s+)?',
+        t, re.IGNORECASE
+    )
+    passive_sell_match = re.search(
+        r'shares?\s+(?:sold|reduced|trimmed)\s+by\s+([\w\s&.\']+?)(?:\s*[-–—]|\s*$)',
+        t, re.IGNORECASE
+    )
+    new_invest_match = re.search(
+        r'([\w\s&.\']+?)\s+(?:makes?\s+new\s+investment|takes?\s+(?:new\s+)?(?:position|stake))',
+        t, re.IGNORECASE
+    )
+    if inst_buy_match:
+        buyer = inst_buy_match.group(1).strip().rstrip(" ,.")
+        shares = inst_buy_match.group(2)
+        if shares:
+            shares_num = int(shares.replace(",", ""))
+            if shares_num > 1_000_000:
+                parts.append(f"기관({buyer}) {shares_num//10000}만주 매수")
+            elif shares_num > 1000:
+                parts.append(f"기관({buyer}) {shares_num:,}주 매수")
+            else:
+                parts.append(f"기관({buyer}) 매수")
+        else:
+            parts.append(f"기관({buyer}) 지분 확대")
+        parts.append("기관 매수세 유입 신호")
+    elif passive_buy_match:
+        buyer = passive_buy_match.group(1).strip().rstrip(" ,.")
+        parts.append(f"기관({buyer}) 매수")
+        parts.append("기관 매수세 유입 신호")
+    elif inst_sell_match:
+        seller = inst_sell_match.group(1).strip().rstrip(" ,.")
+        shares = inst_sell_match.group(2)
+        if shares:
+            shares_num = int(shares.replace(",", ""))
+            parts.append(f"기관({seller}) {shares_num:,}주 매도")
+        else:
+            parts.append(f"기관({seller}) 지분 축소")
+        parts.append("기관 매도 압력 신호")
+    elif passive_sell_match:
+        seller = passive_sell_match.group(1).strip().rstrip(" ,.")
+        parts.append(f"기관({seller}) 매도")
+        parts.append("기관 매도 압력 신호")
+    elif new_invest_match:
+        investor = new_invest_match.group(1).strip().rstrip(" ,.")
+        parts.append(f"기관({investor}) 신규 투자 진입")
+        parts.append("새로운 기관 관심 유입")
+
+    # ── 2. Insider trading ──
+    insider_match = re.search(r'(ceo|cfo|coo|director|insider|officer|executive|chairman|president|vp)\s+(?:buys|sells|purchases|dumps)', t)
+    if insider_match:
+        role = insider_match.group(1).upper()
+        if "sell" in t or "dump" in t:
+            parts.append(f"내부자({role}) 매도")
+        else:
+            parts.append(f"내부자({role}) 매수")
+
+    # ── 3. Analyst/firm ratings ──
+    firm_match = re.search(r'(morgan stanley|goldman sachs|jp morgan|jpmorgan|barclays|citi(?:group)?|ubs|deutsche bank|bofa|bank of america|wells fargo|rbc|bernstein|jefferies|wedbush|piper sandler|needham|truist|stifel|cowen|loop capital|mizuho|hsbc|nomura|daiwa|macquarie|oppenheimer|baird|canaccord|raymond james|bmo|td securities|scotiabank|wolfe research|keybanc|susquehanna|rosenblatt)', t)
     firm_name = firm_match.group(1).title() if firm_match else ""
 
     # Target price
     tp_match = re.search(r'(?:target|price target|pt|tp)\s*(?:to\s*)?(?:of\s*)?(?:krw|usd|\$)?\s*([\d,.]+)', t)
     if tp_match:
         tp_val = tp_match.group(1)
-        parts.append(f"목표주가 ${tp_val}" if not any(c in t for c in ["krw", "원"]) else f"목표주가 {tp_val}")
+        parts.append(f"목표주가 ${tp_val}")
 
     # Rating changes
-    if "buy" in t or "outperform" in t:
-        parts.append("매수 의견")
-    elif "sell" in t or "underperform" in t:
-        parts.append("매도 의견")
-    elif "hold" in t or "neutral" in t or "equal.weight" in t:
-        parts.append("중립 의견")
     if "initiates" in t or "initiate" in t:
         parts.append("신규 커버리지 개시")
     elif "upgrade" in t:
         parts.append("투자의견 상향")
     elif "downgrade" in t:
         parts.append("투자의견 하향")
-    elif "maintains" in t or "reiterate" in t:
-        parts.append("투자의견 유지")
     elif "raises" in t and "target" in t:
         parts.append("목표주가 상향")
-    elif "lowers" in t or "cuts" in t:
+    elif "lowers" in t and "target" in t or "cuts" in t and "target" in t:
         parts.append("목표주가 하향")
+    elif "maintains" in t or "reiterate" in t:
+        parts.append("투자의견 유지")
 
-    if firm_name:
+    if "buy" in t.split() or "outperform" in t or "overweight" in t:
+        parts.append("매수 의견")
+    elif "sell" in t.split() and "shares" not in t or "underperform" in t or "underweight" in t:
+        parts.append("매도 의견")
+    elif "hold" in t.split() or "neutral" in t or "equal" in t and "weight" in t:
+        parts.append("중립 의견")
+
+    if firm_name and firm_name.lower() not in " ".join(parts).lower():
         parts.insert(0, f"{firm_name}")
 
-    # Revenue/earnings specifics
+    # ── 4. Earnings/revenue specifics ──
+    if "q1" in t or "q2" in t or "q3" in t or "q4" in t:
+        q_match = re.search(r'(q[1-4])', t)
+        if q_match:
+            q_map = {"q1": "1분기", "q2": "2분기", "q3": "3분기", "q4": "4분기"}
+            parts.append(f"{q_map.get(q_match.group(1), '')} 실적")
+
     rev_match = re.search(r'revenue\s*(?:of\s*)?\$?([\d,.]+)\s*(billion|million|B|M)?', t, re.IGNORECASE)
     if rev_match:
         parts.append(f"매출 ${rev_match.group(1)}{rev_match.group(2) or ''}")
@@ -836,32 +911,52 @@ def _summarize_english_title(title: str, company_name: str) -> str:
     if eps_match:
         parts.append(f"EPS ${eps_match.group(1)}")
 
-    # Percentage moves
-    if "surge" in t or "soar" in t or "jump" in t or "rally" in t or "gain" in t:
+    # ── 5. Price movement ──
+    if any(kw in t for kw in ["surge", "soar", "jump", "rally", "spike"]):
         pct = pct_matches[0] if pct_matches else ""
         parts.append(f"{pct}% 급등" if pct else "급등세")
-    elif "falls" in t or "drop" in t or "plunge" in t or "tumble" in t or "slide" in t or "slump" in t:
+    elif any(kw in t for kw in ["falls", "drop", "plunge", "tumble", "slide", "slump", "crash", "tank"]):
         pct = pct_matches[0] if pct_matches else ""
         parts.append(f"{pct}% 급락" if pct else "급락세")
+    elif any(kw in t for kw in ["rises", "climbs", "gains", "advances", "up "]):
+        pct = pct_matches[0] if pct_matches else ""
+        parts.append(f"{pct}% 상승" if pct else "상승세")
 
-    # Specific business events
-    if "partnership" in t or "deal" in t or "signs" in t:
+    # ── 6. Business events ──
+    if "partnership" in t or "signs" in t and "deal" in t or "collaboration" in t or "joint venture" in t:
         parts.append("파트너십/계약 체결")
-    if "acquisition" in t or "acquire" in t or "merger" in t:
+    if "acquisition" in t or "acquire" in t or "merger" in t or "takeover" in t:
         parts.append("인수합병(M&A)")
-    if "layoff" in t or "cut" in t and "job" in t:
+    if "layoff" in t or ("cut" in t and "job" in t) or "restructur" in t or "workforce reduction" in t:
         parts.append("구조조정/감원")
-    if "buyback" in t or "repurchase" in t:
+    if "buyback" in t or "repurchase" in t or "share repurchase" in t:
         parts.append("자사주 매입")
     if "dividend" in t:
-        parts.append("배당 관련")
-    if "split" in t and "stock" in t:
+        if "increase" in t or "raise" in t or "hike" in t:
+            parts.append("배당 인상")
+        elif "cut" in t or "suspend" in t:
+            parts.append("배당 삭감/중단")
+        else:
+            parts.append("배당 관련")
+    if "stock split" in t or "split" in t and "stock" in t:
         parts.append("주식 분할")
-    if "ipo" in t:
-        parts.append("IPO 관련")
+    if "ipo" in t or "public offering" in t:
+        parts.append("IPO/공모")
+    if "contract" in t and "award" in t or "wins" in t and "contract" in t:
+        parts.append("수주 계약 수주")
+    if "backlog" in t:
+        parts.append("수주잔고 관련")
 
-    # Industry-specific
-    if "ai chip" in t or "ai boom" in t or "artificial intelligence" in t:
+    # ── 7. Defense/aerospace specific ──
+    if any(kw in t for kw in ["defense", "defence", "military", "pentagon", "navy", "army", "missile", "weapon", "nuclear"]):
+        parts.append("방산/군수 관련")
+    if "smr" in t or "small modular reactor" in t:
+        parts.append("소형모듈원자로(SMR)")
+    if "naval" in t or "submarine" in t:
+        parts.append("해군/잠수함 관련")
+
+    # ── 8. Industry-specific ──
+    if "ai chip" in t or "ai boom" in t or "artificial intelligence" in t or " ai " in t:
         parts.append("AI 수혜")
     if "hbm" in t:
         parts.append("HBM 수요")
@@ -869,7 +964,7 @@ def _summarize_english_title(title: str, company_name: str) -> str:
         parts.append("데이터센터 수요")
     if "foundry" in t or "tsmc" in t:
         parts.append("파운드리 관련")
-    if "ev" in t or "electric vehicle" in t:
+    if "ev " in t or "electric vehicle" in t:
         parts.append("전기차 관련")
     if "battery" in t or "lithium" in t:
         parts.append("배터리/리튬")
@@ -879,29 +974,54 @@ def _summarize_english_title(title: str, company_name: str) -> str:
         parts.append("FDA 승인")
     if "clinical" in t or "trial" in t:
         parts.append("임상시험")
-    if "record" in t and ("high" in t or "breaking" in t):
-        parts.append("사상 최고치")
+    if "record" in t and ("high" in t or "revenue" in t or "profit" in t):
+        parts.append("사상 최고 실적")
     if "guidance" in t and ("raise" in t or "above" in t or "beat" in t):
         parts.append("가이던스 상향")
     if "miss" in t and ("estimate" in t or "expectation" in t):
         parts.append("시장 기대 하회")
     if "beat" in t and ("estimate" in t or "expectation" in t):
         parts.append("시장 기대 상회")
+    if "short interest" in t or "short selling" in t or "short squeeze" in t:
+        parts.append("공매도 관련")
+    if "etf" in t:
+        parts.append("ETF 편입/변동")
+    if "index" in t and ("add" in t or "inclusion" in t or "join" in t):
+        parts.append("지수 편입")
+    if "space" in t or "rocket" in t or "satellite" in t or "launch" in t and "orbit" in t:
+        parts.append("우주/위성 관련")
+    if "quantum" in t:
+        parts.append("양자컴퓨팅 관련")
+    if "robot" in t or "automat" in t:
+        parts.append("로봇/자동화")
+
+    # ── 9. Reflecting/analysis articles ──
+    if "reflecting on" in t or "looking at" in t or "analysis of" in t or "deep dive" in t:
+        parts.append("종합 분석 기사")
 
     if parts:
-        return " · ".join(parts[:5])  # max 5 points
+        # Deduplicate
+        seen = set()
+        unique = []
+        for p in parts:
+            if p not in seen:
+                seen.add(p)
+                unique.append(p)
+        return " · ".join(unique[:5])
 
-    # Fallback: simple word-level translation for common patterns
+    # Fallback: translate key English words
     simple_map = {
-        "reports": "실적 발표", "quarterly": "분기", "annual": "연간",
-        "growth": "성장", "decline": "하락", "strong": "호조",
-        "weak": "부진", "outlook": "전망", "demand": "수요",
-        "supply": "공급", "shortage": "부족", "expansion": "확장",
-        "contract": "수주", "order": "주문", "shipment": "출하",
+        "reports": "실적 발표", "quarterly": "분기 실적", "annual": "연간 실적",
+        "growth": "성장", "decline": "하락", "strong": "호조", "robust": "호조",
+        "weak": "부진", "outlook": "전망", "demand": "수요", "warns": "경고",
+        "supply": "공급", "shortage": "부족", "expansion": "확장", "profit": "이익",
+        "contract": "수주", "order": "주문", "shipment": "출하", "backlog": "수주잔고",
+        "innovation": "혁신", "technology": "기술", "breakthrough": "돌파구",
+        "valuation": "밸류에이션", "overvalued": "고평가", "undervalued": "저평가",
     }
     found = [v for k, v in simple_map.items() if k in t]
     if found:
-        return " · ".join(found[:4])
+        return " · ".join(dict.fromkeys(found).keys())
     return ""
 
 
@@ -956,11 +1076,28 @@ def _classify_sentiment_detailed(title: str, company_name: str) -> tuple[str, st
         detail = en_summary or f"{company_name} 규제/법적 이슈"
         return "negative", "규제/법적 리스크", _build_explanation("악재", detail, "규제·법적 리스크는 불확실성을 키워 주가를 압박합니다")
 
-    if any(kw in text for kw in ["목표가", "target", "상향", "upgrade", "outperform", "매수", "buy", "initiates", "raises"]):
+    # ── Institutional ownership changes (buys/sells shares) ──
+    if any(kw in text for kw in ["buys", "purchases", "acquires", "bought"]) and any(kw in text for kw in ["shares", "stake", "position", "holdings"]):
+        detail = en_summary or f"{company_name} 기관 매수 보도"
+        return "positive", "기관 매수", _build_explanation("호재", detail, "기관 투자자의 매수는 해당 종목에 대한 긍정적 전망을 반영합니다")
+    if "purchased by" in text or "bought by" in text or "acquired by" in text:
+        detail = en_summary or f"{company_name} 기관 매수 보도"
+        return "positive", "기관 매수", _build_explanation("호재", detail, "기관 투자자의 매수는 해당 종목에 대한 긍정적 전망을 반영합니다")
+    if "new investment" in text or "new position" in text or "new stake" in text:
+        detail = en_summary or f"{company_name} 기관 신규 투자"
+        return "positive", "기관 신규 진입", _build_explanation("호재", detail, "새로운 기관 투자자 진입은 수급 개선 신호입니다")
+    if any(kw in text for kw in ["sells", "reduces", "trims", "dumps", "liquidates"]) and any(kw in text for kw in ["shares", "stake", "position", "holdings"]):
+        detail = en_summary or f"{company_name} 기관 매도 보도"
+        return "negative", "기관 매도", _build_explanation("악재", detail, "기관 투자자의 매도는 수급 악화 신호가 될 수 있습니다")
+    if "sold by" in text or "reduced by" in text or "trimmed by" in text:
+        detail = en_summary or f"{company_name} 기관 매도 보도"
+        return "negative", "기관 매도", _build_explanation("악재", detail, "기관 투자자의 매도는 수급 악화 신호가 될 수 있습니다")
+
+    if any(kw in text for kw in ["목표가", "target", "상향", "upgrade", "outperform", "매수", "initiates", "raises"]) and "shares" not in text:
         detail = en_summary or f"{company_name} 투자의견 상향"
         return "positive", "애널리스트 호평", _build_explanation("호재", detail, "투자의견 상향은 기관 매수세 유입의 신호입니다")
 
-    if any(kw in text for kw in ["하향", "downgrade", "매도", "sell", "underperform", "underweight"]):
+    if any(kw in text for kw in ["하향", "downgrade", "매도", "underperform", "underweight"]):
         detail = en_summary or f"{company_name} 투자의견 하향"
         return "negative", "애널리스트 하향", _build_explanation("악재", detail, "투자의견 하향은 기관 매도 압력으로 이어질 수 있습니다")
 
@@ -1685,6 +1822,191 @@ def _fetch_stock_industry(ticker: str) -> dict:
     return result
 
 
+_AI_CHECKLIST_CACHE: dict[str, tuple[float, list[dict]]] = {}
+_AI_CHECKLIST_TTL = 60 * 60 * 12  # 12h cache
+
+
+def _ai_validate_checklist(
+    ticker: str,
+    name: str,
+    industry: str,
+    sector: str,
+    sector_id: str,
+    is_profitable: bool,
+    profit_margin: float | None,
+    revenue_growth: float | None,
+    market_cap: int,
+    draft_sources: list[dict],
+    news_headlines: list[str] | None = None,
+) -> list[dict]:
+    """Use Gemini AI to validate & customize checklist for a specific stock.
+
+    This is the FINAL verification step: after rule-based checklist generation,
+    AI reviews each item for relevance to this specific company's business model,
+    stage, and competitive position. Removes irrelevant items, adjusts thresholds,
+    and adds missing critical items.
+    """
+    api_key = settings.GEMINI_API_KEY
+    if not api_key:
+        return draft_sources
+
+    cache_key = f"ai-cl:{ticker}"
+    cached = _AI_CHECKLIST_CACHE.get(cache_key)
+    if cached and time.time() - cached[0] < _AI_CHECKLIST_TTL:
+        return cached[1]
+
+    # Build concise draft description
+    draft_desc = []
+    for i, src in enumerate(draft_sources):
+        item_type = src.get("type", "")
+        if item_type == "commodity":
+            draft_desc.append(f"{i}: {src.get('name','')} (symbol:{src.get('symbol','')}, 방향:{src.get('positive_if','')}, 가중치:{src.get('weight',0)})")
+        else:
+            draft_desc.append(f"{i}: {src.get('name','')} (metric:{src.get('metric','')}, 기준:{src.get('threshold','')}, 가중치:{src.get('weight',0)})")
+
+    news_context = ""
+    if news_headlines:
+        news_context = f"\n최근 뉴스: {'; '.join(news_headlines[:8])}"
+
+    profit_desc = "흑자" if is_profitable else "적자"
+    margin_str = f"{profit_margin*100:.1f}%" if profit_margin is not None else "N/A"
+    growth_str = f"{revenue_growth*100:.1f}%" if revenue_growth is not None else "N/A"
+    mcap_str = f"${market_cap/1e9:.1f}B" if market_cap > 1e9 else f"${market_cap/1e6:.0f}M"
+
+    prompt = f"""당신은 주식 투자 분석 전문가입니다. 아래 기업의 투자 체크리스트를 검증해주세요.
+
+## 기업 정보
+- 종목: {ticker} ({name})
+- 업종: {industry} / 섹터: {sector}
+- 분류 ID: {sector_id}
+- 시가총액: {mcap_str}
+- 수익성: {profit_desc} (이익률: {margin_str})
+- 매출성장률: {growth_str}{news_context}
+
+## 현재 초안 체크리스트
+{chr(10).join(draft_desc)}
+
+## 검증 작업
+각 항목에 대해:
+1. 이 기업의 실제 사업과 **논리적으로 직접 연결**되는지 판단
+2. 관련 없는 항목 제거 (예: 원자력 기업에 유가, 소프트웨어 기업에 금가격 등)
+3. 빠진 핵심 항목이 있으면 추가 제안
+4. 기업 단계(스타트업/성숙기업)에 맞게 기준값 조정
+
+## 응답 형식 (JSON만 출력, 설명 없이)
+```json
+{{
+  "keep": [0, 2, 3],
+  "remove": [{{"index": 1, "reason": "원자력 기업에 유가는 무관"}}],
+  "adjust": [{{"index": 3, "weight": 60, "threshold": 0.0, "reason": "적자기업이므로 기준 하향"}}],
+  "add": [
+    {{"name": "추가할 항목명", "type": "commodity", "symbol": "URA", "positive_if": "up", "weight": 85, "thesis": "왜 중요한지", "window": "향후 1~3개월"}},
+    {{"name": "추가할 항목명", "type": "earnings_metric", "metric": "revenue_growth", "positive_if": "above", "threshold": 0.05, "weight": 80, "thesis": "왜 중요한지", "window": "향후 1~2분기"}}
+  ]
+}}
+```"""
+
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+        resp = requests.post(url, json={
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": 0.1,
+                "maxOutputTokens": 1500,
+                "thinkingConfig": {"thinkingBudget": 0},
+            },
+        }, timeout=20)
+
+        if resp.status_code != 200:
+            return draft_sources
+
+        data = resp.json()
+        text = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+
+        # Extract JSON from response
+        json_match = re.search(r'\{[\s\S]*\}', text)
+        if not json_match:
+            return draft_sources
+        result = json.loads(json_match.group())
+
+        # Apply AI decisions
+        remove_indices = {r["index"] for r in result.get("remove", []) if isinstance(r, dict) and "index" in r}
+        adjustments = {a["index"]: a for a in result.get("adjust", []) if isinstance(a, dict) and "index" in a}
+
+        # Build keep set: if AI provides "keep", use it as allowlist
+        keep_raw = result.get("keep", [])
+        keep_indices: set[int] | None = None
+        if keep_raw and isinstance(keep_raw, list):
+            keep_indices = set()
+            for k in keep_raw:
+                if isinstance(k, int):
+                    keep_indices.add(k)
+                elif isinstance(k, dict) and "index" in k:
+                    keep_indices.add(k["index"])
+            # Also include adjusted items (keep + adjust overlap)
+            keep_indices.update(adjustments.keys())
+
+        validated: list[dict] = []
+        for i, src in enumerate(draft_sources):
+            if i in remove_indices:
+                continue
+            # If keep list exists, only keep items in the list or adjustments
+            if keep_indices is not None and i not in keep_indices:
+                continue
+            if i in adjustments:
+                adj = adjustments[i]
+                if "weight" in adj:
+                    src = {**src, "weight": adj["weight"]}
+                if "threshold" in adj:
+                    src = {**src, "threshold": adj["threshold"]}
+            validated.append(src)
+
+        # Add AI-suggested items (only types our system can actually process)
+        VALID_METRICS = {"revenue_growth", "operating_margin", "profit_margin", "roe",
+                         "dividend_yield", "price_to_book", "debt_to_equity"}
+        for item in result.get("add", []):
+            if not isinstance(item, dict) or not item.get("name"):
+                continue
+            item_type = item.get("type", "commodity")
+            if item_type == "commodity" and item.get("symbol"):
+                validated.append(
+                    ck(item["name"], "commodity", symbol=item["symbol"],
+                       positive_if=item.get("positive_if", "up"),
+                       weight=min(item.get("weight", 70), 88),
+                       thesis=item.get("thesis", ""), window=item.get("window", "향후 1~3개월"))
+                )
+            elif item_type in ("earnings_metric", "metric", "quantitative") and item.get("metric"):
+                metric = item["metric"]
+                if metric not in VALID_METRICS:
+                    continue  # skip metrics our system can't fetch
+                validated.append(
+                    ck(item["name"], "earnings_metric", metric=metric,
+                       positive_if=item.get("positive_if", "above"),
+                       threshold=item.get("threshold", 0.05),
+                       weight=min(item.get("weight", 70), 88),
+                       thesis=item.get("thesis", ""), window=item.get("window", "향후 1~2분기"))
+                )
+
+        # Ensure we have at least 4 items — AI shouldn't strip too aggressively
+        if len(validated) < 4:
+            # Re-add core financial metrics that AI might have over-pruned
+            core_metrics = {"revenue_growth", "operating_margin", "profit_margin", "roe"}
+            existing = {s.get("metric") for s in validated if s.get("type") == "earnings_metric"}
+            for src in draft_sources:
+                if len(validated) >= 5:
+                    break
+                if src.get("type") == "earnings_metric" and src.get("metric") in core_metrics:
+                    if src.get("metric") not in existing:
+                        validated.append(src)
+                        existing.add(src.get("metric"))
+
+        _AI_CHECKLIST_CACHE[cache_key] = (time.time(), validated)
+        return validated
+
+    except Exception:
+        return draft_sources
+
+
 def _build_dynamic_checklist_sources(ticker: str, info: dict | None = None) -> list[dict]:
     """Build intelligent, stock-specific checklist sources based on industry analysis.
 
@@ -1865,10 +2187,63 @@ def _build_dynamic_checklist_sources(ticker: str, info: dict | None = None) -> l
             ck("금 가격 (안전자산)", "commodity", symbol="GC=F", positive_if="up", weight=65,
                thesis="금 강세는 지정학 불안 → 방산주 수혜 시나리오를 지지합니다.", window="향후 1~3개월"),
         ],
+        # smr-nuclear: built dynamically below based on company stage
     }
 
     # Use sector-specific tailored checklist if available
-    if sector_id and sector_id in SECTOR_CHECKLISTS:
+    if sector_id == "smr-nuclear":
+        # ── Nuclear/SMR: differentiate startup vs established ──
+        is_pre_revenue = (revenue_growth is None or profit_margin is None or
+                          (profit_margin is not None and profit_margin < -0.3) or
+                          market_cap < 5_000_000_000)
+        if is_pre_revenue:
+            # Pre-revenue startup (e.g., Oklo) — focus on cash burn, milestones, policy
+            dynamic_sources = [
+                ck(f"{name} 현금 소진율 점검", "earnings_metric", metric="roe",
+                   positive_if="above", threshold=-0.5, weight=92,
+                   thesis=f"{name}은 상용화 이전 스타트업으로, 자금 소진 속도가 생존과 직결됩니다. 자본 조달 실패 시 주가 급락 위험.",
+                   window="향후 2~4분기"),
+                ck(f"{name} 영업이익률", "earnings_metric", metric="operating_margin",
+                   positive_if="above", threshold=-0.5, weight=88,
+                   thesis=f"적자 규모가 줄어드는지 여부가 상용화 진전의 간접 지표입니다.",
+                   window="향후 1~2분기"),
+                ck("우라늄 ETF (URA)", "commodity", symbol="URA", positive_if="up", weight=88,
+                   thesis="우라늄 가격 상승은 원자력 산업 전체 기대감을 반영하며, SMR 기업 밸류에이션을 지지합니다.",
+                   window="향후 1~3개월"),
+                ck("원자력 ETF (NLR)", "commodity", symbol="NLR", positive_if="up", weight=82,
+                   thesis="원자력 섹터 전체 자금 흐름과 정책 기대를 반영합니다.",
+                   window="향후 1~3개월"),
+                ck(f"{name} 매출 성장률", "earnings_metric", metric="revenue_growth",
+                   positive_if="above", threshold=0.0, weight=80,
+                   thesis=f"Pre-revenue 기업은 매출 발생 자체가 이벤트입니다. 최초 매출 또는 수주 확인이 핵심.",
+                   window="향후 1~2분기"),
+            ]
+        else:
+            # Established nuclear company (e.g., 두산에너빌리티, Cameco)
+            dynamic_sources = [
+                ck(f"{name} 매출 성장률", "earnings_metric", metric="revenue_growth",
+                   positive_if="above", threshold=0.05, weight=85,
+                   thesis=f"원전 수주와 건설 실적이 {name} 매출 성장에 직결됩니다.",
+                   window="향후 1~2분기"),
+                ck(f"{name} 영업이익률", "earnings_metric", metric="operating_margin",
+                   positive_if="above", threshold=0.06, weight=90,
+                   thesis=f"원전 프로젝트의 수익성이 유지되는지가 핵심입니다.",
+                   window="향후 1~2분기"),
+                ck("우라늄 ETF (URA)", "commodity", symbol="URA", positive_if="up", weight=88,
+                   thesis="우라늄 수급 기대가 원전 산업 전체 투자심리에 영향을 줍니다.",
+                   window="향후 1~3개월"),
+                ck("원자력 ETF (NLR)", "commodity", symbol="NLR", positive_if="up", weight=80,
+                   thesis="원자력 섹터 전체 자금 흐름과 에너지 전환 정책을 반영합니다.",
+                   window="향후 1~3개월"),
+                ck("전력 유틸리티 ETF (XLU)", "commodity", symbol="XLU", positive_if="up", weight=65,
+                   thesis="전력 수요 증가가 원전 필요성에 대한 기대를 높입니다.",
+                   window="향후 1~3개월"),
+                ck(f"{name} ROE", "earnings_metric", metric="roe",
+                   positive_if="above", threshold=0.05, weight=68,
+                   thesis=f"자본 효율이 유지되어야 대규모 인프라 투자가 정당화됩니다.",
+                   window="향후 2~4분기"),
+            ]
+    elif sector_id and sector_id in SECTOR_CHECKLISTS:
         dynamic_sources = list(SECTOR_CHECKLISTS[sector_id])
     else:
         # Generic: core financial metrics
@@ -1889,6 +2264,47 @@ def _build_dynamic_checklist_sources(ticker: str, info: dict | None = None) -> l
                thesis=f"{'고성장주인 ' if is_high_growth else ''}{name}의 매출 성장 둔화는 주가 조정의 가장 직접적인 트리거입니다.",
                window="향후 1~2분기")
         )
+
+    # ── 1b. Company-stage adjustments (applies to ALL sectors automatically) ──
+    # Adjust thresholds and add items based on company maturity — NOT sector label.
+    # Same sector can have pre-revenue startups and mature blue chips.
+    existing_metrics = {s.get("metric") for s in dynamic_sources if s.get("type") == "earnings_metric"}
+    is_pre_revenue_startup = (
+        not is_profitable and
+        (revenue_growth is None or market_cap < 5_000_000_000) and
+        (profit_margin is not None and profit_margin < -0.15)
+    )
+
+    if is_pre_revenue_startup:
+        # Auto-adjust: lower thresholds for margin/growth in sector checklist
+        for src in dynamic_sources:
+            if src.get("type") == "earnings_metric":
+                metric = src.get("metric", "")
+                if metric in ("operating_margin", "profit_margin") and src.get("threshold", 0) > 0:
+                    src["threshold"] = 0.0  # breakeven is the goal, not profit
+                    src["thesis"] = f"{name}은 아직 적자 기업으로, 흑자전환(손익분기) 도달이 최우선 과제입니다."
+                if metric == "revenue_growth" and src.get("threshold", 0) > 0.05:
+                    src["threshold"] = 0.0  # any revenue at all is meaningful
+                    src["thesis"] = f"Pre-revenue 단계인 {name}은 매출 발생 자체가 주가 촉매입니다."
+                if metric == "roe" and src.get("threshold", 0) > 0:
+                    src["threshold"] = -0.3  # tolerate losses but watch burn rate
+
+        # Add cash burn check if not already present
+        if "roe" not in existing_metrics:
+            dynamic_sources.append(
+                ck(f"{name} 현금 소진율 점검", "earnings_metric", metric="roe",
+                   positive_if="above", threshold=-0.5, weight=80,
+                   thesis=f"{name}은 적자 스타트업으로, 자금 소진 속도가 생존과 밸류에이션에 직결됩니다.",
+                   window="향후 2~4분기")
+            )
+    elif not is_profitable and "roe" not in existing_metrics:
+        if profit_margin is not None and profit_margin < -0.1:
+            dynamic_sources.append(
+                ck(f"{name} 현금 소진율 점검", "earnings_metric", metric="roe",
+                   positive_if="above", threshold=-0.3, weight=72,
+                   thesis=f"{name}은 적자 상태로, 흑자전환 시점이 밸류에이션의 핵심입니다.",
+                   window="향후 2~4분기")
+            )
 
     # ── 2. Industry-specific peers & ETFs ──
     INDUSTRY_PEERS: dict[str, list[dict]] = {
@@ -1992,6 +2408,14 @@ def _build_dynamic_checklist_sources(ticker: str, info: dict | None = None) -> l
         "defense": [
             {"symbol": "ITA", "label": "방산 ETF", "why": "방산 예산과 수주 기대를 반영합니다."},
         ],
+        "nuclear": [
+            {"symbol": "URA", "label": "우라늄 ETF", "why": "우라늄 수급과 원자력 산업 기대감을 가장 직접적으로 반영합니다."},
+            {"symbol": "NLR", "label": "원자력 ETF", "why": "원자력 섹터 전체 자금 흐름을 보여줍니다."},
+        ],
+        "smr": [
+            {"symbol": "URA", "label": "우라늄 ETF", "why": "SMR 상용화 기대가 우라늄 수요와 연결됩니다."},
+            {"symbol": "NLR", "label": "원자력 ETF", "why": "원자력 정책과 에너지 전환 기대를 반영합니다."},
+        ],
         # Telecom / Media
         "telecom": [
             {"symbol": "XLC", "label": "통신서비스 ETF", "why": "통신/미디어 섹터 자금 흐름을 반영합니다."},
@@ -2014,7 +2438,7 @@ def _build_dynamic_checklist_sources(ticker: str, info: dict | None = None) -> l
     matched_peers: list[dict] = []
     # Map sector_id to industry keyword for matching
     SECTOR_TO_INDUSTRY = {
-        "ai-semi": "semiconductor", "robotics": "auto", "smr-nuclear": "utility",
+        "ai-semi": "semiconductor", "robotics": "auto", "smr-nuclear": "nuclear",
         "cybersec": "software", "space": "aerospace", "biotech": "biotech",
         "quantum": "software", "hydrogen": "energy", "battery": "battery",
         "ev": "electric vehicle", "chemical": "chemical", "materials": "steel",
@@ -2152,31 +2576,33 @@ def _build_dynamic_checklist_sources(ticker: str, info: dict | None = None) -> l
             )
 
     # ── 7. Geopolitical / Macro risk items (대외이슈) ──
-    # Add oil/gold/VIX as geopolitical risk proxies for all stocks
-    geo_items = []
-    if "CL=F" not in seen_symbols:
-        geo_items.append(
+    # Only add oil/gold when the business has a DIRECT logical connection.
+    # Oil: relevant for airlines, shipping, chemical, energy, defense, logistics, auto
+    # Gold: relevant for mining, gold, defense-geo, financial
+    # Do NOT blindly add these to all stocks — "억지로 끼워넣지 말 것"
+    OIL_RELEVANT_INDUSTRIES = {"oil", "airline", "shipping", "chemical", "logistics",
+                                "auto", "energy", "defense", "defense-geo", "transportation"}
+    GOLD_RELEVANT_INDUSTRIES = {"mining", "gold", "financial", "defense", "defense-geo",
+                                 "precious metal"}
+    all_industry_tags = {industry, yf_sector, sector_industry, sector_id or ""}
+
+    oil_relevant = bool(OIL_RELEVANT_INDUSTRIES & all_industry_tags)
+    gold_relevant = bool(GOLD_RELEVANT_INDUSTRIES & all_industry_tags)
+
+    if oil_relevant and "CL=F" not in seen_symbols:
+        dynamic_sources.append(
             ck("유가 (지정학 리스크)", "commodity", symbol="CL=F",
                positive_if="stable", weight=45,
-               thesis="유가 급등은 이란·중동 리스크 심화 신호이며, 인플레이션과 공급망 교란으로 전 업종에 영향을 줍니다.",
+               thesis="유가 급등은 이란·중동 리스크 심화 신호이며, 인플레이션과 공급망 교란으로 직접 영향을 줍니다.",
                window="향후 1~3개월")
         )
-    if "GC=F" not in seen_symbols:
-        geo_items.append(
+    if gold_relevant and "GC=F" not in seen_symbols:
+        dynamic_sources.append(
             ck("금 가격 (안전자산 선호)", "commodity", symbol="GC=F",
                positive_if="stable", weight=40,
-               thesis="금 급등은 지정학 불안과 경기 침체 우려를 반영합니다. 위험자산 선호 약화 시그널.",
+               thesis="금 급등은 지정학 불안과 경기 침체 우려를 반영합니다.",
                window="향후 1~3개월")
         )
-    # For Korean stocks, add additional geopolitical sensitivity
-    if is_krx and "KRW=X" not in seen_symbols:
-        geo_items.append(
-            ck("원/달러 환율 (대외 리스크)", "commodity", symbol="KRW=X",
-               positive_if="stable", weight=48,
-               thesis="지정학 리스크 확대 시 원화 급락 → 외국인 자금 이탈, 수입 원자재 원가 상승으로 이중 타격.",
-               window="향후 1~3개월")
-        )
-    dynamic_sources.extend(geo_items)
 
     # Dedup: remove duplicate commodity symbols (sector template + generic may overlap)
     seen_syms: set[str] = set()
@@ -2188,7 +2614,26 @@ def _build_dynamic_checklist_sources(ticker: str, info: dict | None = None) -> l
                 continue
             seen_syms.add(sym)
         deduped.append(src)
-    return deduped
+
+    # ── FINAL STEP: AI validation & customization ──
+    # Gemini reviews each item for relevance to THIS specific company.
+    # Removes irrelevant items, adjusts thresholds, adds missing critical items.
+    news_headlines = None
+    try:
+        from services.news_crawler import NewsCrawlerService
+        articles = NewsCrawlerService.crawl_google_news_rss(name, lang="en")[:5]
+        news_headlines = [a.title for a in articles if a.title]
+    except Exception:
+        pass
+
+    validated = _ai_validate_checklist(
+        ticker=ticker, name=name, industry=industry, sector=yf_sector,
+        sector_id=sector_id or "", is_profitable=is_profitable,
+        profit_margin=profit_margin, revenue_growth=revenue_growth,
+        market_cap=market_cap, draft_sources=deduped,
+        news_headlines=news_headlines,
+    )
+    return validated
 
 
 def _compute_return_correlation(base_hist: pd.DataFrame, compare_hist: pd.DataFrame) -> tuple[float, float, float]:
@@ -4775,7 +5220,7 @@ def get_checklist_live(ticker: str) -> dict:
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
     cache_key = f"checklist-live:{ticker}"
-    cached = _get_best_cached(cache_key, 86400)
+    cached = _get_best_cached(cache_key, 7200)  # 2h cache — allows fresh 잠정실적 data
     if cached is not None:
         # If it was a rate-limited fallback, only cache 5 min
         if cached.get("rate_limited"):
@@ -5062,6 +5507,7 @@ def get_checklist_live(ticker: str) -> dict:
                         pass
 
                     # Graduated scoring: continuous 0-100 per item, not just pass/fail
+                    is_profitability = metric in ("profit_margin", "operating_margin", "roe")
                     if positive_if == "above":
                         if threshold > 0:
                             ratio = val / threshold  # how close to target
@@ -5075,8 +5521,18 @@ def get_checklist_live(ticker: str) -> dict:
                                 item_score = 20 + int(ratio / 0.5 * 20)  # 20-40
                             else:
                                 item_score = max(5, 20 + int(ratio * 20))  # negative val
+                        elif is_profitability:
+                            # For margin/ROE metrics: val <= 0 means loss → always negative
+                            if val < 0:
+                                item_score = max(5, 25 + int(val * 100))  # deeper loss = worse
+                            elif val == 0:
+                                item_score = 30  # breakeven = still concerning
+                            elif val > 0.1:
+                                item_score = 75  # > 10% margin is good
+                            else:
+                                item_score = 40 + int(val * 300)  # 0~10% → 40-70
                         else:
-                            item_score = 70 if val >= threshold else 30
+                            item_score = 70 if val > threshold else (50 if val == threshold else 30)
                         # Status from score
                         if item_score >= 65:
                             item["status"] = "positive"
@@ -5114,16 +5570,27 @@ def get_checklist_live(ticker: str) -> dict:
                         # Build contextual detail text
                         thr_pct = round(threshold * 100, 1)
                         if positive_if == "above":
-                            if val >= threshold * 1.5:
+                            if is_profitability and val <= 0:
+                                # Profitability metrics: 0 or negative = loss
+                                if val < -0.1:
+                                    ctx = "큰 폭 적자 — 위험 신호"
+                                elif val < 0:
+                                    ctx = "적자 구간 — 흑자전환 필요"
+                                else:
+                                    ctx = "손익분기 수준 — 아직 적자 탈출 못함"
+                            elif threshold > 0 and val >= threshold * 1.5:
                                 ctx = f"기준({thr_pct}%) 대비 크게 상회 — 매우 양호"
-                            elif val >= threshold:
+                            elif val >= threshold and threshold > 0:
                                 ctx = f"기준({thr_pct}%) 충족 — 양호"
-                            elif val >= threshold * 0.5:
+                            elif val >= threshold * 0.5 and threshold > 0:
                                 ctx = f"기준({thr_pct}%) 근접 — 주의 필요"
                             elif val > 0:
-                                ctx = f"기준({thr_pct}%) 대비 부족 — 부진"
+                                if threshold > 0:
+                                    ctx = f"기준({thr_pct}%) 대비 부족 — 부진"
+                                else:
+                                    ctx = "소폭 흑자 — 개선 추세 확인 필요"
                             else:
-                                ctx = f"마이너스 전환 — 위험 신호"
+                                ctx = "마이너스 전환 — 위험 신호"
                         else:
                             if val <= threshold * 0.5:
                                 ctx = f"기준({thr_pct}%) 대비 크게 하회 — 매우 양호"
@@ -5240,12 +5707,11 @@ def get_checklist_live(ticker: str) -> dict:
                         item["value"] = 0
                         item["status"] = "neutral"
                         item["importance"] = src.get("weight", metadata["weight"])
-                    elif metric == "price_to_book":
-                        item["detail"] = "데이터 조회 실패"
-                        item["importance"] = src.get("weight", metadata["weight"])
                     else:
                         item["detail"] = "데이터 조회 실패"
-                        item["importance"] = src.get("weight", metadata["weight"])
+                        item["status"] = "unknown"
+                        item["data_missing"] = True
+                        item["importance"] = max(10, src.get("weight", metadata["weight"]) // 2)
 
             elif src["type"] == "commodity":
                 try:
@@ -5379,6 +5845,8 @@ def get_checklist_live(ticker: str) -> dict:
                         item["importance"] = max(item["importance"], src.get("weight", metadata["weight"]))
                 except Exception:
                     item["detail"] = "조회 실패"
+                    item["status"] = "unknown"
+                    item["data_missing"] = True
 
             item["expected_condition"] = _format_expected_condition(item, src)
             item["lead_signal"] = "선행 개선" if item["status"] == "positive" else ("선행 악화" if item["status"] == "negative" else "중립")
@@ -5389,8 +5857,8 @@ def get_checklist_live(ticker: str) -> dict:
         # News analysis is served separately via /analysis/{ticker}/news-analysis endpoint
         # and displayed in the dedicated "실시간 뉴스 분석" section on the frontend.
 
-        # ── PRELIMINARY EARNINGS — auto-inject if found ──
-        # This is NOT a news item — it's actual financial data extracted from earnings announcements
+        # ── PRELIMINARY EARNINGS — ALWAYS inject as top-priority item ──
+        # This is the #1 most important indicator for any stock
         if preliminary_earnings.get("found"):
             pe_data = preliminary_earnings["data"]
             pe_headlines = preliminary_earnings.get("headlines", [])[:3]
@@ -5422,16 +5890,13 @@ def get_checklist_live(ticker: str) -> dict:
 
             detail_text = " / ".join(detail_parts) if detail_parts else "잠정실적 발표 확인됨"
 
-            # Determine status: positive if revenue/profit numbers are present (earnings announcements are usually bullish signals)
-            # The actual sentiment is determined by whether results beat expectations
-            has_growth_signal = False
+            # Determine sentiment from headlines
             if pe_headlines:
                 headline_text = " ".join(pe_headlines).lower()
-                if any(kw in headline_text for kw in ["사상최대", "호실적", "서프라이즈", "beat", "record", "증가", "성장", "흑자전환"]):
-                    has_growth_signal = True
+                if any(kw in headline_text for kw in ["사상최대", "호실적", "서프라이즈", "beat", "record", "증가", "성장", "흑자전환", "개선", "상회"]):
                     earnings_status = "positive"
                     earnings_score = 85
-                elif any(kw in headline_text for kw in ["부진", "감소", "적자", "miss", "하락", "축소"]):
+                elif any(kw in headline_text for kw in ["부진", "감소", "적자", "miss", "하락", "축소", "역성장", "악화"]):
                     earnings_status = "negative"
                     earnings_score = 25
                 else:
@@ -5452,7 +5917,7 @@ def get_checklist_live(ticker: str) -> dict:
                 "corr_label": "실적 직접 반영",
                 "thresholds": {},
                 "source": preliminary_earnings.get("source", "뉴스 잠정실적 크롤링"),
-                "importance": 95,  # Highest importance — earnings are the #1 driver
+                "importance": 98,  # Highest importance — #1 driver
                 "window": "당분기",
                 "why_it_matters": "잠정실적은 주가에 가장 직접적인 영향을 미치는 데이터입니다. 시장 컨센서스 대비 서프라이즈 여부가 핵심입니다.",
                 "expected_condition": "컨센서스 대비 매출/영업이익 초과 시 주가 상승 압력, 미달 시 하락 압력",
@@ -5460,6 +5925,47 @@ def get_checklist_live(ticker: str) -> dict:
                 "lead_signal": "실적 호조" if earnings_status == "positive" else ("실적 부진" if earnings_status == "negative" else "실적 확인 필요"),
                 "preliminary_data": pe_data,
                 "preliminary_headlines": pe_headlines,
+            })
+        else:
+            # Even when not found, ALWAYS add earnings check item — it's mandatory
+            # Use earnings_data we already have from yfinance/alt sources
+            earnings_detail_parts = []
+            rev_g = earnings_data.get("revenue_growth")
+            op_m = earnings_data.get("operating_margin")
+            pm = earnings_data.get("profit_margin")
+            if rev_g is not None:
+                earnings_detail_parts.append(f"매출성장률 {rev_g*100:.1f}%")
+            if op_m is not None:
+                earnings_detail_parts.append(f"영업이익률 {op_m*100:.1f}%")
+            if pm is not None:
+                earnings_detail_parts.append(f"순이익률 {pm*100:.1f}%")
+
+            if earnings_detail_parts:
+                e_detail = "최근 실적: " + " / ".join(earnings_detail_parts) + " — 잠정실적 발표 모니터링 필요"
+                e_status = "positive" if (rev_g and rev_g > 0.05) else ("negative" if (rev_g and rev_g < -0.05) else "neutral")
+                e_score = 70 if e_status == "positive" else (30 if e_status == "negative" else 50)
+            else:
+                e_detail = "잠정실적 데이터 확인 필요 — 분기 실적 발표 시점 모니터링 중"
+                e_status = "neutral"
+                e_score = 50
+
+            results.append({
+                "name": "분기 실적 발표 확인",
+                "status": e_status,
+                "value": None,
+                "detail": e_detail,
+                "trend_data": [],
+                "stock_overlay": stock_overlay,
+                "correlation": 0.0,
+                "corr_label": "실적 직접 반영",
+                "thresholds": {},
+                "source": "Yahoo Finance + 뉴스 모니터링",
+                "importance": 96,  # Very high — earnings always matter
+                "window": "당분기",
+                "why_it_matters": "분기 실적(매출·영업이익·순이익)은 주가의 가장 직접적인 결정 요인입니다. 컨센서스 대비 서프라이즈 여부가 핵심.",
+                "expected_condition": "매출·영업이익이 시장 컨센서스를 상회해야 주가 상승 모멘텀 유지",
+                "item_score": e_score,
+                "lead_signal": "실적 양호" if e_status == "positive" else ("실적 부진" if e_status == "negative" else "실적 확인 필요"),
             })
 
         # ── GEOPOLITICAL RISK — auto-inject for Korean stocks (.KS/.KQ) ──
@@ -5473,6 +5979,42 @@ def get_checklist_live(ticker: str) -> dict:
                     results.append(geo_item)
             except Exception:
                 pass
+
+        # ── STOCK_CATALYSTS — inject narrative catalysts as checklist items ──
+        catalysts = STOCK_CATALYSTS.get(ticker, STOCK_CATALYSTS.get(ticker.replace(".KS", "").replace(".KQ", ""), []))
+        existing_names = {r["name"] for r in results}
+        for cat in catalysts:
+            cat_title = cat.get("title", "")
+            if cat_title in existing_names:
+                continue  # Skip duplicates
+            cat_status = cat.get("status", "neutral")
+            cat_importance = cat.get("importance", 70)
+            # Score: positive catalysts get higher scores, negative get lower
+            if cat_status == "positive":
+                cat_score = min(80, 55 + cat_importance // 5)
+            elif cat_status == "negative":
+                cat_score = max(20, 45 - cat_importance // 10)
+            else:
+                cat_score = 50
+            results.append({
+                "name": cat_title,
+                "status": cat_status,
+                "value": None,
+                "detail": cat.get("detail", ""),
+                "trend_data": [],
+                "stock_overlay": stock_overlay,
+                "correlation": 0.0,
+                "corr_label": "전문가 판단",
+                "thresholds": {},
+                "source": "투자 체크리스트 (전문가 분석)",
+                "importance": cat_importance,
+                "window": cat.get("window", "향후 1~3개월"),
+                "why_it_matters": cat.get("detail", ""),
+                "expected_condition": cat.get("expected_condition", ""),
+                "item_score": cat_score,
+                "lead_signal": "호재 지속" if cat_status == "positive" else ("리스크 요인" if cat_status == "negative" else "모니터링 필요"),
+                "catalyst_type": True,
+            })
 
         # Sort by importance (highest correlation first)
         results.sort(key=lambda r: r.get("importance", 0), reverse=True)
@@ -5751,40 +6293,75 @@ def get_top_ranked() -> dict:
                 rs = gain.iloc[-1] / loss.iloc[-1] if loss.iloc[-1] != 0 else 1
                 rsi = 100 - (100 / (1 + rs))
 
-            # RSI score
+            # RSI score — wider range for more differentiation
             if rsi is not None:
-                if rsi < 30: score += 15
-                elif rsi < 45: score += 8
-                elif rsi > 70: score -= 10
-                elif rsi > 60: score -= 5
+                if rsi < 25: score += 18   # deeply oversold = strong buy signal
+                elif rsi < 35: score += 12
+                elif rsi < 45: score += 6
+                elif rsi > 75: score -= 15  # overbought = risk
+                elif rsi > 65: score -= 8
+                elif rsi > 55: score -= 3
 
-            # Momentum (1mo return)
+            # Momentum (1mo return) — larger swings
             if len(hist) >= 21:
                 ret_1m = (price - float(hist["Close"].iloc[-21])) / float(hist["Close"].iloc[-21]) * 100
-                if ret_1m > 10: score += 12
+                if ret_1m > 15: score += 18
+                elif ret_1m > 8: score += 12
                 elif ret_1m > 3: score += 6
-                elif ret_1m < -10: score -= 8
-                elif ret_1m < -3: score -= 4
+                elif ret_1m < -15: score -= 14
+                elif ret_1m < -8: score -= 10
+                elif ret_1m < -3: score -= 5
             else:
                 ret_1m = 0
+
+            # Short-term trend (5d vs 20d MA)
+            if len(hist) >= 20:
+                ma5 = float(hist["Close"].iloc[-5:].mean())
+                ma20 = float(hist["Close"].iloc[-20:].mean())
+                trend_pct = (ma5 - ma20) / ma20 * 100
+                if trend_pct > 3: score += 8
+                elif trend_pct > 1: score += 4
+                elif trend_pct < -3: score -= 8
+                elif trend_pct < -1: score -= 4
+
+            # Volume surge detection (recent volume vs avg)
+            if "Volume" in hist.columns and len(hist) >= 20:
+                try:
+                    avg_vol = float(hist["Volume"].iloc[-20:].mean())
+                    recent_vol = float(hist["Volume"].iloc[-3:].mean())
+                    if avg_vol > 0:
+                        vol_ratio = recent_vol / avg_vol
+                        if vol_ratio > 2.0: score += 6   # volume surge = interest
+                        elif vol_ratio > 1.5: score += 3
+                except Exception:
+                    pass
 
             # Use fundamentals service (Naver/Yahoo scraping) instead of yfinance .info
             try:
                 fund = fetch_fundamentals(ticker)
                 rev_growth = fund.get("revenue_growth")
                 if rev_growth is not None:
-                    if rev_growth > 0.2: score += 10
+                    if rev_growth > 0.3: score += 14
+                    elif rev_growth > 0.15: score += 10
                     elif rev_growth > 0: score += 5
-                    elif rev_growth < -0.1: score -= 8
+                    elif rev_growth < -0.15: score -= 12
+                    elif rev_growth < -0.05: score -= 6
                 margin = fund.get("profit_margin")
                 if margin is not None:
-                    if margin > 0.2: score += 8
+                    if margin > 0.25: score += 10
+                    elif margin > 0.1: score += 6
                     elif margin > 0: score += 3
-                    elif margin < 0: score -= 5
+                    elif margin < -0.1: score -= 8
+                    elif margin < 0: score -= 4
+                roe = fund.get("roe")
+                if roe is not None:
+                    if roe > 0.2: score += 6
+                    elif roe > 0.1: score += 3
+                    elif roe < 0: score -= 4
             except Exception:
                 pass
 
-            score = max(0, min(100, score))
+            score = max(5, min(98, score))  # never exactly 0 or 100
             sector_id = TOP_PICK_SECTOR_MAP.get(ticker, "")
 
             return {
@@ -6178,10 +6755,11 @@ def _build_deep_news_item(news: dict, ticker: str, info: dict | None, company_na
         ko_summary = _summarize_english_title(title, company_name)
         if ko_summary:
             # Replace generic explanation with specific Korean interpretation
-            explanation = f"[기사 해석] {ko_summary}. {explanation}"
+            # Only append the category-specific analysis, don't repeat
+            explanation = f"{ko_summary}. {explanation}"
         else:
-            # At minimum, note it's English and provide category context
-            explanation = f"[영문 기사] {title[:80]}... — {explanation}"
+            # Provide translated category context
+            explanation = f"{category} 관련 영문 기사. {explanation}"
 
     # Assess priced-in level
     priced_in = _assess_priced_in(title, ticker, info, direction)
@@ -6194,6 +6772,9 @@ def _build_deep_news_item(news: dict, ticker: str, info: dict | None, company_na
         elif "수주" in category or "계약" in category:
             action_label = "신규 수주 — 매수 관점"
             action_detail = f"신규 수주·계약은 {company_name}의 매출 가시성을 높이는 핵심 이벤트. 수주 규모와 기간을 확인하고 밸류에이션 재평가."
+        elif "기관 매수" in category or "기관 신규" in category:
+            action_label = "기관 매수세 유입 — 수급 호재"
+            action_detail = f"기관 투자자가 {company_name} 지분을 확대. 대형 기관의 매수는 해당 종목에 대한 긍정적 리서치 결과를 반영하는 경우가 많음. 수급 개선 → 주가 지지력 강화."
         elif "애널리스트" in category or "목표가" in category:
             action_label = "투자의견 개선 — 긍정적"
             action_detail = f"애널리스트 의견 개선은 기관 자금 유입의 선행 신호. 목표주가와 현재가 괴리율 확인 후 대응."
@@ -6204,6 +6785,9 @@ def _build_deep_news_item(news: dict, ticker: str, info: dict | None, company_na
         if "실적" in category:
             action_label = "실적 부진 — 리스크 관리"
             action_detail = f"{company_name} 실적이 기대에 미치지 못함. 일시적 부진인지 구조적 둔화인지 판단 필요. 보유 중이면 비중 축소 고려."
+        elif "기관 매도" in category:
+            action_label = "기관 매도 — 수급 악화 주의"
+            action_detail = f"기관 투자자가 {company_name} 지분을 축소. 대량 매도는 수급 악화 신호. 매도 규모와 비중 확인 후 보유 전략 재점검."
         elif "규제" in category or "법적" in category:
             action_label = "규제 리스크 — 주의"
             action_detail = f"규제·법적 이슈는 불확실성을 키워 주가를 장기간 압박할 수 있음. 과징금 규모와 사업 영향도 파악 필요."

@@ -50,12 +50,12 @@ function writeResponseCache<T>(key: string, data: T) {
 
 function buildStaticTopRankedFallback() {
   const rankings = SECTORS.flatMap((sector) =>
-    sector.picks.map((pick, index) => ({
+    sector.picks.map((pick) => ({
       ticker: pick.ticker,
       name: pick.name,
       price: 0,
       change_1m: null,
-      score: Math.max(55, 90 - index * 6),
+      score: 50,  // neutral — real scores come from API
       rsi: null,
       sector_id: sector.id,
       sector_name: sector.name,

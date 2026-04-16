@@ -1,12 +1,13 @@
 import { Suspense, lazy } from "react";
 import { Navigate, Route, Routes, useParams } from "react-router-dom";
 import Layout from "./components/Layout";
-import LoginGate from "./components/LoginGate";
+import LoginGate, { isAdmin } from "./components/LoginGate";
 import { SECTORS } from "./data/sectors";
 
 const SectorMindMap = lazy(() => import("./components/SectorMindMap"));
 const SectorList = lazy(() => import("./components/SectorList"));
 const SectorDetailPage = lazy(() => import("./components/SectorDetailPage"));
+const AdminPanel = lazy(() => import("./components/AdminPanel"));
 
 function StockRedirect() {
   const { ticker } = useParams<{ ticker: string }>();
@@ -31,22 +32,28 @@ function StockRedirect() {
 export default function App() {
   return (
     <LoginGate>
-    <Layout>
-      <Suspense
-        fallback={
-          <div className="h-full flex items-center justify-center text-sm text-[var(--color-text-secondary)]">
-            화면 로딩 중...
-          </div>
-        }
-      >
-        <Routes>
-          <Route path="/" element={<SectorMindMap />} />
-          <Route path="/list" element={<SectorList />} />
-          <Route path="/sector/:id" element={<SectorDetailPage />} />
-          <Route path="/stock/:ticker" element={<StockRedirect />} />
-        </Routes>
-      </Suspense>
-    </Layout>
+      {isAdmin() ? (
+        <Suspense fallback={<div className="h-full flex items-center justify-center text-sm text-[var(--color-text-secondary)]">로딩 중...</div>}>
+          <AdminPanel />
+        </Suspense>
+      ) : (
+        <Layout>
+          <Suspense
+            fallback={
+              <div className="h-full flex items-center justify-center text-sm text-[var(--color-text-secondary)]">
+                화면 로딩 중...
+              </div>
+            }
+          >
+            <Routes>
+              <Route path="/" element={<SectorMindMap />} />
+              <Route path="/list" element={<SectorList />} />
+              <Route path="/sector/:id" element={<SectorDetailPage />} />
+              <Route path="/stock/:ticker" element={<StockRedirect />} />
+            </Routes>
+          </Suspense>
+        </Layout>
+      )}
     </LoginGate>
   );
 }

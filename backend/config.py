@@ -20,5 +20,12 @@ class Settings:
     ).split(",")
     CACHE_DIR: str = os.getenv("CACHE_DIR", "")
 
+    # Supabase
+    SUPABASE_URL: str = os.getenv("SUPABASE_URL", "")
+    SUPABASE_KEY: str = os.getenv("SUPABASE_KEY", "")
+
+    # Gemini AI — checklist validation & custom analysis
+    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
+
 
 settings = Settings()

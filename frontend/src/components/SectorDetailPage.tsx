@@ -17,7 +17,7 @@ import {
 import { ArrowLeft, AlertTriangle, Activity, Newspaper, Zap, ChevronRight, TrendingUp, TrendingDown, CheckCircle2, XCircle, MinusCircle, Shield, Globe } from "lucide-react";
 import { SECTORS } from "@/data/sectors";
 import type { SectorDef, StockPick } from "@/data/sectors";
-import { fetchChartData, fetchAnalysis, fetchEarnings, fetchPatternAnalysis, fetchCommodityHistory, searchNews, fetchPrediction, fetchMoveReasons, fetchChecklistLive, fetchSectorPulse, fetchMacroEvents, fetchTradingTargets } from "@/api/client";
+import { fetchChartData, fetchAnalysis, fetchEarnings, fetchPatternAnalysis, fetchCommodityHistory, searchNews, fetchPrediction, fetchMoveReasons, fetchChecklistLive, fetchSectorPulse, fetchMacroEvents, fetchTradingTargets, fetchNewsAnalysis } from "@/api/client";
 import type { ChartDataPoint, AnalysisResult, NewsArticle } from "@/types";
 
 const periods = [
@@ -356,6 +356,7 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
   const [prediction, setPrediction] = useState<any>(null);
   const [moveReasons, setMoveReasons] = useState<any>(null);
   const [checklistLive, setChecklistLive] = useState<any>(null);
+  const [newsAnalysis, setNewsAnalysis] = useState<any>(null);
   const [macroEvents, setMacroEvents] = useState<any>(null);
   const [tradingTargets, setTradingTargets] = useState<any>(null);
   const [showTargetReasons, setShowTargetReasons] = useState<string | null>(null);
@@ -381,6 +382,7 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
     setPatternData(null);
     setPrediction(null);
     setChecklistLive(null);
+    setNewsAnalysis(null);
     setTradingTargets(null);
     setShowTargetReasons(null);
     setMoveReasons(null);
@@ -448,23 +450,18 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
       const bg = (label: string, fn: () => Promise<any>, setter: (d: any) => void) =>
         safeFetch(label, fn).then((d) => { if (!cancelled && d) setter(d); });
 
-      // Batch 1
+      // Launch ALL background fetches in parallel — no sequential batching.
+      // news-analysis is a FAST endpoint (~2-5s) that returns momentum_notes + live_impact_news
+      // immediately, so the user sees news data while checklist-live (~30-90s) keeps loading.
       Promise.allSettled([
         bg("pattern", () => fetchPatternAnalysis(ticker), setPatternData),
         bg("prediction", () => fetchPrediction(ticker), setPrediction),
         bg("targets", () => fetchTradingTargets(ticker), setTradingTargets),
-      ]).then(() => {
-        if (cancelled) return;
-        // Batch 2
-        return Promise.allSettled([
-          bg("move-reasons", () => fetchMoveReasons(ticker, period), setMoveReasons),
-          bg("macro", () => fetchMacroEvents(), setMacroEvents),
-        ]);
-      }).then(() => {
-        if (cancelled) return;
-        // Batch 3: Checklist (slowest)
-        return bg("checklist", () => fetchChecklistLive(ticker), setChecklistLive);
-      });
+        bg("move-reasons", () => fetchMoveReasons(ticker, period), setMoveReasons),
+        bg("macro", () => fetchMacroEvents(), setMacroEvents),
+        bg("news-analysis", () => fetchNewsAnalysis(ticker), setNewsAnalysis),
+        bg("checklist", () => fetchChecklistLive(ticker), setChecklistLive),
+      ]);
     }
 
     // ── Main execution ──
@@ -582,12 +579,17 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
     ? Math.round(weightedParts.reduce((sum, part) => sum + part.score * part.weight, 0) / totalWeight)
     : 50;
   const overall = scoreToVerdict(overallScore100);
+  // Use fast newsAnalysis endpoint data immediately; upgrade to checklistLive data when it arrives
   const momentumNotes = checklistLive?.summary?.momentum_notes?.length
     ? checklistLive.summary.momentum_notes
-    : null; // null = still loading, don't show stale static data
+    : newsAnalysis?.momentum_notes?.length
+      ? newsAnalysis.momentum_notes
+      : null; // null = still loading
   const liveImpactNews = checklistLive?.summary?.live_impact_news?.length
     ? checklistLive.summary.live_impact_news
-    : [];
+    : newsAnalysis?.live_impact_news?.length
+      ? newsAnalysis.live_impact_news
+      : [];
 
   return (
     <div className="space-y-4">
@@ -976,87 +978,168 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
             )}
           </div>
 
-          {/* ═══ 실시간 뉴스 — 호재/악재 분류 ═══ */}
-          {liveImpactNews.length > 0 && (
-            <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-2xl p-5">
-              <div className="flex items-center gap-2 mb-4">
-                <div className="w-8 h-8 rounded-xl flex items-center justify-center bg-[rgba(99,102,241,0.1)] border border-[rgba(99,102,241,0.2)]">
-                  <Newspaper size={16} className="text-[#6366f1]" />
-                </div>
-                <div>
-                  <h3 className="text-sm font-bold text-[var(--color-text-primary)]">실시간 뉴스 분석</h3>
-                  <p className="text-[10px] text-[var(--color-text-muted)]">최신 뉴스를 호재/악재로 분류 — 주가 영향 분석</p>
-                </div>
-              </div>
-              {(() => {
-                const positiveNews = liveImpactNews.filter((a: any) =>
-                  a.impact_direction === "positive" || (!(a.impact_direction === "negative") && ((a.explanation || "").includes("상승") || (a.explanation || "").includes("호재") || (a.explanation || "").includes("긍정") || (a.explanation || "").includes("수혜")))
-                );
-                const negativeNews = liveImpactNews.filter((a: any) =>
-                  a.impact_direction === "negative" || (!(a.impact_direction === "positive") && ((a.explanation || "").includes("하락") || (a.explanation || "").includes("악재") || (a.explanation || "").includes("위험") || (a.explanation || "").includes("우려")))
-                );
-                const neutralNews = liveImpactNews.filter((a: any) => !positiveNews.includes(a) && !negativeNews.includes(a));
+          {/* ═══ 실시간 뉴스 심층 분석 ═══ */}
+          {(() => {
+            const deepArticles = newsAnalysis?.deep_articles ?? [];
+            const overallView = newsAnalysis?.overall_news_view;
+            const overallDetail = newsAnalysis?.overall_news_detail;
+            const sentSum = newsAnalysis?.sentiment_summary;
+            const hasDeep = deepArticles.length > 0;
+            const articles = hasDeep ? deepArticles : liveImpactNews;
 
-                return (
-                  <div className="space-y-3">
-                    <div className="flex items-center gap-3 px-3 py-2 rounded-xl bg-[var(--color-bg-hover)]">
-                      <span className="text-xs font-bold text-[#22c55e]">호재 {positiveNews.length}</span>
-                      <div className="flex-1 h-2 rounded-full bg-[var(--color-bg-primary)] overflow-hidden flex">
-                        {positiveNews.length > 0 && <div className="h-full bg-[#22c55e]" style={{ width: `${positiveNews.length / liveImpactNews.length * 100}%` }} />}
-                        {neutralNews.length > 0 && <div className="h-full bg-[#eab308]" style={{ width: `${neutralNews.length / liveImpactNews.length * 100}%` }} />}
-                        {negativeNews.length > 0 && <div className="h-full bg-[#ef4444]" style={{ width: `${negativeNews.length / liveImpactNews.length * 100}%` }} />}
-                      </div>
-                      <span className="text-xs font-bold text-[#ef4444]">악재 {negativeNews.length}</span>
+            if (articles.length === 0 && !newsAnalysis) {
+              return (
+                <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-2xl p-5">
+                  <div className="flex items-center gap-2 mb-3">
+                    <div className="w-8 h-8 rounded-xl flex items-center justify-center bg-[rgba(99,102,241,0.1)] border border-[rgba(99,102,241,0.2)]">
+                      <Newspaper size={16} className="text-[#6366f1]" />
                     </div>
-
-                    {positiveNews.length > 0 && (
-                      <div>
-                        <p className="text-[10px] font-bold text-[#22c55e] uppercase tracking-widest mb-2 flex items-center gap-1"><TrendingUp size={12} /> 호재</p>
-                        <div className="space-y-1.5">
-                          {positiveNews.map((a: any, i: number) => (
-                            <div key={`pos-${i}`} className="px-3 py-2.5 rounded-xl" style={{ background: "rgba(34,197,94,0.06)", border: "1px solid rgba(34,197,94,0.15)" }}>
-                              <p className="text-sm font-semibold text-[var(--color-text-primary)]">{a.title}</p>
-                              {a.explanation && <p className="text-xs text-[var(--color-text-secondary)] mt-1">{a.explanation}</p>}
-                              {a.source && <p className="text-[10px] text-[var(--color-text-muted)] mt-1">{a.source}{a.published_at ? ` · ${a.published_at}` : ""}</p>}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {negativeNews.length > 0 && (
-                      <div>
-                        <p className="text-[10px] font-bold text-[#ef4444] uppercase tracking-widest mb-2 flex items-center gap-1"><TrendingDown size={12} /> 악재</p>
-                        <div className="space-y-1.5">
-                          {negativeNews.map((a: any, i: number) => (
-                            <div key={`neg-${i}`} className="px-3 py-2.5 rounded-xl" style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.15)" }}>
-                              <p className="text-sm font-semibold text-[var(--color-text-primary)]">{a.title}</p>
-                              {a.explanation && <p className="text-xs text-[var(--color-text-secondary)] mt-1">{a.explanation}</p>}
-                              {a.source && <p className="text-[10px] text-[var(--color-text-muted)] mt-1">{a.source}{a.published_at ? ` · ${a.published_at}` : ""}</p>}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {neutralNews.length > 0 && (
-                      <div>
-                        <p className="text-[10px] font-bold text-[#eab308] uppercase tracking-widest mb-2 flex items-center gap-1"><MinusCircle size={12} /> 중립</p>
-                        <div className="space-y-1.5">
-                          {neutralNews.map((a: any, i: number) => (
-                            <div key={`neu-${i}`} className="px-3 py-2.5 rounded-xl" style={{ background: "rgba(234,179,8,0.04)", border: "1px solid rgba(234,179,8,0.12)" }}>
-                              <p className="text-sm font-semibold text-[var(--color-text-primary)]">{a.title}</p>
-                              {a.explanation && <p className="text-xs text-[var(--color-text-secondary)] mt-1">{a.explanation}</p>}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
+                    <div>
+                      <h3 className="text-sm font-bold text-[var(--color-text-primary)]">실시간 뉴스 심층 분석</h3>
+                      <p className="text-[10px] text-[var(--color-text-muted)]">관련 뉴스 수집 및 의미 분석 중...</p>
+                    </div>
                   </div>
-                );
-              })()}
-            </div>
-          )}
+                  <div className="px-4 py-6 text-center">
+                    <Newspaper size={20} className="text-[#6366f1] mx-auto mb-2 animate-pulse" />
+                    <p className="text-xs text-[var(--color-text-muted)] animate-pulse">최신 뉴스를 수집하고 선반영 여부를 분석 중입니다...</p>
+                  </div>
+                </div>
+              );
+            }
+
+            if (articles.length === 0) return null;
+
+            const posCount = hasDeep ? (sentSum?.positive ?? 0) : articles.filter((a: any) => a.impact_direction === "positive").length;
+            const negCount = hasDeep ? (sentSum?.negative ?? 0) : articles.filter((a: any) => a.impact_direction === "negative").length;
+            const total = articles.length;
+
+            const dirColor = (d: string) => d === "positive" ? "#22c55e" : d === "negative" ? "#ef4444" : "#eab308";
+            const dirIcon = (d: string) => d === "positive" ? "▲" : d === "negative" ? "▼" : "●";
+            const dirLabel = (d: string) => d === "positive" ? "호재" : d === "negative" ? "악재" : "중립";
+            const pricedLabel = (l: string) => l === "fully_priced" ? "선반영 완료" : l === "partially_priced" ? "일부 반영" : l === "not_priced" ? "미반영" : "확인 필요";
+            const pricedColor = (l: string) => l === "not_priced" ? "#f59e0b" : l === "partially_priced" ? "#6366f1" : l === "fully_priced" ? "#6b7280" : "#9ca3af";
+
+            return (
+              <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-2xl p-5">
+                <div className="flex items-center gap-2 mb-4">
+                  <div className="w-8 h-8 rounded-xl flex items-center justify-center bg-[rgba(99,102,241,0.1)] border border-[rgba(99,102,241,0.2)]">
+                    <Newspaper size={16} className="text-[#6366f1]" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-[var(--color-text-primary)]">실시간 뉴스 심층 분석</h3>
+                    <p className="text-[10px] text-[var(--color-text-muted)]">뉴스 의미 해석 · 선반영 판단 · 향후 예측</p>
+                  </div>
+                  {overallView && (
+                    <span className={`ml-auto text-xs font-bold px-2.5 py-1 rounded-lg ${
+                      overallView.includes("부정") ? "bg-[rgba(239,68,68,0.1)] text-[#ef4444]"
+                      : overallView.includes("긍정") ? "bg-[rgba(34,197,94,0.1)] text-[#22c55e]"
+                      : "bg-[rgba(234,179,8,0.1)] text-[#eab308]"
+                    }`}>
+                      뉴스 흐름: {overallView}
+                    </span>
+                  )}
+                </div>
+
+                {/* Overall summary bar */}
+                <div className="mb-4 px-3 py-2.5 rounded-xl bg-[var(--color-bg-hover)]">
+                  <div className="flex items-center gap-3">
+                    <span className="text-xs font-bold text-[#22c55e]">호재 {posCount}</span>
+                    <div className="flex-1 h-2 rounded-full bg-[var(--color-bg-primary)] overflow-hidden flex">
+                      {posCount > 0 && <div className="h-full bg-[#22c55e]" style={{ width: `${posCount / total * 100}%` }} />}
+                      {total - posCount - negCount > 0 && <div className="h-full bg-[#eab308]" style={{ width: `${(total - posCount - negCount) / total * 100}%` }} />}
+                      {negCount > 0 && <div className="h-full bg-[#ef4444]" style={{ width: `${negCount / total * 100}%` }} />}
+                    </div>
+                    <span className="text-xs font-bold text-[#ef4444]">악재 {negCount}</span>
+                  </div>
+                  {overallDetail && <p className="text-[10px] text-[var(--color-text-muted)] mt-1.5">{overallDetail}</p>}
+                </div>
+
+                {/* Deep article cards */}
+                <div className="space-y-3">
+                  {articles.map((a: any, i: number) => {
+                    const dir = a.direction ?? a.impact_direction ?? "neutral";
+                    const color = dirColor(dir);
+                    const hasPricedIn = hasDeep && a.priced_in_level;
+                    const hasPrediction = hasDeep && a.forward_prediction;
+
+                    return (
+                      <div key={i} className="rounded-xl overflow-hidden" style={{ border: `1px solid ${color}25` }}>
+                        {/* Header: direction badge + title */}
+                        <div className="px-4 py-3" style={{ background: `${color}08` }}>
+                          <div className="flex items-start gap-2">
+                            <span className="text-xs font-bold px-2 py-0.5 rounded-md mt-0.5 shrink-0" style={{ background: `${color}18`, color }}>
+                              {dirIcon(dir)} {a.category ?? dirLabel(dir)}
+                            </span>
+                            <p className="text-sm font-semibold text-[var(--color-text-primary)] leading-snug">{a.title}</p>
+                          </div>
+                          {(a.explanation) && <p className="text-xs text-[var(--color-text-secondary)] mt-1.5 ml-0.5">{a.explanation}</p>}
+                        </div>
+
+                        {/* Deep analysis section */}
+                        {(hasPricedIn || hasPrediction) && (
+                          <div className="px-4 py-3 space-y-2" style={{ borderTop: `1px solid ${color}12` }}>
+                            {/* Priced-in assessment */}
+                            {hasPricedIn && (
+                              <div className="flex items-start gap-2">
+                                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0 mt-0.5" style={{ background: `${pricedColor(a.priced_in_level)}18`, color: pricedColor(a.priced_in_level) }}>
+                                  선반영: {pricedLabel(a.priced_in_level)}
+                                </span>
+                                <p className="text-[11px] text-[var(--color-text-secondary)]">{a.priced_in_reason}</p>
+                              </div>
+                            )}
+
+                            {/* Forward prediction */}
+                            {hasPrediction && (
+                              <div className="flex items-start gap-2">
+                                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0 mt-0.5" style={{ background: `${sectorColor}15`, color: sectorColor }}>
+                                  향후 전망
+                                </span>
+                                <p className="text-[11px] text-[var(--color-text-secondary)]">{a.forward_prediction}</p>
+                              </div>
+                            )}
+
+                            {/* Action recommendation */}
+                            {a.action_label && (
+                              <div className="flex items-start gap-2">
+                                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0 mt-0.5 bg-[var(--color-bg-hover)] text-[var(--color-text-muted)]">
+                                  투자판단
+                                </span>
+                                <p className="text-[11px] text-[var(--color-text-secondary)]">
+                                  <span className="font-semibold" style={{ color }}>{a.action_label}</span> — {a.action_detail}
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Source */}
+                        <div className="px-4 py-1.5 flex items-center gap-2" style={{ borderTop: `1px solid ${color}08`, background: `${color}03` }}>
+                          {a.source && <p className="text-[10px] text-[var(--color-text-muted)]">{a.source}{a.published_at ? ` · ${a.published_at}` : ""}</p>}
+                          {a.url && <a href={a.url} target="_blank" rel="noopener noreferrer" className="text-[10px] text-[#6366f1] hover:underline ml-auto">기사 원문 →</a>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Key catalysts from news drivers */}
+                {newsAnalysis?.news_drivers?.length > 0 && (
+                  <div className="mt-4 pt-3" style={{ borderTop: "1px solid var(--color-border)" }}>
+                    <p className="text-[10px] font-bold text-[var(--color-text-muted)] uppercase tracking-widest mb-2">주요 카탈리스트</p>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                      {newsAnalysis.news_drivers.map((d: any, di: number) => (
+                        <div key={di} className="px-3 py-2 rounded-lg bg-[var(--color-bg-hover)]">
+                          <p className="text-xs font-bold text-[var(--color-text-primary)]">{d.name}</p>
+                          <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">관련 기사 {d.article_count}건</p>
+                          {d.why_it_matters && <p className="text-[10px] text-[var(--color-text-secondary)] mt-1">{d.why_it_matters}</p>}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           {/* ═══ MACRO / GEOPOLITICAL EVENTS ═══ */}
           {macroEvents?.events?.length > 0 && (

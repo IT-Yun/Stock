@@ -16,6 +16,7 @@ from services.technical_analysis import TechnicalAnalysisService
 from services.commodity_data import CommodityDataService
 from services.news_crawler import NewsCrawlerService
 from services.fundamentals import fetch_fundamentals
+from services.research import fetch_all_research, fetch_naver_analyst_reports, fetch_sec_filings
 from services.runtime_controls import limit_http, limit_yfinance
 from config import settings
 
@@ -350,12 +351,24 @@ SPAM_KEYWORDS = [
     "부동산", "아파트", "분양", "결혼", "wedding", "여행", "travel", "스포츠", "sports",
     "연예", "celebrity", "드라마", "drama", "게임", "gaming", "recipe", "요리",
     "lottery", "로또", "점술", "운세", "horoscope", "사건사고", "crime",
+    # Extended spam topics
+    "인테리어", "interior", "이사", "moving", "보험", "insurance", "대출", "loan",
+    "다이어트", "diet", "건강식품", "supplement", "광고", "모집", "채용공고",
+    "무료체험", "free trial", "할인쿠폰", "coupon", "event", "이벤트 당첨",
+    "crypto airdrop", "에어드롭", "meme coin", "밈코인",
 ]
 
 # Auto-generated spam sources and patterns — block entirely
-SPAM_SOURCES = ["tradingkey", "stockanalysis.com/quote", "simplywall", "smartkarma", "wallstreetzen", "marketscreener", "trendlyne"]
+SPAM_SOURCES = [
+    "tradingkey", "stockanalysis.com/quote", "simplywall", "smartkarma",
+    "wallstreetzen", "marketscreener", "trendlyne",
+    # Additional spam sources
+    "tipranks.com/news", "ainvest", "stocktitan", "accesswire", "prnewswire",
+    "businesswire",  # PR wires are often self-promotional
+    "insidermonkey", "247wallst", "investorplace",
+]
 SPAM_TITLE_PATTERNS = [
-    "주식 움직였습니다",  # "stock moved" auto-articles
+    "주식 움직였습니다",
     "주식이 움직였습니다",
     "변동을 뒷받침하는 사실",
     "핵심 원인 공개",
@@ -366,56 +379,183 @@ SPAM_TITLE_PATTERNS = [
     "here is what happened",
     "why it moved",
     "what drove",
+    # Extended auto-generated patterns
+    "top stocks to buy",
+    "best stocks to",
+    "should you buy",
+    "is it time to buy",
+    "millionaire maker",
+    "배당금 지급일",
+    "주식 추천",
+    "급등주 추천",
+    "무료 종목 추천",
+    "긴급 매수",
+    "지금 사야 할",
+    "10배 수익",
+    "대박 종목",
+    "stocks to watch this week",
+    "wall street predicts",
+    "analyst says buy",
+    "cathie wood",
+    "주식리딩",
+    "주식방송",
+    "stock alert",
 ]
+
+# ── Comprehensive News Relevance & Quality Algorithm ──
+
+# Company-specific name aliases for matching (handles English/Korean variants)
+_COMPANY_ALIASES: dict[str, list[str]] = {
+    "005930.KS": ["삼성전자", "samsung", "samsung electronics", "samsungelec"],
+    "000660.KS": ["sk하이닉스", "sk hynix", "hynix"],
+    "NVDA": ["nvidia", "엔비디아"],
+    "TSM": ["tsmc", "taiwan semiconductor", "대만반도체"],
+    "AVGO": ["broadcom", "브로드컴"],
+    "TSLA": ["tesla", "테슬라"],
+    "ISRG": ["intuitive", "intuitive surgical", "da vinci", "다빈치"],
+    "CEG": ["constellation", "constellation energy"],
+    "CCJ": ["cameco", "카메코"],
+    "CRWD": ["crowdstrike", "크라우드스트라이크"],
+    "CRSP": ["crispr", "크리스퍼"],
+    "LLY": ["eli lilly", "lilly", "릴리"],
+    "IONQ": ["ionq", "아이온큐"],
+    "RKLB": ["rocket lab", "로켓랩"],
+    "BE": ["bloom energy", "블룸에너지"],
+    "LMT": ["lockheed", "lockheed martin", "록히드"],
+    "RTX": ["raytheon", "rtx corp", "레이시온"],
+    "GD": ["general dynamics", "제너럴다이나믹스"],
+    "086520.KS": ["에코프로", "ecopro"],
+    "247540.KS": ["에코프로비엠", "ecoprobm"],
+    "373220.KS": ["lg에너지솔루션", "lg energy solution", "lges"],
+    "006400.KS": ["삼성sdi", "samsung sdi"],
+    "047810.KS": ["한국항공우주", "한국항공", "kai", "korea aerospace"],
+    "012450.KS": ["한화에어로스페이스", "한화에어로", "hanwha aerospace"],
+}
+
+
+def _build_name_variants(ticker: str, company_name: str) -> list[str]:
+    """Build all name variants for a ticker to check article relevance."""
+    normalized = _ticker_key(ticker)
+    variants = set()
+
+    # Ticker itself
+    ticker_base = normalized.replace(".KS", "").replace(".KQ", "").lower()
+    if ticker_base and len(ticker_base) >= 2:
+        variants.add(ticker_base)
+
+    # Company name variants
+    company_lower = (company_name or "").lower().strip()
+    if company_lower:
+        variants.add(company_lower)
+        for part in company_lower.split():
+            if len(part) >= 2:
+                variants.add(part)
+
+    # Aliases from our map
+    aliases = _COMPANY_ALIASES.get(normalized, [])
+    for alias in aliases:
+        variants.add(alias.lower())
+
+    # KRX name from industry map
+    if normalized.endswith(".KS") or normalized.endswith(".KQ"):
+        code = normalized.split(".")[0]
+        krx_info = _KRX_INDUSTRY_MAP.get(code)
+        if krx_info and krx_info.get("name"):
+            variants.add(krx_info["name"].lower())
+
+    return [v for v in variants if v and len(v) >= 2]
+
+
+def _is_article_relevant(title: str, source: str, name_variants: list[str]) -> tuple[bool, float]:
+    """
+    Multi-stage relevance check. Returns (is_relevant, relevance_score).
+
+    Stage 1: Spam keyword/source/pattern rejection (score = 0)
+    Stage 2: Company mention check (must pass to score > 0)
+    Stage 3: Content quality scoring (higher = more actionable/specific)
+    Stage 4: Freshness/specificity bonus
+    """
+    text = (title or "").lower()
+    combined = (text + " " + (source or "").lower())
+
+    # ── Stage 1: Hard reject spam ──
+    if any(spam in combined for spam in SPAM_KEYWORDS):
+        return False, 0.0
+    if any(pattern in combined for pattern in SPAM_TITLE_PATTERNS):
+        return False, 0.0
+    if any(src in combined for src in SPAM_SOURCES):
+        return False, 0.0
+
+    # Reject very short titles (likely auto-generated)
+    if len(title.strip()) < 10:
+        return False, 0.0
+
+    # Reject listicle / clickbait patterns
+    if re.match(r"^\d+\s*(best|top|가지|선|개)\b", text):
+        return False, 0.0
+    if "..." in title and len(title) < 25:
+        return False, 0.0  # Likely truncated clickbait
+
+    # ── Stage 2: Company/ticker mention check ──
+    mention_score = 0.0
+    for variant in name_variants:
+        if variant in text:
+            # Longer match = more specific = higher score
+            mention_score = max(mention_score, min(len(variant) / 5, 5.0))
+
+    if mention_score == 0:
+        return False, 0.0  # Must mention the company
+
+    score = mention_score
+
+    # ── Stage 3: Content quality scoring ──
+    # Specific financial data = high quality
+    if any(kw in text for kw in ["실적", "매출", "영업이익", "순이익", "earnings", "revenue", "profit", "eps"]):
+        score += 4.0
+    if any(kw in text for kw in ["가이던스", "guidance", "outlook", "전망치"]):
+        score += 3.5
+    if any(kw in text for kw in ["승인", "approval", "fda", "수주", "contract", "계약", "납품"]):
+        score += 3.5
+    if any(kw in text for kw in ["목표가", "목표주가", "target price", "tp ", "투자의견", "rating"]):
+        score += 3.0
+    if any(kw in text for kw in ["인수", "합병", "m&a", "acquisition", "지분", "stake"]):
+        score += 3.0
+    if any(kw in text for kw in ["규제", "regulation", "소송", "lawsuit", "조사", "probe", "관세", "tariff"]):
+        score += 2.5
+    if any(kw in text for kw in ["신제품", "출시", "launch", "발표", "공개", "신기술"]):
+        score += 2.5
+
+    # Numbers = specificity (articles with actual numbers are more informative)
+    number_matches = re.findall(r'\d+[.,%조억만원달러$B]', text)
+    if number_matches:
+        score += min(len(number_matches) * 0.5, 2.0)
+
+    # Named sources boost (analyst, broker name = credible)
+    if any(kw in text for kw in ["증권", "애널리스트", "analyst", "리서치", "모건스탠리", "morgan stanley",
+                                  "골드만", "goldman", "jp모건", "ubs", "citigroup", "바클레이즈"]):
+        score += 1.5
+
+    # ── Stage 4: Penalty for generic/low-value content ──
+    # Penalize vague/generic articles
+    if any(kw in text for kw in ["동향", "전반적", "overall", "overview", "summary", "요약"]):
+        score -= 1.0
+    # Penalize opinion pieces without data
+    if any(kw in text for kw in ["칼럼", "column", "사설", "editorial", "의견", "opinion piece"]):
+        score -= 1.5
+    # Penalize promotional content
+    if any(kw in text for kw in ["무료", "이벤트", "특가", "할인", "프로모션"]):
+        score -= 3.0
+
+    return score > 2.0, max(score, 0.0)
 
 
 def _score_live_article_impact(title: str, ticker: str, company_name: str, sector_id: str | None) -> int:
-    """Score article relevance. MUST contain company name or ticker to score above threshold."""
-    text = (title or "").lower()
-    score = 0
-
-    # Reject spam/irrelevant articles immediately
-    if any(spam in text for spam in SPAM_KEYWORDS):
+    """Score article relevance. Uses the comprehensive _is_article_relevant algorithm."""
+    name_variants = _build_name_variants(ticker, company_name)
+    is_relevant, score = _is_article_relevant(title, "", name_variants)
+    if not is_relevant:
         return 0
-    # Block auto-generated price-movement spam articles
-    if any(pattern in text for pattern in SPAM_TITLE_PATTERNS):
-        return 0
-
-    # Hard requirement: article must mention the company or ticker
-    company_lower = (company_name or "").lower().strip()
-    ticker_base = _ticker_key(ticker).replace(".KS", "").replace(".KQ", "").lower()
-
-    # Build name variants for matching
-    name_variants = [company_lower]
-    # For Korean companies, try shorter name (e.g., "삼성전자" from "SamsungElec")
-    if company_lower:
-        # Split on spaces, try each part that's >= 2 chars
-        for part in company_lower.split():
-            if len(part) >= 2:
-                name_variants.append(part)
-
-    has_company_mention = any(variant in text for variant in name_variants if variant)
-    has_ticker_mention = bool(ticker_base) and ticker_base in text
-
-    if not has_company_mention and not has_ticker_mention:
-        return 0  # Completely irrelevant — reject immediately
-
-    if has_company_mention:
-        score += 6
-    if has_ticker_mention:
-        score += 4
-
-    # Bonus for actionable content
-    if any(word in text for word in ["실적", "매출", "영업이익", "earnings", "revenue", "profit", "가이던스", "guidance"]):
-        score += 3
-    if any(word in text for word in ["승인", "approval", "수주", "contract", "deal", "계약", "납품"]):
-        score += 3
-    if any(word in text for word in ["하락", "부진", "miss", "falls", "delay", "지연", "리콜", "규제", "소송"]):
-        score += 2
-    if any(word in text for word in ["상승", "호실적", "beat", "surge", "record", "신고가", "목표가"]):
-        score += 2
-
-    return score
+    return int(score)
 
 
 POSITIVE_KEYWORDS = ["상승", "호실적", "beat", "surge", "record", "신고가", "목표가", "수혜", "호재",
@@ -470,18 +610,20 @@ def _explain_live_article_impact(title: str, ticker: str, sector_id: str | None)
     return label, explanation
 
 
-def _search_stock_latest_news(queries: list[str], max_per_query: int = 8) -> list[dict]:
+def _search_stock_latest_news(queries: list[str], max_per_query: int = 8, ticker: str = "", company_name: str = "") -> list[dict]:
     """
     Directly search Naver + Google RSS for latest stock news.
-    Returns list of {title, source, url, published_at} dicts with spam filtered out.
+    Returns list of {title, source, url, published_at, relevance_score} dicts.
+    Uses comprehensive multi-stage filtering to reject spam and irrelevant articles.
     """
     from urllib.parse import quote
     import feedparser
 
-    results = []
+    raw_articles = []
     seen = set()
 
-    all_spam = SPAM_SOURCES + SPAM_TITLE_PATTERNS
+    # Build name variants for relevance scoring
+    name_variants = _build_name_variants(ticker, company_name) if ticker else []
 
     for query in queries:
         # Naver News — sorted by latest
@@ -499,19 +641,13 @@ def _search_stock_latest_news(queries: list[str], max_per_query: int = 8) -> lis
                     title = title_tag.get_text(strip=True)
                     if title in seen:
                         continue
+                    seen.add(title)
                     source_tag = item.select_one("a.info.press")
                     source = source_tag.get_text(strip=True) if source_tag else ""
-                    # Spam filter
-                    combined = (title + " " + source).lower()
-                    if any(s in combined for s in all_spam):
-                        continue
-                    if any(s in combined for s in SPAM_KEYWORDS):
-                        continue
-                    seen.add(title)
                     link = title_tag.get("href", "")
                     date_tag = item.select_one("span.info")
                     pub = date_tag.get_text(strip=True) if date_tag else None
-                    results.append({"title": title, "source": source, "url": link, "published_at": pub})
+                    raw_articles.append({"title": title, "source": source, "url": link, "published_at": pub})
         except Exception:
             pass
 
@@ -525,14 +661,9 @@ def _search_stock_latest_news(queries: list[str], max_per_query: int = 8) -> lis
                     title = entry.get("title", "")
                     if not title or title in seen:
                         continue
-                    src = entry.get("source", {}).get("title", "Google News") if hasattr(entry, "source") else "Google News"
-                    combined = (title + " " + src).lower()
-                    if any(s in combined for s in all_spam):
-                        continue
-                    if any(s in combined for s in SPAM_KEYWORDS):
-                        continue
                     seen.add(title)
-                    results.append({
+                    src = entry.get("source", {}).get("title", "Google News") if hasattr(entry, "source") else "Google News"
+                    raw_articles.append({
                         "title": title,
                         "source": src,
                         "url": entry.get("link", ""),
@@ -541,7 +672,29 @@ def _search_stock_latest_news(queries: list[str], max_per_query: int = 8) -> lis
         except Exception:
             pass
 
-    return results
+    # ── Apply comprehensive relevance filtering ──
+    if name_variants:
+        scored = []
+        for art in raw_articles:
+            is_relevant, rel_score = _is_article_relevant(art["title"], art.get("source", ""), name_variants)
+            if is_relevant:
+                art["relevance_score"] = rel_score
+                scored.append(art)
+        # Sort by relevance score (highest first)
+        scored.sort(key=lambda a: a.get("relevance_score", 0), reverse=True)
+        return scored
+    else:
+        # Fallback: basic spam filter only (for macro/sector-level queries without specific ticker)
+        all_spam = SPAM_SOURCES + SPAM_TITLE_PATTERNS
+        filtered = []
+        for art in raw_articles:
+            combined = (art["title"] + " " + art.get("source", "")).lower()
+            if any(s in combined for s in all_spam):
+                continue
+            if any(s in combined for s in SPAM_KEYWORDS):
+                continue
+            filtered.append(art)
+        return filtered
 
 
 def _summarize_english_title(title: str, company_name: str) -> str:
@@ -705,36 +858,21 @@ def _extract_live_impact_news(ticker: str, info: dict | None = None, sector_id: 
     # Build per-stock search queries
     queries = _build_stock_news_queries(ticker, info=info, sector_id=sector_id)
 
-    # Direct search Naver + Google (not through limited search_news)
-    raw_articles = _search_stock_latest_news(queries, max_per_query=6)
+    # Direct search with built-in relevance filtering
+    raw_articles = _search_stock_latest_news(queries, max_per_query=6, ticker=ticker, company_name=company_name)
 
-    # Score and filter — must mention company/ticker
-    company_lower = company_name.lower().strip()
-    ticker_base = _ticker_key(ticker).replace(".KS", "").replace(".KQ", "").lower()
-    name_parts = [p for p in company_lower.split() if len(p) >= 2]
-    name_variants = [company_lower] + name_parts
-
+    # Already filtered by _is_article_relevant — now classify sentiment
     candidates = []
     for art in raw_articles:
         title = art["title"]
-        text_lower = title.lower()
-
-        # Must mention company or ticker (relevance gate)
-        has_company = any(v in text_lower for v in name_variants if v)
-        has_ticker = bool(ticker_base) and ticker_base in text_lower
-        if not has_company and not has_ticker:
-            continue
 
         # Classify sentiment with detailed analysis
         direction, category, analysis = _classify_sentiment_detailed(title, company_name)
 
-        # Score for ranking
-        score = 6 if has_company else 0
-        score += 4 if has_ticker else 0
+        # Use the relevance score from filtering + sentiment bonus
+        score = art.get("relevance_score", 5.0)
         if direction != "neutral":
             score += 3  # actionable news scores higher
-        if any(kw in text_lower for kw in ["실적", "매출", "earnings", "revenue", "승인", "수주"]):
-            score += 2
 
         candidates.append({
             "title": title,
@@ -4849,73 +4987,9 @@ def get_checklist_live(ticker: str) -> dict:
 
             results.append(item)
 
-        # ── NEWS-DRIVEN ISSUE ITEMS — real-time news analysis as checklist entries ──
-        try:
-            news_items = _extract_live_impact_news(ticker, info=info, sector_id=sector_id)
-            news_drivers = _extract_news_drivers(ticker, info=info, sector_id=sector_id)
-
-            # Convert top news into checklist items
-            seen_categories = set()
-            for news in news_items[:3]:
-                cat = news.get("issue_label", "뉴스")
-                if cat in seen_categories:
-                    continue
-                seen_categories.add(cat)
-                direction = news.get("impact_direction", "neutral")
-                status = "positive" if direction == "positive" else "negative" if direction == "negative" else "neutral"
-                item_score = 80 if status == "positive" else 20 if status == "negative" else 50
-                results.append({
-                    "name": f"뉴스: {cat}",
-                    "status": status,
-                    "value": None,
-                    "detail": news.get("explanation", news.get("title", "")),
-                    "trend_data": [],
-                    "stock_overlay": [],
-                    "correlation": 0.0,
-                    "corr_label": "",
-                    "thresholds": {},
-                    "source": f"뉴스 분석 ({news.get('source', '')})",
-                    "importance": 75,
-                    "window": "최근 1~2주",
-                    "why_it_matters": news.get("explanation", ""),
-                    "expected_condition": "",
-                    "item_score": item_score,
-                    "lead_signal": "호재" if status == "positive" else "악재" if status == "negative" else "중립",
-                    "news_headlines": [news.get("title", "")],
-                    "is_news_item": True,
-                })
-
-            # Also add news driver categories as monitoring items
-            for driver in news_drivers[:2]:
-                driver_name = driver.get("name", "")
-                if driver_name in seen_categories or not driver_name:
-                    continue
-                seen_categories.add(driver_name)
-                count = driver.get("count", 0)
-                if count < 2:
-                    continue  # skip if only 1 article
-                results.append({
-                    "name": f"이슈 모니터링: {driver_name}",
-                    "status": "neutral",
-                    "value": count,
-                    "detail": f"{driver_name} 관련 뉴스 {count}건 감지 — 관심 필요",
-                    "trend_data": [],
-                    "stock_overlay": [],
-                    "correlation": 0.0,
-                    "corr_label": "",
-                    "thresholds": {},
-                    "source": "뉴스 크롤링",
-                    "importance": 60,
-                    "window": "최근 1~2주",
-                    "why_it_matters": driver.get("why_it_matters", ""),
-                    "expected_condition": "",
-                    "item_score": 50,
-                    "lead_signal": "모니터링",
-                    "news_headlines": driver.get("headlines", []),
-                    "is_news_item": True,
-                })
-        except Exception:
-            pass  # news analysis is best-effort
+        # NOTE: News items are NO LONGER injected into the checklist.
+        # News analysis is served separately via /analysis/{ticker}/news-analysis endpoint
+        # and displayed in the dedicated "실시간 뉴스 분석" section on the frontend.
 
         # Sort by importance (highest correlation first)
         results.sort(key=lambda r: r.get("importance", 0), reverse=True)
@@ -5480,6 +5554,274 @@ def get_macro_events() -> dict:
             "neutral": len(events) - pos_count - neg_count,
             "market_sentiment": market_sentiment,
             "sentiment_detail": sentiment_detail,
+        },
+    }
+
+    _set_cached(cache_key, result)
+    _save_disk_cached(cache_key, result)
+    return result
+
+
+@router.get("/analysis/{ticker}/research")
+def get_stock_research(ticker: str) -> dict:
+    """
+    Fetch all external research data for a stock:
+    - KRX: Naver analyst reports + DART filings + consensus estimates
+    - US: SEC EDGAR filings + Yahoo analyst targets
+    """
+    cache_key = f"research:{ticker}"
+    cached = _get_best_cached(cache_key, 1800)
+    if cached is not None:
+        return cached
+
+    result = fetch_all_research(ticker)
+
+    _set_cached(cache_key, result)
+    _save_disk_cached(cache_key, result)
+    return result
+
+
+def _assess_priced_in(title: str, ticker: str, info: dict | None, direction: str) -> dict:
+    """
+    Assess whether a news item is already priced into the stock.
+    Returns {priced_in_level, priced_in_reason, forward_prediction}.
+
+    Levels: "fully_priced" / "partially_priced" / "not_priced" / "unknown"
+    """
+    text = title.lower()
+    result = {"priced_in_level": "unknown", "priced_in_reason": "", "forward_prediction": ""}
+
+    # Determine if the news is backward-looking (already happened) or forward-looking
+    is_past = any(kw in text for kw in [
+        "발표", "announced", "reported", "기록", "달성", "recorded",
+        "confirmed", "확인", "completed", "완료", "승인", "approved",
+    ])
+    is_future = any(kw in text for kw in [
+        "전망", "outlook", "expected", "예상", "계획", "plans", "will",
+        "예정", "forecast", "가능성", "추진", "검토", "considering",
+    ])
+    is_rumor = any(kw in text for kw in [
+        "보도", "소문", "rumors", "reportedly", "sources say", "관측",
+        "것으로 알려", "가능성", "speculation",
+    ])
+
+    # Check recent price momentum from yfinance for priced-in assessment
+    recent_change = None
+    try:
+        if info:
+            # 1M change as proxy for "has the market already moved on this?"
+            prev_close = info.get("previousClose") or info.get("regularMarketPreviousClose")
+            current = info.get("currentPrice") or info.get("regularMarketPrice")
+            if prev_close and current and prev_close > 0:
+                recent_change = (current - prev_close) / prev_close
+    except Exception:
+        pass
+
+    if is_past:
+        if recent_change is not None:
+            if direction == "positive" and recent_change > 0.02:
+                result["priced_in_level"] = "partially_priced"
+                result["priced_in_reason"] = "이미 발표된 호재 — 주가가 일부 반영한 것으로 보이나 추가 상승 여력 확인 필요"
+            elif direction == "negative" and recent_change < -0.02:
+                result["priced_in_level"] = "partially_priced"
+                result["priced_in_reason"] = "이미 발표된 악재 — 주가가 일부 반영한 것으로 보이나 추가 하락 리스크 확인 필요"
+            else:
+                result["priced_in_level"] = "not_priced"
+                result["priced_in_reason"] = "발표 내용이 주가에 아직 충분히 반영되지 않은 것으로 판단"
+        else:
+            result["priced_in_level"] = "partially_priced"
+            result["priced_in_reason"] = "이미 발표된 내용 — 시장이 일부 반영했을 가능성"
+    elif is_rumor:
+        result["priced_in_level"] = "not_priced"
+        result["priced_in_reason"] = "루머/관측 단계 — 공식 확인 시 주가 변동 가능성 높음"
+    elif is_future:
+        result["priced_in_level"] = "not_priced"
+        result["priced_in_reason"] = "미래 전망/계획 — 실현 여부에 따라 주가 반영 예정"
+    else:
+        result["priced_in_level"] = "unknown"
+        result["priced_in_reason"] = "선반영 여부 판단을 위해 추가 데이터 필요"
+
+    # Forward prediction based on news type
+    if any(kw in text for kw in ["실적", "매출", "earnings", "revenue"]):
+        if direction == "positive":
+            result["forward_prediction"] = "실적 호조 → 다음 분기 가이던스 상향 기대 / 애널리스트 목표가 상향 가능성. 동일 섹터 종목도 동반 수혜 기대."
+        else:
+            result["forward_prediction"] = "실적 부진 → 가이던스 하향 리스크. 다음 실적 시즌까지 밸류에이션 재조정 압력."
+    elif any(kw in text for kw in ["수주", "계약", "contract", "납품", "supply"]):
+        result["forward_prediction"] = "수주/계약 → 향후 매출 파이프라인 확대. 수주잔고 기반 중기 실적 개선 기대."
+    elif any(kw in text for kw in ["규제", "관세", "tariff", "제재", "regulation"]):
+        result["forward_prediction"] = "규제/관세 → 단기 불확실성 확대. 정책 확정 시까지 변동성 지속 예상. 대체 수혜주 탐색 필요."
+    elif any(kw in text for kw in ["신제품", "launch", "출시", "신기술"]):
+        result["forward_prediction"] = "신제품/기술 → 시장 확대 기대. 초기 판매 데이터가 핵심 트리거. 경쟁사 대응 모니터링 필요."
+    elif any(kw in text for kw in ["목표가", "target", "투자의견", "rating", "upgrade", "downgrade"]):
+        if direction == "positive":
+            result["forward_prediction"] = "애널리스트 상향 → 기관 매수세 유입 예상. 다른 증권사 연쇄 상향 가능성 주시."
+        else:
+            result["forward_prediction"] = "애널리스트 하향 → 기관 포지션 축소 압력. 컨센서스 하향 추세 확인 필요."
+    elif any(kw in text for kw in ["인수", "합병", "m&a", "acquisition"]):
+        result["forward_prediction"] = "M&A → 합병 시너지 효과는 통상 6~12개월 후 반영. 인수 프리미엄과 부채 증가 주시."
+    elif any(kw in text for kw in ["hbm", "메모리", "반도체", "semiconductor"]):
+        result["forward_prediction"] = "반도체 업황 → AI 수요 사이클과 연동. HBM/DRAM 가격 추이가 실적 방향을 선행."
+    elif any(kw in text for kw in ["배터리", "리튬", "ev ", "전기차"]):
+        result["forward_prediction"] = "배터리/EV → 원자재(리튬, 니켈) 가격과 완성차 업체 판매량이 핵심 변수."
+    elif any(kw in text for kw in ["방산", "defense", "무기", "전쟁", "war"]):
+        result["forward_prediction"] = "방산/지정학 → 분쟁 지속 시 방산주 수혜 지속. 평화 협상 진전 시 차익실현 압력."
+    else:
+        if direction == "positive":
+            result["forward_prediction"] = "호재 요인이 지속 가능한지, 일회성인지 확인 필요. 지속적이면 추가 상승 여력."
+        elif direction == "negative":
+            result["forward_prediction"] = "악재의 일회성 여부 확인 필요. 구조적 문제라면 중장기 하락 압력."
+        else:
+            result["forward_prediction"] = "방향성 확인을 위해 후속 뉴스와 시장 반응 모니터링 필요."
+
+    return result
+
+
+def _build_deep_news_item(news: dict, ticker: str, info: dict | None, company_name: str) -> dict:
+    """Build a deeply analyzed news item with meaning, prediction, and priced-in assessment."""
+    title = news.get("title", "")
+    direction = news.get("impact_direction", "neutral")
+    category = news.get("issue_label", "뉴스")
+    explanation = news.get("explanation", "")
+
+    # Assess priced-in level
+    priced_in = _assess_priced_in(title, ticker, info, direction)
+
+    # Build actionable takeaway
+    if direction == "positive":
+        action_label = "매수 관점 고려"
+        action_detail = "호재가 선반영되지 않았다면 진입 기회. 선반영 되었다면 추가 카탈리스트 대기."
+    elif direction == "negative":
+        action_label = "리스크 관리"
+        action_detail = "포지션 있다면 손절/비중축소 검토. 미보유 시 저가매수 기회인지 구조적 악재인지 판단 필요."
+    else:
+        action_label = "관망"
+        action_detail = "추가 정보 확인 후 포지션 결정. 단기 변동성에 대비."
+
+    return {
+        "title": title,
+        "source": news.get("source", ""),
+        "published_at": news.get("published_at", ""),
+        "url": news.get("url", ""),
+        "category": category,
+        "direction": direction,
+        "explanation": explanation,
+        "priced_in_level": priced_in["priced_in_level"],
+        "priced_in_reason": priced_in["priced_in_reason"],
+        "forward_prediction": priced_in["forward_prediction"],
+        "action_label": action_label,
+        "action_detail": action_detail,
+        "relevance_score": news.get("impact_score", 0),
+    }
+
+
+@router.get("/analysis/{ticker}/news-analysis")
+def get_news_analysis(ticker: str) -> dict:
+    """
+    Deep news analysis endpoint.
+
+    For each news article:
+    - 무슨 의미인지 (what does this mean for the stock?)
+    - 선반영 여부 (is this already priced in?)
+    - 향후 예측 (what can we predict from this?)
+    - 어떤 액션을 취할지 (what should the investor do?)
+
+    Fast response (~2-5s) — runs independently of the slow checklist.
+    """
+    cache_key = f"news-analysis:{_ticker_key(ticker)}"
+    cached = _get_best_cached(cache_key, 300)
+    if cached is not None:
+        return cached
+
+    info = None
+    sector_id = None
+    company_name = ticker
+    try:
+        info = get_yf_info(ticker)
+        sector_id = _infer_sector_id_from_profile(ticker, info)
+        company_name = str(info.get("shortName") or info.get("longName") or ticker).strip()
+    except Exception:
+        pass
+    if not sector_id:
+        sector_id = TOP_PICK_SECTOR_MAP.get(_ticker_key(ticker))
+
+    # Fast: news crawling + sentiment classification
+    live_news = _extract_live_impact_news(ticker, info=info, sector_id=sector_id)
+    news_drivers = _extract_news_drivers(ticker, info=info, sector_id=sector_id)
+
+    # Deep analysis for each news item
+    deep_articles = []
+    for news in live_news[:8]:
+        deep = _build_deep_news_item(news, ticker, info, company_name)
+        deep_articles.append(deep)
+
+    # Build momentum notes from deep analysis
+    momentum_notes = []
+    seen_cats = set()
+    for article in deep_articles[:5]:
+        cat = article["category"]
+        if cat in seen_cats:
+            continue
+        seen_cats.add(cat)
+        direction = article["direction"]
+        lead = "긍정 선행" if direction == "positive" else ("부정 선행" if direction == "negative" else "중립")
+        momentum_notes.append({
+            "title": cat,
+            "lead": lead,
+            "detail": article["explanation"],
+            "why_it_matters": article["forward_prediction"],
+            "expected_condition": article["priced_in_reason"],
+            "window": "향후 1~3개월",
+            "status": direction,
+            "importance": 75,
+        })
+
+    # Sentiment summary
+    pos_count = sum(1 for a in deep_articles if a["direction"] == "positive")
+    neg_count = sum(1 for a in deep_articles if a["direction"] == "negative")
+    total = len(deep_articles)
+
+    # Overall market view for this stock
+    if pos_count > neg_count * 2:
+        overall_view = "매우 긍정적"
+        overall_detail = f"최근 뉴스 {total}건 중 호재 {pos_count}건으로 긍정적 흐름. 시장 기대감 상승 중."
+    elif pos_count > neg_count:
+        overall_view = "긍정적"
+        overall_detail = f"호재가 우세한 뉴스 흐름. 다만 악재({neg_count}건)도 모니터링 필요."
+    elif neg_count > pos_count * 2:
+        overall_view = "매우 부정적"
+        overall_detail = f"악재 {neg_count}건이 다수. 보수적 접근 필요."
+    elif neg_count > pos_count:
+        overall_view = "부정적"
+        overall_detail = f"악재가 우세. 리스크 관리 강화 권장."
+    else:
+        overall_view = "중립"
+        overall_detail = f"호재와 악재가 혼재. 방향성 확인을 위해 후속 뉴스 주시 필요."
+
+    # Key upcoming catalysts (from news drivers)
+    catalysts = []
+    for driver in news_drivers[:3]:
+        catalysts.append({
+            "name": driver.get("name", ""),
+            "article_count": driver.get("count", 0),
+            "headlines": driver.get("headlines", [])[:2],
+            "why_it_matters": driver.get("why_it_matters", ""),
+        })
+
+    result = {
+        "ticker": ticker.upper(),
+        "company_name": company_name,
+        "deep_articles": deep_articles,
+        "live_impact_news": live_news,  # backward compat
+        "news_drivers": catalysts,
+        "momentum_notes": momentum_notes,
+        "overall_news_view": overall_view,
+        "overall_news_detail": overall_detail,
+        "sentiment_summary": {
+            "positive": pos_count,
+            "negative": neg_count,
+            "neutral": total - pos_count - neg_count,
+            "total": total,
         },
     }
 

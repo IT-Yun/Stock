@@ -267,6 +267,16 @@ export async function fetchMacroEvents(): Promise<any> {
   return res.data;
 }
 
+export async function fetchResearch(ticker: string): Promise<any> {
+  const res = await dedupedGet(`/analysis/${encodeURIComponent(ticker)}/research`);
+  return res.data;
+}
+
+export async function fetchNewsAnalysis(ticker: string): Promise<any> {
+  const res = await dedupedGet(`/analysis/${encodeURIComponent(ticker)}/news-analysis`);
+  return res.data;
+}
+
 export async function fetchRefreshStatus(): Promise<any> {
   const res = await api.get("/refresh-status");
   return res.data;

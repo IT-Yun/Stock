@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useParams, useNavigate, useSearchParams, Link } from "react-router-dom";
 import {
   ComposedChart,
@@ -400,9 +400,13 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
     { label: t("period1y"), value: "1y" },
   ], [t]);
 
-  // Ticker-dependent data — re-fetches when stock changes, period changes, or retry
+  // Track initial period so we can detect user-initiated period changes
+  const initialPeriodRef = useRef(period);
+
+  // Ticker-dependent data — re-fetches when stock changes or retry (NOT on period change)
   useEffect(() => {
     let cancelled = false;
+    initialPeriodRef.current = period; // sync period ref on ticker change
 
     setLoading(true);
     setLoadProgress(0);
@@ -482,8 +486,6 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
         safeFetch(label, fn).then((d) => { if (!cancelled && d) setter(d); });
 
       // Launch ALL background fetches in parallel — no sequential batching.
-      // news-analysis is a FAST endpoint (~2-5s) that returns momentum_notes + live_impact_news
-      // immediately, so the user sees news data while checklist-live (~30-90s) keeps loading.
       Promise.allSettled([
         bg("pattern", () => fetchPatternAnalysis(ticker), setPatternData),
         bg("prediction", () => fetchPrediction(ticker), setPrediction),
@@ -521,7 +523,6 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
         }
       })
       .catch((err) => {
-        // This should NEVER happen (safeFetch catches everything), but just in case:
         console.error("[LOAD] UNEXPECTED loadEssentials error", err);
         if (cancelled) return;
         setLoadError(true);
@@ -543,17 +544,35 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
       cancelled = true;
       clearTimeout(safetyTimer);
     };
-  }, [pick.ticker, period, retryCount, t]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pick.ticker, retryCount]);
+
+  // Period change — only re-fetch chart data (no full reload)
+  useEffect(() => {
+    // Skip on initial mount (handled by the main effect above)
+    if (period === initialPeriodRef.current) return;
+    let cancelled = false;
+    setChartLoading(true);
+    fetchChartData(pick.ticker, period)
+      .then((data) => {
+        if (!cancelled && Array.isArray(data) && data.length > 0) {
+          setChartData(data);
+        }
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setChartLoading(false); });
+    return () => { cancelled = true; };
+  }, [pick.ticker, period]);
 
   // Auto-refresh every 5 min — only refresh analysis & checklist (not chart, to avoid UI jump)
   useEffect(() => {
-    const t = pick.ticker;
+    const tkr = pick.ticker;
     const intervalId = window.setInterval(() => {
-      fetchAnalysis(t).then(setAnalysis).catch(() => {});
-      fetchChecklistLive(t).then(setChecklistLive).catch(() => {});
+      fetchAnalysis(tkr).then(setAnalysis).catch(() => {});
+      fetchChecklistLive(tkr).then(setChecklistLive).catch(() => {});
     }, 300_000);
     return () => window.clearInterval(intervalId);
-  }, [pick.ticker, period]);
+  }, [pick.ticker]);
 
   const latestPrice = chartData.length > 0 ? chartData[chartData.length - 1].close : null;
   const chartVerdict = analyzeChart(analysis, chartData);

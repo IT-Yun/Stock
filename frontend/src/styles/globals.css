@@ -130,8 +130,8 @@ input[type="range"] {
 input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
-  width: 18px;
-  height: 18px;
+  width: 24px;
+  height: 24px;
   border-radius: 50%;
   background: linear-gradient(135deg, #3b82f6, #8b5cf6);
   border: 2px solid rgba(255, 255, 255, 0.2);
@@ -141,13 +141,13 @@ input[type="range"]::-webkit-slider-thumb {
 }
 
 input[type="range"]::-webkit-slider-thumb:hover {
-  transform: scale(1.2);
+  transform: scale(1.3);
   box-shadow: 0 0 20px rgba(59, 130, 246, 0.6), 0 2px 12px rgba(0, 0, 0, 0.4);
 }
 
 input[type="range"]::-moz-range-thumb {
-  width: 18px;
-  height: 18px;
+  width: 24px;
+  height: 24px;
   border-radius: 50%;
   background: linear-gradient(135deg, #3b82f6, #8b5cf6);
   border: 2px solid rgba(255, 255, 255, 0.2);
@@ -186,4 +186,35 @@ input[type="range"]::-moz-range-thumb {
 @keyframes skeletonShimmer {
   0% { transform: translateX(-100%); }
   100% { transform: translateX(100%); }
+}
+
+/* ─── Mobile utilities ─── */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* Safe area for notch devices */
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* Touch feedback */
+@media (hover: none) {
+  .node-hover:hover {
+    transform: none !important;
+  }
+  .node-hover:active {
+    transform: scale(0.96) !important;
+  }
+}
+
+/* Prevent text selection on interactive elements (mobile) */
+.no-select {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }

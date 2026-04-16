@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { Factory, Search, X, Trophy, TrendingUp, TrendingDown } from "lucide-react";
+import { Factory, Search, X, Trophy, TrendingUp, TrendingDown, ChevronDown, ChevronUp } from "lucide-react";
 import { SECTORS, normalizeWeights } from "@/data/sectors";
 import type { SectorDef } from "@/data/sectors";
 import { searchStocks, fetchChartData, fetchAnalysis, fetchChecklistLive, fetchEarnings, fetchNews, fetchTopRanked } from "@/api/client";
@@ -78,8 +78,10 @@ export default function SectorMindMap() {
     sectorId?: string;
     flag?: "KR" | "US";
   }>(null);
+  const [showTopRanked, setShowTopRanked] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const [dims, setDims] = useState({ w: 1200, h: 800 });
+  const isMobile = dims.w < 768;
   const navigate = useNavigate();
   const navigationTimeoutRef = useRef<number | null>(null);
   const searchTimeoutRef = useRef<number | null>(null);
@@ -232,8 +234,8 @@ export default function SectorMindMap() {
 
   return (
     <div className="flex h-full">
-      {/* ─── Stock Panel (left slide) ─── */}
-      <div
+      {/* ─── Stock Panel (left slide) — desktop only ─── */}
+      {!isMobile && <div
         className="shrink-0 overflow-y-auto overflow-x-hidden border-r border-white/5 glass-strong transition-all duration-500 ease-out"
         style={{ width: selected ? 340 : 0, opacity: selected ? 1 : 0 }}
       >
@@ -382,13 +384,225 @@ export default function SectorMindMap() {
             </button>
           </div>
         )}
-      </div>
+      </div>}
 
       {/* ─── Mind Map Canvas ─── */}
+      {/* ─── Canvas (holds both mobile & desktop) ─── */}
       <div
         ref={containerRef}
         className="flex-1 relative overflow-hidden bg-[var(--color-bg-primary)] bg-dot-grid"
       >
+        {/* ═══════════ MOBILE LAYOUT ═══════════ */}
+        {isMobile ? (
+          <div className="h-full overflow-y-auto pb-24">
+            {/* Search bar — full width */}
+            <div className="px-4 pt-4 pb-2">
+              <div
+                className="glass rounded-2xl px-4 py-3 border border-white/10"
+                style={{ boxShadow: "0 8px 24px rgba(0,0,0,0.3)" }}
+              >
+                <div className="flex items-center gap-3">
+                  <Search size={16} className="text-[var(--color-text-muted)] shrink-0" />
+                  <input
+                    value={query}
+                    onChange={(e) => { setQuery(e.target.value); setSearchOpen(true); }}
+                    onFocus={() => setSearchOpen(true)}
+                    onBlur={() => window.setTimeout(() => setSearchOpen(false), 150)}
+                    onKeyDown={(e) => { if (e.key === "Enter" && searchResults[0]) openStock(searchResults[0]); }}
+                    placeholder="AI 분석 개별종목 검색"
+                    className="w-full bg-transparent text-sm text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] outline-none"
+                  />
+                  {query && (
+                    <button onClick={() => { setQuery(""); setSearchOpen(false); }} className="shrink-0 text-[var(--color-text-muted)]">
+                      <X size={14} />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Search results dropdown */}
+              {searchOpen && normalizedQuery && (
+                <div className="mt-2 glass rounded-2xl border border-white/10 overflow-hidden" style={{ boxShadow: "0 12px 36px rgba(0,0,0,0.4)" }}>
+                  {searchLoading ? (
+                    <div className="px-4 py-4 text-xs text-[var(--color-text-muted)] animate-pulse">종목 검색 중입니다...</div>
+                  ) : searchResults.length > 0 ? (
+                    searchResults.map((stock) => (
+                      <button
+                        key={stock.ticker}
+                        className="w-full text-left px-4 py-3 hover:bg-white/5 active:bg-white/10 transition-colors border-b border-white/5 last:border-b-0"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => openStock(stock)}
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold text-[var(--color-text-primary)]">{stock.name}</p>
+                            <p className="text-[11px] text-[var(--color-text-muted)] mt-0.5">{stock.ticker} · {stock.sector_name ?? stock.sectorName ?? "실시간 분석"}</p>
+                          </div>
+                          <span className="text-[10px] px-2 py-1 rounded-full font-bold shrink-0" style={{
+                            background: stock.flag === "US" ? "rgba(59,130,246,0.15)" : "rgba(239,68,68,0.15)",
+                            color: stock.flag === "US" ? "#60a5fa" : "#f87171",
+                          }}>{stock.flag}</span>
+                        </div>
+                      </button>
+                    ))
+                  ) : (
+                    <div className="px-4 py-4 text-xs text-[var(--color-text-muted)]">검색 결과가 없습니다.</div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Year slider — compact horizontal */}
+            <div className="px-4 py-2">
+              <div className="glass rounded-2xl px-4 py-2.5 border border-white/10">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[11px] text-[var(--color-text-muted)] font-medium">투자 시점</span>
+                  <span className="text-sm font-bold text-gradient">{2025 + year}년</span>
+                </div>
+                <input
+                  type="range"
+                  min={1}
+                  max={30}
+                  value={year}
+                  onChange={(e) => setYear(Number(e.target.value))}
+                  className="w-full h-1.5 rounded-full appearance-none cursor-pointer"
+                  style={{
+                    background: `linear-gradient(90deg, #3b82f6 ${((year - 1) / 29) * 100}%, rgba(255,255,255,0.08) ${((year - 1) / 29) * 100}%)`,
+                    WebkitAppearance: "none",
+                  }}
+                />
+                <div className="flex justify-between mt-1 px-0.5">
+                  {[1, 5, 10, 15, 20, 25, 30].map((y) => (
+                    <button key={y} onClick={() => setYear(y)} className={`text-[9px] font-mono transition-all ${y === year ? "text-white font-bold" : "text-[var(--color-text-muted)]"}`}>
+                      {y}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Sector cards — 2 column grid */}
+            <div className="px-4 py-2">
+              <div className="grid grid-cols-2 gap-3">
+                {SECTORS.map((s, idx) => {
+                  const w = weights.get(s.id) ?? 0;
+                  const pct = Math.round(w * 100);
+                  const isActive = selected?.id === s.id;
+                  return (
+                    <button
+                      key={s.id}
+                      className="relative rounded-2xl p-4 flex flex-col items-center justify-center gap-2 transition-all duration-200 active:scale-95"
+                      style={{
+                        background: isActive
+                          ? `linear-gradient(135deg, ${s.color}30, ${s.color}15)`
+                          : "rgba(255,255,255,0.03)",
+                        border: `1.5px solid ${isActive ? s.color : "rgba(255,255,255,0.06)"}`,
+                        boxShadow: isActive ? `0 4px 20px ${s.color}25` : "none",
+                        minHeight: 110,
+                        animation: `fadeInUp 0.4s ease-out ${idx * 0.05}s both`,
+                      }}
+                      onClick={() => setSelected(isActive ? null : s)}
+                    >
+                      <div
+                        className="w-12 h-12 rounded-xl flex items-center justify-center"
+                        style={{
+                          background: `linear-gradient(135deg, ${s.color}25, ${s.color}10)`,
+                          border: `1px solid ${s.color}30`,
+                        }}
+                      >
+                        <s.icon size={24} strokeWidth={1.5} style={{ color: s.color }} />
+                      </div>
+                      <span className="text-[13px] font-bold text-[var(--color-text-primary)] text-center leading-tight">
+                        {s.name}
+                      </span>
+                      <span
+                        className="text-[11px] font-mono px-2 py-0.5 rounded-full font-bold"
+                        style={{
+                          background: `linear-gradient(135deg, ${s.color}20, ${s.color}10)`,
+                          color: s.color,
+                          border: `1px solid ${s.color}20`,
+                        }}
+                      >
+                        {pct}%
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Top 10 Ranking — collapsible */}
+            <div className="px-4 py-2">
+              <div className="glass rounded-2xl border border-white/10 overflow-hidden">
+                <button
+                  className="w-full px-4 py-3 flex items-center gap-2"
+                  onClick={() => setShowTopRanked(!showTopRanked)}
+                >
+                  <Trophy size={14} className="text-[#f59e0b]" />
+                  <span className="text-xs font-bold text-[var(--color-text-primary)]">종합 점수 TOP 10</span>
+                  <span className="text-[10px] text-[var(--color-text-muted)] ml-auto mr-2">실시간</span>
+                  {showTopRanked ? <ChevronUp size={14} className="text-[var(--color-text-muted)]" /> : <ChevronDown size={14} className="text-[var(--color-text-muted)]" />}
+                </button>
+                {showTopRanked && (
+                  <div className="border-t border-white/5">
+                    {topRankedLoading ? (
+                      <div className="px-4 py-6 text-xs text-[var(--color-text-muted)] animate-pulse text-center">순위 계산 중...</div>
+                    ) : topRanked.length === 0 ? (
+                      <div className="px-4 py-4 text-xs text-[var(--color-text-muted)] text-center">데이터 로딩 중...</div>
+                    ) : (
+                      topRanked.map((stock, i) => (
+                        <button
+                          key={stock.ticker}
+                          className="w-full flex items-center gap-3 px-4 py-2.5 active:bg-white/10 transition-colors border-b border-white/5 last:border-b-0"
+                          onClick={() => {
+                            const sector = SECTORS.find(sec => sec.picks.some(p => p.ticker === stock.ticker));
+                            if (sector) {
+                              navigate(`/sector/${sector.id}?stock=${encodeURIComponent(stock.ticker)}`);
+                            } else {
+                              openStock({ ticker: stock.ticker, name: stock.name, sectorName: stock.sector_name || "", sectorId: stock.sector_id, flag: stock.flag });
+                            }
+                          }}
+                        >
+                          <div
+                            className="w-7 h-7 rounded-lg flex items-center justify-center text-[11px] font-black shrink-0"
+                            style={{
+                              background: i < 3 ? "linear-gradient(135deg, #f59e0b, #d97706)" : "rgba(255,255,255,0.06)",
+                              color: i < 3 ? "#fff" : "var(--color-text-muted)",
+                              boxShadow: i < 3 ? "0 2px 8px rgba(245,158,11,0.3)" : "none",
+                            }}
+                          >{i + 1}</div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-sm font-semibold text-[var(--color-text-primary)] truncate">{stock.name}</span>
+                              <span className="text-[8px] px-1 py-0.5 rounded font-bold shrink-0" style={{
+                                background: stock.flag === "US" ? "rgba(59,130,246,0.15)" : "rgba(239,68,68,0.15)",
+                                color: stock.flag === "US" ? "#60a5fa" : "#f87171",
+                              }}>{stock.flag}</span>
+                            </div>
+                            <p className="text-[10px] text-[var(--color-text-muted)] truncate">{stock.ticker} · {stock.sector_name}</p>
+                          </div>
+                          <div className="shrink-0 text-right">
+                            <p className="text-sm font-black" style={{ color: stock.score >= 65 ? "#22c55e" : stock.score >= 45 ? "#eab308" : "#ef4444" }}>{stock.score}</p>
+                            {stock.change_1m != null && (
+                              <div className="flex items-center gap-0.5 justify-end">
+                                {stock.change_1m >= 0 ? <TrendingUp size={10} className="text-[#22c55e]" /> : <TrendingDown size={10} className="text-[#ef4444]" />}
+                                <span className={`text-[10px] font-mono ${stock.change_1m >= 0 ? "text-[#22c55e]" : "text-[#ef4444]"}`}>
+                                  {stock.change_1m >= 0 ? "+" : ""}{stock.change_1m}%
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        ) : (
+          /* ═══════════ DESKTOP LAYOUT (unchanged SVG mind map) ═══════════ */
+          <>
         <div className="absolute top-5 left-5 z-40 w-[min(360px,calc(100%-2.5rem))]">
           <div
             className="glass rounded-2xl px-4 py-3 border border-white/10"
@@ -533,91 +747,6 @@ export default function SectorMindMap() {
             </div>
           )}
         </div>
-
-        {evaluatingStock && (
-          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/55 backdrop-blur-md px-4">
-            <div
-              className="w-full max-w-lg rounded-3xl border border-white/10 glass px-8 py-8"
-              style={{ boxShadow: "0 24px 80px rgba(0,0,0,0.55)" }}
-            >
-              {/* Close button */}
-              <button
-                onClick={() => { analysisAbortRef.current = true; setEvaluatingStock(null); }}
-                className="absolute top-4 right-4 w-8 h-8 rounded-lg flex items-center justify-center text-[var(--color-text-muted)] hover:text-white hover:bg-white/10 transition-all"
-              >
-                <X size={16} />
-              </button>
-
-              <p className="text-[11px] uppercase tracking-[0.22em] text-[var(--color-accent-blue)]">
-                AI Deep Analysis
-              </p>
-              <h3 className="text-2xl font-black text-[var(--color-text-primary)] mt-2">
-                {evaluatingStock.name}
-              </h3>
-              <p className="text-sm text-[var(--color-text-muted)] mt-1">
-                {evaluatingStock.ticker} · {evaluatingStock.sectorName}
-              </p>
-
-              {/* Progress bar */}
-              <div className="mt-6">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs text-[var(--color-text-secondary)] font-medium">{analysisStage}</span>
-                  <span className="text-sm font-black text-[var(--color-accent-blue)]">{analysisProgress}%</span>
-                </div>
-                <div className="h-2.5 rounded-full bg-white/8 overflow-hidden">
-                  <div
-                    className="h-full rounded-full transition-all duration-500 ease-out"
-                    style={{
-                      width: `${analysisProgress}%`,
-                      background: analysisProgress >= 100
-                        ? "linear-gradient(90deg, #22c55e, #16a34a)"
-                        : "linear-gradient(90deg, #3b82f6, #8b5cf6)",
-                    }}
-                  />
-                </div>
-              </div>
-
-              {/* Analysis steps */}
-              <div className="mt-5 space-y-2">
-                {[
-                  { label: "주가 차트 수집", threshold: 25 },
-                  { label: "기술적 지표 분석", threshold: 45 },
-                  { label: "재무 데이터 분석", threshold: 65 },
-                  { label: "뉴스 수집 및 감성 분석", threshold: 80 },
-                  { label: "투자 체크리스트 생성", threshold: 100 },
-                ].map((step) => {
-                  const done = analysisProgress >= step.threshold;
-                  const active = !done && analysisProgress >= step.threshold - 25;
-                  return (
-                    <div
-                      key={step.label}
-                      className="flex items-center gap-3 rounded-xl px-4 py-2.5 transition-all duration-300"
-                      style={{
-                        background: done ? "rgba(34,197,94,0.08)" : active ? "rgba(59,130,246,0.08)" : "rgba(255,255,255,0.02)",
-                        border: `1px solid ${done ? "rgba(34,197,94,0.2)" : active ? "rgba(59,130,246,0.2)" : "rgba(255,255,255,0.05)"}`,
-                      }}
-                    >
-                      <div className="w-5 h-5 rounded-full flex items-center justify-center shrink-0" style={{
-                        background: done ? "#22c55e" : active ? "#3b82f6" : "rgba(255,255,255,0.1)",
-                      }}>
-                        {done ? (
-                          <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6L5 8.5L9.5 3.5" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                        ) : active ? (
-                          <div className="w-2 h-2 rounded-full bg-white animate-pulse" />
-                        ) : (
-                          <div className="w-2 h-2 rounded-full bg-white/30" />
-                        )}
-                      </div>
-                      <span className={`text-sm ${done ? "text-[#22c55e] font-semibold" : active ? "text-[var(--color-text-primary)] font-medium" : "text-[var(--color-text-muted)]"}`}>
-                        {step.label}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-        )}
 
         {/* Ambient glow blobs */}
         <div className="absolute pointer-events-none" style={{ left: cx - 250, top: cy - 250, width: 500, height: 500, background: "radial-gradient(circle, rgba(59,130,246,0.06) 0%, transparent 70%)", animation: "breathe 8s ease-in-out infinite" }} />
@@ -835,7 +964,252 @@ export default function SectorMindMap() {
         <div className="absolute bottom-5 left-5 z-30 text-[11px] text-[var(--color-text-muted)] glass rounded-xl px-4 py-2.5 font-medium">
           {SECTORS.length}개 섹터 · {SECTORS.reduce((a, s) => a + s.picks.length, 0)}개 종목
         </div>
+          </>
+        )}
+
+        {/* ─── Evaluating stock overlay (shared mobile/desktop) ─── */}
+        {evaluatingStock && (
+          <div className={`absolute inset-0 z-50 flex items-center justify-center bg-black/55 backdrop-blur-md ${isMobile ? "px-4" : "px-4"}`}>
+            <div
+              className={`w-full max-w-lg rounded-3xl border border-white/10 glass ${isMobile ? "mx-4 px-5 py-6" : "px-8 py-8"} relative`}
+              style={{ boxShadow: "0 24px 80px rgba(0,0,0,0.55)" }}
+            >
+              {/* Close button */}
+              <button
+                onClick={() => { analysisAbortRef.current = true; setEvaluatingStock(null); }}
+                className="absolute top-4 right-4 w-8 h-8 rounded-lg flex items-center justify-center text-[var(--color-text-muted)] hover:text-white hover:bg-white/10 transition-all"
+              >
+                <X size={16} />
+              </button>
+
+              <p className="text-[11px] uppercase tracking-[0.22em] text-[var(--color-accent-blue)]">
+                AI Deep Analysis
+              </p>
+              <h3 className={`${isMobile ? "text-xl" : "text-2xl"} font-black text-[var(--color-text-primary)] mt-2`}>
+                {evaluatingStock.name}
+              </h3>
+              <p className="text-sm text-[var(--color-text-muted)] mt-1">
+                {evaluatingStock.ticker} · {evaluatingStock.sectorName}
+              </p>
+
+              {/* Progress bar */}
+              <div className="mt-6">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs text-[var(--color-text-secondary)] font-medium">{analysisStage}</span>
+                  <span className="text-sm font-black text-[var(--color-accent-blue)]">{analysisProgress}%</span>
+                </div>
+                <div className="h-2.5 rounded-full bg-white/8 overflow-hidden">
+                  <div
+                    className="h-full rounded-full transition-all duration-500 ease-out"
+                    style={{
+                      width: `${analysisProgress}%`,
+                      background: analysisProgress >= 100
+                        ? "linear-gradient(90deg, #22c55e, #16a34a)"
+                        : "linear-gradient(90deg, #3b82f6, #8b5cf6)",
+                    }}
+                  />
+                </div>
+              </div>
+
+              {/* Analysis steps */}
+              <div className="mt-5 space-y-2">
+                {[
+                  { label: "주가 차트 수집", threshold: 25 },
+                  { label: "기술적 지표 분석", threshold: 45 },
+                  { label: "재무 데이터 분석", threshold: 65 },
+                  { label: "뉴스 수집 및 감성 분석", threshold: 80 },
+                  { label: "투자 체크리스트 생성", threshold: 100 },
+                ].map((step) => {
+                  const done = analysisProgress >= step.threshold;
+                  const active = !done && analysisProgress >= step.threshold - 25;
+                  return (
+                    <div
+                      key={step.label}
+                      className={`flex items-center gap-3 rounded-xl ${isMobile ? "px-3 py-2" : "px-4 py-2.5"} transition-all duration-300`}
+                      style={{
+                        background: done ? "rgba(34,197,94,0.08)" : active ? "rgba(59,130,246,0.08)" : "rgba(255,255,255,0.02)",
+                        border: `1px solid ${done ? "rgba(34,197,94,0.2)" : active ? "rgba(59,130,246,0.2)" : "rgba(255,255,255,0.05)"}`,
+                      }}
+                    >
+                      <div className="w-5 h-5 rounded-full flex items-center justify-center shrink-0" style={{
+                        background: done ? "#22c55e" : active ? "#3b82f6" : "rgba(255,255,255,0.1)",
+                      }}>
+                        {done ? (
+                          <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6L5 8.5L9.5 3.5" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                        ) : active ? (
+                          <div className="w-2 h-2 rounded-full bg-white animate-pulse" />
+                        ) : (
+                          <div className="w-2 h-2 rounded-full bg-white/30" />
+                        )}
+                      </div>
+                      <span className={`text-sm ${done ? "text-[#22c55e] font-semibold" : active ? "text-[var(--color-text-primary)] font-medium" : "text-[var(--color-text-muted)]"}`}>
+                        {step.label}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
+
+      {/* ─── Mobile sector overlay (bottom sheet) ─── */}
+      {isMobile && selected && (
+        <div
+          className="fixed inset-0 z-50 flex flex-col justify-end"
+          onClick={() => setSelected(null)}
+        >
+          {/* Backdrop */}
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
+
+          {/* Bottom sheet */}
+          <div
+            className="relative z-10 rounded-t-3xl overflow-y-auto"
+            style={{
+              maxHeight: "85vh",
+              background: "var(--color-bg-primary)",
+              border: "1px solid rgba(255,255,255,0.08)",
+              borderBottom: "none",
+              boxShadow: "0 -12px 60px rgba(0,0,0,0.5)",
+              animation: "fadeInUp 0.3s ease-out",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Drag handle */}
+            <div className="flex justify-center pt-3 pb-1">
+              <div className="w-10 h-1 rounded-full bg-white/20" />
+            </div>
+
+            <div className="px-5 pb-8 space-y-5">
+              {/* Header */}
+              <div className="flex items-center gap-3">
+                <div
+                  className="w-14 h-14 rounded-2xl flex items-center justify-center"
+                  style={{
+                    background: `linear-gradient(135deg, ${selected.color}30, ${selected.color}10)`,
+                    border: `1.5px solid ${selected.color}50`,
+                    boxShadow: `0 8px 32px ${selected.color}20`,
+                  }}
+                >
+                  <selected.icon size={26} strokeWidth={1.5} style={{ color: selected.color }} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h3 className="text-lg font-bold" style={{ color: selected.color }}>
+                    {selected.name}
+                  </h3>
+                  <p className="text-[11px] text-[var(--color-text-muted)]">
+                    {2025 + year}년 투자 비중{" "}
+                    <span style={{ color: selected.color, fontWeight: 700 }}>
+                      {Math.round((weights.get(selected.id) ?? 0) * 100)}%
+                    </span>
+                  </p>
+                </div>
+                <button
+                  className="w-9 h-9 rounded-xl flex items-center justify-center text-[var(--color-text-muted)] hover:text-white bg-white/5 active:bg-white/10 transition-all"
+                  onClick={() => setSelected(null)}
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {/* Description */}
+              <p className="text-xs text-[var(--color-text-secondary)] leading-relaxed">
+                {selected.desc}
+              </p>
+
+              {/* Material tags */}
+              {selected.materials.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {selected.materials.map((m) => (
+                    <span
+                      key={m}
+                      className="px-2.5 py-1 rounded-full text-[10px] font-medium"
+                      style={{
+                        background: `linear-gradient(135deg, ${selected.color}15, ${selected.color}08)`,
+                        color: selected.color,
+                        border: `1px solid ${selected.color}25`,
+                      }}
+                    >
+                      {m}
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {/* Divider */}
+              <div className="h-px w-full" style={{ background: `linear-gradient(90deg, transparent, ${selected.color}30, transparent)` }} />
+
+              {/* Top 5 Picks */}
+              <div>
+                <p className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-widest mb-3">
+                  Top 5 Picks
+                </p>
+                <div className="space-y-2">
+                  {selected.picks.map((pick, i) => (
+                    <div
+                      key={pick.ticker}
+                      className="flex items-center gap-3 px-3.5 py-3 rounded-xl active:bg-white/5 transition-all duration-200"
+                      style={{
+                        background: "rgba(255,255,255,0.02)",
+                        border: "1px solid rgba(255,255,255,0.04)",
+                      }}
+                      onClick={() => navigate(`/sector/${selected.id}?stock=${encodeURIComponent(pick.ticker)}`)}
+                    >
+                      <div
+                        className="w-7 h-7 rounded-lg flex items-center justify-center text-[11px] font-bold shrink-0"
+                        style={{
+                          background: `linear-gradient(135deg, ${selected.color}, ${selected.color}bb)`,
+                          color: "#fff",
+                          boxShadow: `0 4px 12px ${selected.color}30`,
+                        }}
+                      >
+                        {i + 1}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-sm font-semibold text-[var(--color-text-primary)]">
+                            {pick.name}
+                          </span>
+                          <span
+                            className="text-[9px] px-1.5 py-0.5 rounded font-bold"
+                            style={{
+                              background: pick.flag === "US" ? "rgba(59,130,246,0.15)" : "rgba(239,68,68,0.15)",
+                              color: pick.flag === "US" ? "#60a5fa" : "#f87171",
+                            }}
+                          >
+                            {pick.flag}
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-[var(--color-text-muted)] truncate mt-0.5">
+                          {pick.desc}
+                        </p>
+                      </div>
+                      <svg className="w-4 h-4 text-[var(--color-text-muted)] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                      </svg>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Sector detail button */}
+              <button
+                className="w-full py-3.5 rounded-xl text-sm font-bold transition-all duration-300"
+                style={{
+                  background: `linear-gradient(135deg, ${selected.color}, ${selected.color}bb)`,
+                  color: "#fff",
+                  boxShadow: `0 4px 20px ${selected.color}40`,
+                  border: "1px solid rgba(255,255,255,0.1)",
+                }}
+                onClick={() => navigate(`/sector/${selected.id}`)}
+              >
+                섹터 상세 분석 →
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

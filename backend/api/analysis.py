@@ -4384,6 +4384,227 @@ CHECKLIST_SOURCES = {
 }
 
 
+def _build_geopolitical_risk_item(
+    ticker: str,
+    info: dict,
+    commodity_cache: dict,
+    stock_overlay: list,
+) -> dict | None:
+    """Build a geopolitical risk checklist item for Korean stocks.
+
+    Checks oil price (CL=F), VIX (^VIX), USD/KRW (KRW=X) trends and
+    searches Naver news for geopolitical keywords to determine risk level.
+    Returns a fully-formed checklist item dict, or None if data is unavailable.
+    """
+    company_name = info.get("shortName") or info.get("longName") or ticker
+
+    # ── 1. Fetch oil, VIX, KRW data (reuse commodity_cache or fetch fresh) ──
+    geo_symbols = {"CL=F": "유가", "^VIX": "VIX", "KRW=X": "USD/KRW"}
+    geo_data: dict[str, dict] = {}  # sym -> {last, month_change_pct, trend_dir}
+
+    for sym, label in geo_symbols.items():
+        try:
+            hist = commodity_cache.get(sym)
+            if hist is None or (hasattr(hist, "empty") and hist.empty):
+                hist = StockDataService.get_stock_history(sym, period="3mo")
+            if hist is not None and not hist.empty and len(hist) > 5:
+                closes = hist["Close"].values.astype(float)
+                last_price = float(closes[-1])
+                month_ago = float(closes[-22]) if len(closes) >= 22 else float(closes[0])
+                month_change = (last_price - month_ago) / month_ago * 100
+                ma5 = float(np.mean(closes[-5:])) if len(closes) >= 5 else last_price
+                ma20 = float(np.mean(closes[-20:])) if len(closes) >= 20 else last_price
+                short_trend = (ma5 - ma20) / ma20 * 100
+                if short_trend > 2:
+                    trend_dir = "급상승"
+                elif short_trend > 0.5:
+                    trend_dir = "상승"
+                elif short_trend < -2:
+                    trend_dir = "급하락"
+                elif short_trend < -0.5:
+                    trend_dir = "하락"
+                else:
+                    trend_dir = "보합"
+                geo_data[sym] = {
+                    "last": round(last_price, 2),
+                    "month_change": round(month_change, 1),
+                    "trend_dir": trend_dir,
+                    "short_trend": round(short_trend, 2),
+                }
+        except Exception:
+            pass
+
+    if not geo_data:
+        return None
+
+    # ── 2. Search geopolitical news via Naver ──
+    geo_keywords = [
+        f"{company_name} 지정학",
+        "이란 전쟁 한국",
+        "관세 한국 수출",
+        "북한 리스크",
+    ]
+    geo_news_titles: list[str] = []
+    geo_news_count = 0
+    for kw in geo_keywords:
+        try:
+            articles = NewsCrawlerService.crawl_naver_news(kw)
+            for art in articles[:3]:
+                title = art.title if hasattr(art, "title") else str(art)
+                if title not in geo_news_titles:
+                    geo_news_titles.append(title)
+                    geo_news_count += 1
+        except Exception:
+            pass
+
+    # ── 3. Score geopolitical risk ──
+    # Oil spike = negative for Korean manufacturers (cost pressure)
+    # VIX spike = negative for EM stocks
+    # KRW weakening (KRW=X rising = more KRW per USD) = mixed (hurts imports, helps exporters)
+    risk_score = 50  # start neutral
+
+    oil = geo_data.get("CL=F")
+    vix = geo_data.get("^VIX")
+    krw = geo_data.get("KRW=X")
+
+    detail_parts = []
+    negative_signals = []
+    positive_signals = []
+
+    if oil:
+        mc = oil["month_change"]
+        if mc > 10:
+            risk_score -= 20
+            negative_signals.append(f"유가 급등 (+{mc}%)")
+        elif mc > 5:
+            risk_score -= 10
+            negative_signals.append(f"유가 상승 (+{mc}%)")
+        elif mc < -10:
+            risk_score += 15
+            positive_signals.append(f"유가 급락 ({mc}%)")
+        elif mc < -5:
+            risk_score += 8
+            positive_signals.append(f"유가 하락 ({mc}%)")
+        detail_parts.append(f"유가 {oil['trend_dir']} ({'+' if mc > 0 else ''}{mc}%)")
+
+    if vix:
+        vix_level = vix["last"]
+        if vix_level > 30:
+            risk_score -= 20
+            negative_signals.append(f"VIX 공포 구간 ({vix_level})")
+        elif vix_level > 25:
+            risk_score -= 12
+            negative_signals.append(f"VIX 경계 구간 ({vix_level})")
+        elif vix_level > 20:
+            risk_score -= 5
+        elif vix_level < 15:
+            risk_score += 10
+            positive_signals.append(f"VIX 안정 ({vix_level})")
+        detail_parts.append(f"VIX {vix_level}")
+
+    if krw:
+        krw_level = krw["last"]
+        mc = krw["month_change"]
+        if mc > 3:
+            # Won weakening sharply
+            risk_score -= 8
+            negative_signals.append(f"원화 약세 ({'+' if mc > 0 else ''}{mc}%)")
+        elif mc < -3:
+            risk_score += 5
+            positive_signals.append(f"원화 강세 ({mc}%)")
+        detail_parts.append(f"USD/KRW {int(krw_level)}원 ({'+' if mc > 0 else ''}{mc}%)")
+
+    # News sentiment: check for alarming keywords
+    alarm_keywords = ["전쟁", "이란", "공격", "제재", "sanctions", "tariff", "관세", "보복", "핵", "미사일", "봉쇄"]
+    calm_keywords = ["휴전", "협상", "타결", "완화", "해제", "면제"]
+    alarm_count = 0
+    calm_count = 0
+    for title in geo_news_titles:
+        title_lower = title.lower()
+        if any(kw in title_lower for kw in alarm_keywords):
+            alarm_count += 1
+        if any(kw in title_lower for kw in calm_keywords):
+            calm_count += 1
+
+    if alarm_count >= 3:
+        risk_score -= 15
+        negative_signals.append(f"지정학 뉴스 경보 ({alarm_count}건)")
+    elif alarm_count >= 1:
+        risk_score -= 5
+    if calm_count >= 2:
+        risk_score += 10
+        positive_signals.append("긴장 완화 뉴스 감지")
+
+    # Clamp score
+    risk_score = max(5, min(95, risk_score))
+
+    # Determine status
+    if risk_score >= 60:
+        status = "positive"
+    elif risk_score <= 35:
+        status = "negative"
+    else:
+        status = "neutral"
+
+    # Build detail string
+    detail = " / ".join(detail_parts) if detail_parts else "데이터 부족"
+    if negative_signals:
+        detail += " — " + ", ".join(negative_signals[:2])
+    elif positive_signals:
+        detail += " — " + ", ".join(positive_signals[:2])
+
+    # Build trend data from oil price (most impactful for Korean manufacturers)
+    trend_data = []
+    oil_hist = commodity_cache.get("CL=F")
+    if oil_hist is None or (hasattr(oil_hist, "empty") and oil_hist.empty):
+        try:
+            oil_hist = StockDataService.get_stock_history("CL=F", period="3mo")
+        except Exception:
+            oil_hist = pd.DataFrame()
+    if oil_hist is not None and not oil_hist.empty and len(oil_hist) > 5:
+        c_min = float(oil_hist["Close"].min())
+        c_max = float(oil_hist["Close"].max())
+        c_range = c_max - c_min if c_max > c_min else 1.0
+        step = max(1, len(oil_hist) // 60)
+        for idx, row in oil_hist.iloc[::step].iterrows():
+            d = str(idx.date()) if hasattr(idx, "date") else str(idx)
+            trend_data.append({
+                "date": d,
+                "close": round(float(row["Close"]), 2),
+                "norm": round((float(row["Close"]) - c_min) / c_range * 100, 1),
+            })
+
+    return {
+        "name": "지정학적 리스크",
+        "status": status,
+        "value": None,
+        "detail": detail,
+        "trend_data": trend_data,
+        "stock_overlay": stock_overlay,
+        "correlation": 0.0,
+        "corr_label": "거시 리스크",
+        "thresholds": {},
+        "source": "유가(CL=F) / VIX / USD·KRW + 네이버 뉴스",
+        "importance": 80,
+        "window": "향후 1~3개월",
+        "why_it_matters": "한국 수출 대기업은 유가, 환율, 글로벌 리스크에 직접적 영향을 받습니다. "
+                          "유가 급등은 제조 원가를 압박하고, VIX 상승은 외국인 자금 이탈을, "
+                          "원화 약세는 수입 비용 증가를 초래합니다.",
+        "expected_condition": "유가 안정 + VIX 20 이하 + 원화 안정 시 긍정적",
+        "item_score": risk_score,
+        "lead_signal": "리스크 완화" if status == "positive" else (
+            "리스크 경고" if status == "negative" else "리스크 중립"
+        ),
+        "geo_details": {
+            "oil": geo_data.get("CL=F"),
+            "vix": geo_data.get("^VIX"),
+            "krw": geo_data.get("KRW=X"),
+            "news_count": geo_news_count,
+            "alarm_keywords_found": alarm_count,
+        },
+    }
+
+
 @router.get("/analysis/{ticker}/checklist-live")
 def get_checklist_live(ticker: str) -> dict:
     """
@@ -5082,6 +5303,18 @@ def get_checklist_live(ticker: str) -> dict:
                 "preliminary_data": pe_data,
                 "preliminary_headlines": pe_headlines,
             })
+
+        # ── GEOPOLITICAL RISK — auto-inject for Korean stocks (.KS/.KQ) ──
+        is_krx_ticker = ticker.endswith(".KS") or ticker.endswith(".KQ")
+        if is_krx_ticker:
+            try:
+                geo_item = _build_geopolitical_risk_item(
+                    ticker, info, commodity_cache, stock_overlay
+                )
+                if geo_item:
+                    results.append(geo_item)
+            except Exception:
+                pass
 
         # Sort by importance (highest correlation first)
         results.sort(key=lambda r: r.get("importance", 0), reverse=True)

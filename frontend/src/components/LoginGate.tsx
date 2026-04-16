@@ -20,6 +20,8 @@ const ALLOWED_NICKNAMES = [
   "제이지", "좌절하는 제이지", "주린이", "지하수",
   "차를 사자", "초코바나나", "카피머신 1호 팬", "카피머신 비서",
   "피카츄", "하트뽀뽀 어피치", "홀인원 강자", ".",
+  // 추가 멤버
+  "김경호", "이건원", "김종철", "다빈",
 ];
 
 export default function LoginGate({ children }: { children: React.ReactNode }) {
@@ -63,23 +65,24 @@ export default function LoginGate({ children }: { children: React.ReactNode }) {
   if (authenticated) return <>{children}</>;
 
   return (
-    <div className="h-screen w-screen flex items-center justify-center bg-[var(--color-bg-primary)] bg-dot-grid">
+    <div className="h-[100dvh] w-screen flex items-center justify-center bg-[var(--color-bg-primary)] bg-dot-grid">
       {/* Background glow */}
       <div className="absolute inset-0 pointer-events-none overflow-hidden">
-        <div className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] rounded-full" style={{ background: "radial-gradient(circle, rgba(59,130,246,0.08) 0%, transparent 70%)" }} />
+        <div className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[400px] h-[400px] sm:w-[600px] sm:h-[600px] rounded-full" style={{ background: "radial-gradient(circle, rgba(59,130,246,0.08) 0%, transparent 70%)" }} />
       </div>
 
-      <div className="relative z-10 w-full max-w-sm px-6">
+      <div className="relative z-10 w-full max-w-sm px-5 sm:px-6">
         {/* Logo */}
-        <div className="text-center mb-8">
-          <div className="w-20 h-20 rounded-3xl mx-auto flex items-center justify-center mb-4" style={{
+        <div className="text-center mb-6 sm:mb-8">
+          <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl sm:rounded-3xl mx-auto flex items-center justify-center mb-3 sm:mb-4" style={{
             background: "linear-gradient(135deg, #3b82f6, #8b5cf6)",
             boxShadow: "0 12px 40px rgba(59,130,246,0.3)",
           }}>
-            <TrendingUp size={36} color="white" strokeWidth={2.5} />
+            <TrendingUp size={28} color="white" strokeWidth={2.5} className="sm:hidden" />
+            <TrendingUp size={36} color="white" strokeWidth={2.5} className="hidden sm:block" />
           </div>
-          <h1 className="text-3xl font-black text-[var(--color-text-primary)]">Stock Future</h1>
-          <p className="text-sm text-[var(--color-text-muted)] mt-2">AI 기반 실시간 주식 분석 플랫폼</p>
+          <h1 className="text-2xl sm:text-3xl font-black text-[var(--color-text-primary)]">Stock Future</h1>
+          <p className="text-xs sm:text-sm text-[var(--color-text-muted)] mt-1.5 sm:mt-2">AI 기반 실시간 주식 분석 플랫폼</p>
         </div>
 
         {/* Login form */}

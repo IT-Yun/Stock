@@ -612,13 +612,13 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
       {!loading && (
         <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
           <div
-            className="px-5 py-5"
+            className="px-3 py-4 sm:px-5 sm:py-5"
             style={{ background: `linear-gradient(135deg, ${overall.color}20, ${overall.color}05)`, borderBottom: `2px solid ${overall.color}40` }}
           >
             {/* Top row: company name + price + score */}
-            <div className="flex items-center gap-4 mb-4">
+            <div className="flex items-center gap-3 sm:gap-4 mb-4">
               <div className="flex-1 min-w-0">
-                <h2 className="text-2xl font-black text-[var(--color-text-primary)] truncate">{pick.name}</h2>
+                <h2 className="text-xl sm:text-2xl font-black text-[var(--color-text-primary)] truncate">{pick.name}</h2>
                 <div className="flex items-center gap-2 mt-1">
                   <span className="text-sm font-mono text-[var(--color-text-muted)]">{pick.ticker}</span>
                   <span
@@ -626,13 +626,13 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                     style={{ background: pick.flag === "US" ? "rgba(59,130,246,0.15)" : "rgba(239,68,68,0.15)", color: pick.flag === "US" ? "#60a5fa" : "#f87171" }}
                   >{pick.flag}</span>
                 </div>
-                <div className="flex items-center gap-3 mt-2">
+                <div className="flex flex-wrap items-center gap-2 sm:gap-3 mt-2">
                   {latestPrice && (
-                    <span className="text-xl font-mono font-black text-[var(--color-text-primary)]">
+                    <span className="text-lg sm:text-xl font-mono font-black text-[var(--color-text-primary)]">
                       {currency}{Math.round(latestPrice).toLocaleString()}
                     </span>
                   )}
-                  <span className="text-sm font-bold px-3 py-1 rounded-lg" style={{ background: `${overall.color}18`, color: overall.color, border: `1px solid ${overall.color}30` }}>
+                  <span className="text-sm font-bold px-2 sm:px-3 py-1 rounded-lg" style={{ background: `${overall.color}18`, color: overall.color, border: `1px solid ${overall.color}30` }}>
                     {overall.label}
                   </span>
                   <span className="text-xs text-[var(--color-text-secondary)]">{overall.action}</span>
@@ -641,17 +641,17 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
               {/* Big score circle */}
               <div className="flex flex-col items-center shrink-0">
                 <div
-                  className="w-18 h-18 rounded-full flex items-center justify-center border-4"
-                  style={{ borderColor: overall.color, background: `${overall.color}10`, width: 72, height: 72 }}
+                  className="rounded-full flex items-center justify-center border-4"
+                  style={{ borderColor: overall.color, background: `${overall.color}10`, width: 60, height: 60 }}
                 >
-                  <span className="text-2xl font-black" style={{ color: overall.color }}>{overallScore100}</span>
+                  <span className="text-xl sm:text-2xl font-black" style={{ color: overall.color }}>{overallScore100}</span>
                 </div>
                 <span className="text-[9px] text-[var(--color-text-muted)] mt-1">종합 점수</span>
               </div>
             </div>
 
             {/* Chart + Fundamentals score badges */}
-            <div className="flex items-center gap-3 mb-4">
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3 mb-4">
               <div className="flex-1 rounded-xl px-3 py-2" style={{ background: `${chartVerdict.color}10`, border: `1px solid ${chartVerdict.color}25` }}>
                 <div className="flex items-center justify-between">
                   <span className="text-[10px] text-[var(--color-text-muted)]">차트 분석</span>
@@ -662,7 +662,7 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                 </div>
                 <span className="text-[10px] font-bold mt-1 block" style={{ color: chartVerdict.color }}>{chartVerdict.label}</span>
               </div>
-              <span className="text-lg font-black text-[var(--color-text-muted)]">+</span>
+              <span className="hidden sm:block text-lg font-black text-[var(--color-text-muted)]">+</span>
               <div className="flex-1 rounded-xl px-3 py-2" style={{ background: `${fundVerdict.color}10`, border: `1px solid ${fundVerdict.color}25` }}>
                 <div className="flex items-center justify-between">
                   <span className="text-[10px] text-[var(--color-text-muted)]">실적/펀더멘탈</span>
@@ -673,7 +673,7 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                 </div>
                 <span className="text-[10px] font-bold mt-1 block" style={{ color: fundVerdict.color }}>{fundVerdict.label}</span>
               </div>
-              <span className="text-lg font-black text-[var(--color-text-muted)]">=</span>
+              <span className="hidden sm:block text-lg font-black text-[var(--color-text-muted)]">=</span>
               <div className="flex-1 rounded-xl px-3 py-2" style={{ background: `${overall.color}10`, border: `1px solid ${overall.color}25` }}>
                 <div className="flex items-center justify-between">
                   <span className="text-[10px] text-[var(--color-text-muted)]">종합</span>
@@ -726,7 +726,7 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-3 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     {cards.map(card => (
                       <div key={card.key}
                         className="rounded-xl p-3 cursor-pointer transition-all hover:scale-[1.02]"
@@ -734,7 +734,7 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                         onClick={() => setShowTargetReasons(showTargetReasons === card.key ? null : card.key)}
                       >
                         <p className="text-[10px] font-bold mb-1" style={{ color: card.color }}>{card.label}</p>
-                        <p className="text-lg font-black" style={{ color: card.color }}>{fmt(card.price)}</p>
+                        <p className="text-base sm:text-lg font-black" style={{ color: card.color }}>{fmt(card.price)}</p>
                         <p className="text-[10px] mt-0.5" style={{ color: `${card.color}99` }}>
                           {card.pct >= 0 ? "+" : ""}{card.pct.toFixed(1)}% {card.pctLabel}
                         </p>
@@ -794,7 +794,7 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
           <div className="text-center">
             {loadError ? (
               <>
-                <p className="text-lg font-bold text-[var(--color-text-primary)]">데이터 수신 대기 중...</p>
+                <p className="text-base sm:text-lg font-bold text-[var(--color-text-primary)]">데이터 수신 대기 중...</p>
                 <p className="text-sm text-[var(--color-text-muted)] mt-1">{pick.name} ({pick.ticker})</p>
                 <p className="text-xs text-[rgba(234,179,8,0.9)] mt-2">
                   {retryCount < 3 ? `자동 재시도 중... (${retryCount}/3)` : "서버 연결을 확인해 주세요."}
@@ -802,7 +802,7 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
               </>
             ) : (
               <>
-                <p className="text-lg font-bold text-[var(--color-text-primary)]">AI 분석 중... {loadProgress}%</p>
+                <p className="text-base sm:text-lg font-bold text-[var(--color-text-primary)]">AI 분석 중... {loadProgress}%</p>
                 <p className="text-sm text-[var(--color-text-muted)] mt-1">{pick.name} ({pick.ticker})</p>
                 <p className="text-xs mt-2" style={{ color: sectorColor }}>{loadStage}</p>
               </>
@@ -834,7 +834,7 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
         <>
           {/* ═══ CHART — dots on big moves, hover for reason ═══ */}
           <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-2xl overflow-hidden">
-            <div className="px-5 pt-3 pb-3">
+            <div className="px-3 sm:px-5 pt-3 pb-3">
               <div className="flex items-center gap-1.5 mb-2">
                 {periods.map((p) => (
                   <button
@@ -864,7 +864,7 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                       const moveInfo = findMoveReason(d.date);
                       const bigMove = bigMoves.find((m) => m.date === d.date);
                       return (
-                        <div className="bg-[var(--color-bg-secondary)] border border-[var(--color-border)] rounded-xl p-3.5 shadow-2xl max-w-[340px]" style={{ backdropFilter: "blur(8px)" }}>
+                        <div className="bg-[var(--color-bg-secondary)] border border-[var(--color-border)] rounded-xl p-3.5 shadow-2xl max-w-[calc(100vw-2rem)] sm:max-w-[340px]" style={{ backdropFilter: "blur(8px)" }}>
                           <div className="flex items-center justify-between mb-1">
                             <p className="text-[10px] text-[var(--color-text-muted)]">{d.date}</p>
                             <p className="text-sm font-bold text-[var(--color-text-primary)]">{currency}{d.close?.toLocaleString()}</p>
@@ -938,12 +938,12 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
           </div>
 
           {/* ═══ EXPECTATION — 기대감 (실시간 뉴스 기반) ═══ */}
-          <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-2xl p-5">
+          <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-2xl p-3 sm:p-5">
             <div className="flex items-center gap-2 mb-3">
-              <div className="w-8 h-8 rounded-xl flex items-center justify-center" style={{ background: `${sectorColor}18`, border: `1px solid ${sectorColor}25` }}>
+              <div className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0" style={{ background: `${sectorColor}18`, border: `1px solid ${sectorColor}25` }}>
                 <Zap size={16} style={{ color: sectorColor }} />
               </div>
-              <div>
+              <div className="min-w-0">
                 <h3 className="text-sm font-bold text-[var(--color-text-primary)]">현재 주가 기대감</h3>
                 <p className="text-[10px] text-[var(--color-text-muted)]">최신 뉴스 기반 실시간 분석 — 지금 주가를 밀고 있는 기대와 깨지는 조건</p>
               </div>
@@ -1013,12 +1013,12 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
 
             if (articles.length === 0 && !newsAnalysis) {
               return (
-                <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-2xl p-5">
+                <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-2xl p-3 sm:p-5">
                   <div className="flex items-center gap-2 mb-3">
-                    <div className="w-8 h-8 rounded-xl flex items-center justify-center bg-[rgba(99,102,241,0.1)] border border-[rgba(99,102,241,0.2)]">
+                    <div className="w-8 h-8 rounded-xl flex items-center justify-center bg-[rgba(99,102,241,0.1)] border border-[rgba(99,102,241,0.2)] shrink-0">
                       <Newspaper size={16} className="text-[#6366f1]" />
                     </div>
-                    <div>
+                    <div className="min-w-0">
                       <h3 className="text-sm font-bold text-[var(--color-text-primary)]">실시간 뉴스 심층 분석</h3>
                       <p className="text-[10px] text-[var(--color-text-muted)]">관련 뉴스 수집 및 의미 분석 중...</p>
                     </div>
@@ -1044,12 +1044,12 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
             const pricedColor = (l: string) => l === "not_priced" ? "#f59e0b" : l === "partially_priced" ? "#6366f1" : l === "fully_priced" ? "#6b7280" : "#9ca3af";
 
             return (
-              <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-2xl p-5">
-                <div className="flex items-center gap-2 mb-4">
-                  <div className="w-8 h-8 rounded-xl flex items-center justify-center bg-[rgba(99,102,241,0.1)] border border-[rgba(99,102,241,0.2)]">
+              <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-2xl p-3 sm:p-5">
+                <div className="flex flex-wrap items-center gap-2 mb-4">
+                  <div className="w-8 h-8 rounded-xl flex items-center justify-center bg-[rgba(99,102,241,0.1)] border border-[rgba(99,102,241,0.2)] shrink-0">
                     <Newspaper size={16} className="text-[#6366f1]" />
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <h3 className="text-sm font-bold text-[var(--color-text-primary)]">실시간 뉴스 심층 분석</h3>
                     <p className="text-[10px] text-[var(--color-text-muted)]">뉴스 의미 해석 · 선반영 판단 · 향후 예측</p>
                   </div>
@@ -1167,17 +1167,17 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
 
           {/* ═══ MACRO / GEOPOLITICAL EVENTS ═══ */}
           {macroEvents?.events?.length > 0 && (
-            <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-2xl p-5">
-              <div className="flex items-center gap-2 mb-4">
-                <div className="w-8 h-8 rounded-xl flex items-center justify-center bg-[rgba(239,68,68,0.1)] border border-[rgba(239,68,68,0.2)]">
+            <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-2xl p-3 sm:p-5">
+              <div className="flex flex-wrap items-center gap-2 mb-4">
+                <div className="w-8 h-8 rounded-xl flex items-center justify-center bg-[rgba(239,68,68,0.1)] border border-[rgba(239,68,68,0.2)] shrink-0">
                   <Globe size={16} className="text-[#ef4444]" />
                 </div>
-                <div>
+                <div className="min-w-0">
                   <h3 className="text-sm font-bold text-[var(--color-text-primary)]">글로벌 매크로 & 지정학 이슈</h3>
                   <p className="text-[10px] text-[var(--color-text-muted)]">한국 증시에 영향을 미치는 글로벌 이벤트</p>
                 </div>
                 {macroEvents.summary && (
-                  <div className="ml-auto flex items-center gap-2">
+                  <div className="w-full sm:w-auto sm:ml-auto flex items-center gap-2 mt-1 sm:mt-0">
                     <span className={`text-xs font-bold px-2 py-1 rounded-lg ${
                       macroEvents.summary.market_sentiment.includes("부정") ? "bg-[rgba(239,68,68,0.1)] text-[#ef4444]"
                       : macroEvents.summary.market_sentiment.includes("긍정") ? "bg-[rgba(34,197,94,0.1)] text-[#22c55e]"
@@ -1236,12 +1236,12 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
           )}
 
           {/* ═══ LIVE CHECKLIST — FULL-SIZE CHARTS WITH THRESHOLDS ═══ */}
-          <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-2xl p-5">
-            <div className="flex items-center gap-2 mb-4">
-              <div className="w-8 h-8 rounded-xl flex items-center justify-center bg-[rgba(99,102,241,0.1)] border border-[rgba(99,102,241,0.2)]">
+          <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-2xl p-3 sm:p-5">
+            <div className="flex flex-wrap items-center gap-2 mb-4">
+              <div className="w-8 h-8 rounded-xl flex items-center justify-center bg-[rgba(99,102,241,0.1)] border border-[rgba(99,102,241,0.2)] shrink-0">
                 <Shield size={16} className="text-[#6366f1]" />
               </div>
-              <div>
+              <div className="min-w-0">
                 <h3 className="text-sm font-bold text-[var(--color-text-primary)]">투자 체크리스트 (실시간 모니터링)</h3>
                 <p className="text-[10px] text-[var(--color-text-muted)]">주가와의 상관관계 분석 기반 — 중요도순 정렬</p>
               </div>
@@ -1262,15 +1262,15 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                 const safetyColor = ratio >= 0.7 ? "#22c55e" : ratio >= 0.4 ? "#eab308" : "#ef4444";
                 const safetyLabel = ratio >= 0.7 ? "안전" : ratio >= 0.4 ? "주의" : "위험";
                 return (
-                  <div className="flex items-center gap-2 ml-auto">
-                    <div className="flex gap-0.5">
+                  <div className="flex items-center gap-2 w-full sm:w-auto sm:ml-auto mt-1 sm:mt-0">
+                    <div className="flex gap-0.5 overflow-hidden">
                       {filtered.map((_: any, ci: number) => (
-                        <div key={ci} className="w-3 h-6 rounded-sm" style={{
+                        <div key={ci} className="w-2 sm:w-3 h-5 sm:h-6 rounded-sm" style={{
                           background: filtered[ci].status === "positive" ? "#22c55e" : filtered[ci].status === "negative" ? "#ef4444" : "#eab30850"
                         }} />
                       ))}
                     </div>
-                    <span className="text-lg font-black" style={{ color: safetyColor }}>{passed}/{total}</span>
+                    <span className="text-base sm:text-lg font-black" style={{ color: safetyColor }}>{passed}/{total}</span>
                     <span className="text-xs font-bold px-2.5 py-1 rounded-full" style={{ background: safetyColor + "18", color: safetyColor, border: `1px solid ${safetyColor}30` }}>
                       {safetyLabel}
                     </span>
@@ -1290,16 +1290,16 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                     </div>
                   </div>
                   {/* Animated step indicator */}
-                  <div className="flex items-center gap-1.5 text-[10px]">
+                  <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
                     <span className="px-2 py-0.5 rounded bg-[#6366f1] text-white font-bold">1</span>
-                    <span className="text-[var(--color-text-muted)]">데이터 수집</span>
+                    <span className="text-[var(--color-text-muted)]">수집</span>
                     <span className="text-[var(--color-text-muted)]">→</span>
                     <span className="px-2 py-0.5 rounded bg-[rgba(99,102,241,0.2)] text-[#6366f1] font-bold animate-pulse">2</span>
                     <span className="text-[var(--color-text-muted)] animate-pulse">분석 중</span>
                     <span className="text-[var(--color-text-muted)]">→</span>
                     <span className="px-2 py-0.5 rounded bg-[var(--color-bg-hover)] text-[var(--color-text-muted)] font-bold">3</span>
                     <span className="text-[var(--color-text-muted)]">완료</span>
-                    <span className="ml-auto flex items-center gap-2 text-[var(--color-text-muted)]">
+                    <span className="sm:ml-auto flex items-center gap-2 text-[var(--color-text-muted)]">
                       <ElapsedTimer active={checklistLive === null} />
                       <span>/ 약 30~60초</span>
                     </span>
@@ -1334,14 +1334,14 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                 return (
                   <div key={i} className="rounded-xl overflow-hidden" style={{ border: `2px solid ${statusColor}40` }}>
                     {/* SIMPLE STATUS BANNER — name + big status only */}
-                    <div className="px-4 py-3 flex items-center justify-between" style={{ background: `${statusColor}12` }}>
-                      <div className="flex items-center gap-2.5">
-                        <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: `${statusColor}20` }}>
-                          {item.status === "positive" ? <CheckCircle2 size={18} color="#22c55e" /> : item.status === "negative" ? <XCircle size={18} color="#ef4444" /> : <MinusCircle size={18} color="#eab308" />}
+                    <div className="px-3 sm:px-4 py-3 flex items-start sm:items-center justify-between gap-2" style={{ background: `${statusColor}12` }}>
+                      <div className="flex items-start sm:items-center gap-2 sm:gap-2.5 flex-1 min-w-0">
+                        <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5 sm:mt-0" style={{ background: `${statusColor}20` }}>
+                          {item.status === "positive" ? <CheckCircle2 size={16} color="#22c55e" /> : item.status === "negative" ? <XCircle size={16} color="#ef4444" /> : <MinusCircle size={16} color="#eab308" />}
                         </div>
-                        <div>
-                          <div className="flex items-center gap-1.5">
-                            <p className="text-sm font-bold text-[var(--color-text-primary)]">{item.name}</p>
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <p className="text-xs sm:text-sm font-bold text-[var(--color-text-primary)]">{item.name}</p>
                             {item.importance >= 60 && <span className="text-[9px] font-black px-1.5 py-0.5 rounded-full bg-[rgba(239,68,68,0.2)] text-[#ef4444]">핵심</span>}
                           </div>
                           <p className="text-xs text-[var(--color-text-muted)] mt-0.5">{item.detail || "—"}</p>
@@ -1351,11 +1351,11 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                         </div>
                       </div>
                       {/* Big clear status — the ONE thing you need to see */}
-                      <div className="shrink-0 text-right px-3 py-1.5 rounded-lg" style={{
+                      <div className="shrink-0 text-right px-2 sm:px-3 py-1 sm:py-1.5 rounded-lg" style={{
                         background: item.status === "positive" ? "rgba(59,130,246,0.15)" : item.status === "negative" ? "rgba(239,68,68,0.15)" : "rgba(245,158,11,0.15)",
                         border: `1.5px solid ${item.status === "positive" ? "rgba(59,130,246,0.3)" : item.status === "negative" ? "rgba(239,68,68,0.3)" : "rgba(245,158,11,0.3)"}`
                       }}>
-                        <p className="text-lg font-black" style={{ color: item.status === "positive" ? "#3b82f6" : item.status === "negative" ? "#ef4444" : "#d97706" }}>
+                        <p className="text-sm sm:text-lg font-black whitespace-nowrap" style={{ color: item.status === "positive" ? "#3b82f6" : item.status === "negative" ? "#ef4444" : "#d97706" }}>
                           {item.status === "positive" ? "✓ 안전" : item.status === "negative" ? "⚠ 위험" : "◆ 주의"}
                         </p>
                       </div>
@@ -1602,14 +1602,14 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                           <div className="mt-3 rounded-xl overflow-hidden" style={{
                             border: `2px solid ${isInDanger ? "rgba(239,68,68,0.35)" : belowExpected ? "rgba(245,158,11,0.35)" : "rgba(59,130,246,0.3)"}`
                           }}>
-                            <div className="px-4 py-3 flex items-center justify-between" style={{
+                            <div className="px-3 sm:px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2" style={{
                               background: isInDanger ? "rgba(239,68,68,0.1)" : belowExpected ? "rgba(245,158,11,0.08)" : "rgba(59,130,246,0.06)"
                             }}>
-                              <div>
-                                <p className="text-base font-black" style={{ color: isInDanger ? "#ef4444" : belowExpected ? "#d97706" : "#3b82f6" }}>
+                              <div className="min-w-0">
+                                <p className="text-sm sm:text-base font-black" style={{ color: isInDanger ? "#ef4444" : belowExpected ? "#d97706" : "#3b82f6" }}>
                                   {isInDanger ? "⚠ 위험 — 주가 하락 가능성" : belowExpected ? "◆ 주의 — 주가 대비 지표 부족" : "✓ 안전 — 주가 상승 여력 있음"}
                                 </p>
-                                <p className="text-xs mt-0.5 text-[var(--color-text-muted)]">
+                                <p className="text-[11px] sm:text-xs mt-0.5 text-[var(--color-text-muted)]">
                                   {lastExpected != null && currentVal != null
                                     ? belowExpected
                                       ? `현재 주가 유지하려면 ${unit}${lastExpected.toLocaleString()} 필요 → 실제 ${unit}${currentVal.toLocaleString()} (부족)`
@@ -1618,15 +1618,15 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                                   {futureExpected != null ? ` · 향후 예상 ${unit}${futureExpected.toLocaleString()}` : ""}
                                 </p>
                               </div>
-                              <span className="text-xl font-black font-mono" style={{ color: isInDanger ? "#ef4444" : belowExpected ? "#d97706" : "#1e293b" }}>
+                              <span className="text-lg sm:text-xl font-black font-mono" style={{ color: isInDanger ? "#ef4444" : belowExpected ? "#d97706" : "#1e293b" }}>
                                 {unit}{currentVal?.toLocaleString()}
                               </span>
                             </div>
-                            <div className="px-4 py-2 flex items-center gap-3" style={{ background: "rgba(0,0,0,0.02)" }}>
+                            <div className="px-3 sm:px-4 py-2 flex flex-wrap items-center gap-2 sm:gap-3" style={{ background: "rgba(0,0,0,0.02)" }}>
                               <span className="flex items-center gap-1"><span className="w-4 h-0.5 bg-[#1e3a5f] inline-block rounded" /><span className="text-[10px] text-[var(--color-text-muted)]">실제</span></span>
                               <span className="flex items-center gap-1"><span className="w-4 h-0.5 bg-[#3b82f6] inline-block rounded" style={{ borderTop: "2px dashed #3b82f6" }} /><span className="text-[10px] text-[#3b82f6]">예상 추세</span></span>
                               <span className="flex items-center gap-1"><span className="w-3 h-2 rounded-sm bg-[rgba(239,68,68,0.25)] inline-block" /><span className="text-[10px] text-[#ef4444]">위험 구간</span></span>
-                              <p className="text-[10px] text-[var(--color-text-muted)] ml-auto">{summaryParts[0]}</p>
+                              <p className="text-[10px] text-[var(--color-text-muted)] sm:ml-auto">{summaryParts[0]}</p>
                             </div>
                           </div>
                         </div>
@@ -1782,7 +1782,7 @@ function RiskSection({ sector }: { sector: SectorDef }) {
     <div className="space-y-6">
       {/* Commodity / Indicator Charts */}
       {commodities.length > 0 && (
-        <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-2xl p-5">
+        <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-2xl p-3 sm:p-5">
           <div className="flex items-center gap-2 mb-3">
             <Activity size={16} style={{ color: sector.color }} />
             <h3 className="text-sm font-bold text-[var(--color-text-primary)]">추종 지표 가격 차트 (6개월)</h3>
@@ -1804,7 +1804,7 @@ function RiskSection({ sector }: { sector: SectorDef }) {
       )}
 
       {/* Sector Risks */}
-      <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-2xl p-5">
+      <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-2xl p-3 sm:p-5">
         <div className="flex items-center gap-2 mb-3">
           <AlertTriangle size={16} style={{ color: "#ef4444" }} />
           <h3 className="text-sm font-bold text-[var(--color-text-primary)]">섹터 리스크</h3>
@@ -1880,9 +1880,9 @@ function SectorOverview({ sector }: { sector: SectorDef }) {
   }, [sector.id]);
 
   return (
-    <div className="space-y-5 overflow-y-auto h-full pb-8 pr-1">
+    <div className="space-y-5 overflow-y-auto h-full pb-8 sm:pr-1">
       {/* Sector description */}
-      <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-2xl p-5">
+      <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-2xl p-3 sm:p-5">
         <div className="flex items-center gap-3 mb-3">
           <div
             className="w-12 h-12 rounded-2xl flex items-center justify-center"
@@ -1909,7 +1909,7 @@ function SectorOverview({ sector }: { sector: SectorDef }) {
         )}
       </div>
 
-      <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-2xl p-5">
+      <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-2xl p-3 sm:p-5">
         <div className="flex items-center gap-2 mb-3">
           <Shield size={16} style={{ color: sector.color }} />
           <h3 className="text-sm font-bold text-[var(--color-text-primary)]">섹터 체크리스트 (실시간)</h3>
@@ -1966,7 +1966,7 @@ function SectorOverview({ sector }: { sector: SectorDef }) {
       </div>
 
       {/* News / Hot issues */}
-      <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-2xl p-5">
+      <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-2xl p-3 sm:p-5">
         <div className="flex items-center gap-2 mb-3">
           <Newspaper size={16} style={{ color: sector.color }} />
           <h3 className="text-sm font-bold text-[var(--color-text-primary)]">최신 뉴스 & 모멘텀</h3>
@@ -2060,7 +2060,7 @@ export default function SectorDetailPage() {
   if (isDynamic && selectedPick) {
     return (
       <div className="h-full overflow-y-auto">
-        <div className="max-w-4xl mx-auto p-5">
+        <div className="max-w-4xl mx-auto p-3 sm:p-5">
           {/* Back button */}
           <button
             onClick={() => navigate("/")}
@@ -2096,9 +2096,9 @@ export default function SectorDetailPage() {
   }
 
   return (
-    <div className="flex h-full overflow-hidden">
+    <div className="flex flex-col sm:flex-row h-full overflow-hidden">
       {/* ─── Left Sidebar: Top 5 List ─── */}
-      <div className="w-64 shrink-0 border-r border-[var(--color-border)] glass-strong flex flex-col overflow-hidden">
+      <div className="sm:w-64 shrink-0 border-b sm:border-b-0 sm:border-r border-[var(--color-border)] glass-strong flex flex-col overflow-hidden">
         {/* Header */}
         <div className="px-4 py-3 border-b border-[var(--color-border)] flex items-center gap-2">
           <button
@@ -2123,7 +2123,7 @@ export default function SectorDetailPage() {
         {/* Sector Overview button */}
         <button
           onClick={() => setSelectedPick(null)}
-          className={`mx-3 mt-3 px-3 py-2 rounded-xl text-xs font-medium transition-all ${
+          className={`hidden sm:block mx-3 mt-3 px-3 py-2 rounded-xl text-xs font-medium transition-all ${
             selectedPick === null
               ? "text-white"
               : "text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]"
@@ -2134,14 +2134,14 @@ export default function SectorDetailPage() {
         </button>
 
         {/* Divider */}
-        <div className="mx-3 mt-3 mb-2">
+        <div className="hidden sm:block mx-3 mt-3 mb-2">
           <p className="text-[9px] font-semibold text-[var(--color-text-muted)] uppercase tracking-widest">
             Top 5 종목
           </p>
         </div>
 
         {selectedPick && !sector.picks.some((pick) => pick.ticker === selectedPick.ticker) && (
-          <div className="mx-3 mb-3 rounded-xl px-3 py-3 border border-[rgba(59,130,246,0.2)] bg-[rgba(59,130,246,0.08)]">
+          <div className="hidden sm:block mx-3 mb-3 rounded-xl px-3 py-3 border border-[rgba(59,130,246,0.2)] bg-[rgba(59,130,246,0.08)]">
             <p className="text-[10px] font-semibold text-[var(--color-accent-blue)]">실시간 검색 종목</p>
             <p className="text-sm font-semibold text-[var(--color-text-primary)] mt-1">{selectedPick.name}</p>
             <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">{selectedPick.ticker}</p>
@@ -2149,14 +2149,14 @@ export default function SectorDetailPage() {
         )}
 
         {/* Stock list */}
-        <div className="flex-1 overflow-y-auto px-3 pb-4 space-y-1">
+        <div className="flex sm:flex-col sm:flex-1 overflow-x-auto sm:overflow-x-hidden sm:overflow-y-auto px-3 pb-2 sm:pb-4 gap-1 sm:gap-0 sm:space-y-1 scrollbar-hide">
           {sector.picks.map((pick, i) => {
             const isActive = selectedPick?.ticker === pick.ticker;
             return (
               <button
                 key={pick.ticker}
                 onClick={() => setSelectedPick(pick)}
-                className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-left transition-all duration-200 ${
+                className={`shrink-0 sm:shrink sm:w-full flex items-center gap-2 sm:gap-2.5 px-3 py-2 sm:py-2.5 rounded-xl text-left transition-all duration-200 ${
                   isActive ? "text-white" : "text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]"
                 }`}
                 style={isActive ? {
@@ -2204,7 +2204,7 @@ export default function SectorDetailPage() {
       </div>
 
       {/* ─── Right Main Area ─── */}
-      <div className="flex-1 overflow-y-auto p-5">
+      <div className="flex-1 overflow-y-auto p-3 sm:p-5">
         {selectedPick === null ? (
           <SectorOverview sector={sector} />
         ) : (

@@ -33,7 +33,7 @@ export default function App() {
   return (
     <LoginGate>
       {isAdmin() ? (
-        <Suspense fallback={<div className="h-full flex items-center justify-center text-sm text-[var(--color-text-secondary)]">로딩 중...</div>}>
+        <Suspense fallback={<div className="h-full flex items-center justify-center text-sm text-[var(--color-text-secondary)]">Loading...</div>}>
           <AdminPanel />
         </Suspense>
       ) : (
@@ -41,7 +41,7 @@ export default function App() {
           <Suspense
             fallback={
               <div className="h-full flex items-center justify-center text-sm text-[var(--color-text-secondary)]">
-                화면 로딩 중...
+                Loading...
               </div>
             }
           >

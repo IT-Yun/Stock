@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { TrendingUp } from "lucide-react";
+import { useLanguage } from "@/i18n";
 
 export function isAdmin(): boolean {
   return localStorage.getItem("stock-role") === "admin";
@@ -11,6 +12,7 @@ export default function LoginGate({ children }: { children: React.ReactNode }) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [checking, setChecking] = useState(false);
+  const { t } = useLanguage();
 
   // Check if already logged in (verify with server)
   useEffect(() => {
@@ -50,7 +52,7 @@ export default function LoginGate({ children }: { children: React.ReactNode }) {
   const handleLogin = async () => {
     const trimmed = nickname.trim();
     if (!trimmed) {
-      setError("닉네임을 입력해주세요");
+      setError(t("pleaseEnterNickname"));
       return;
     }
 
@@ -66,22 +68,19 @@ export default function LoginGate({ children }: { children: React.ReactNode }) {
       if (data.allowed) {
         localStorage.setItem("stock-nickname", trimmed);
         localStorage.setItem("stock-role", data.role);
-        setAuthenticated(true);
-        setError("");
         // Record visit
         fetch("/api/members/visit", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ nickname: trimmed }),
         }).catch(() => {});
-        if (window.location.pathname !== "/") {
-          window.location.href = "/";
-        }
+        // Reload so App re-evaluates isAdmin()
+        window.location.href = "/";
       } else {
-        setError("접근 권한이 없는 닉네임입니다");
+        setError(t("noAccess"));
       }
     } catch {
-      setError("서버 연결에 실패했습니다");
+      setError(t("serverError"));
     }
     setChecking(false);
   };
@@ -104,18 +103,18 @@ export default function LoginGate({ children }: { children: React.ReactNode }) {
             <TrendingUp size={28} color="white" strokeWidth={2.5} className="sm:hidden" />
             <TrendingUp size={36} color="white" strokeWidth={2.5} className="hidden sm:block" />
           </div>
-          <h1 className="text-2xl sm:text-3xl font-black text-[var(--color-text-primary)]">Stock Future</h1>
-          <p className="text-xs sm:text-sm text-[var(--color-text-muted)] mt-1.5 sm:mt-2">AI 기반 실시간 주식 분석 플랫폼</p>
+          <h1 className="text-2xl sm:text-3xl font-black text-[var(--color-text-primary)]">{t("loginTitle")}</h1>
+          <p className="text-xs sm:text-sm text-[var(--color-text-muted)] mt-1.5 sm:mt-2">{t("loginSubtitle")}</p>
         </div>
 
         <div className="glass rounded-2xl border border-white/10 p-6" style={{ boxShadow: "0 16px 48px rgba(0,0,0,0.3)" }}>
-          <label className="text-xs font-medium text-[var(--color-text-muted)] uppercase tracking-wider">닉네임</label>
+          <label className="text-xs font-medium text-[var(--color-text-muted)] uppercase tracking-wider">{t("nickname")}</label>
           <input
             type="text"
             value={nickname}
             onChange={(e) => { setNickname(e.target.value); setError(""); }}
             onKeyDown={(e) => e.key === "Enter" && handleLogin()}
-            placeholder="닉네임을 입력하세요"
+            placeholder={t("enterNickname")}
             className="w-full mt-2 px-4 py-3 rounded-xl bg-[var(--color-bg-primary)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] outline-none focus:border-[#3b82f6] transition-colors"
             autoFocus
           />
@@ -131,7 +130,7 @@ export default function LoginGate({ children }: { children: React.ReactNode }) {
               boxShadow: "0 4px 16px rgba(59,130,246,0.3)",
             }}
           >
-            {checking ? "확인 중..." : "로그인"}
+            {checking ? t("checking") : t("login")}
           </button>
         </div>
 

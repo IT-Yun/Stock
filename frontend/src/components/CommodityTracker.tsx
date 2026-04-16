@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { fetchCommodities } from "@/api/client";
+import { useLanguage } from "@/i18n";
 import type { CommodityPrice } from "@/types";
 
 interface CommodityTrackerProps {
@@ -10,6 +11,7 @@ export default function CommodityTracker({ relatedCommodities }: CommodityTracke
   const [commodities, setCommodities] = useState<CommodityPrice[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const { t } = useLanguage();
 
   useEffect(() => {
     setLoading(true);
@@ -18,14 +20,14 @@ export default function CommodityTracker({ relatedCommodities }: CommodityTracke
         setCommodities(data);
         setError(null);
       })
-      .catch(() => setError("원자재 데이터를 불러오는 데 실패했습니다."))
+      .catch(() => setError(t("commodityLoadFailed")))
       .finally(() => setLoading(false));
   }, []);
 
   if (loading) {
     return (
       <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-xl p-5">
-        <h3 className="text-lg font-bold mb-4">원자재 시세</h3>
+        <h3 className="text-lg font-bold mb-4">{t("commodityPrices")}</h3>
         <div className="space-y-2">
           {[1, 2, 3, 4, 5].map((i) => (
             <div key={i} className="h-10 bg-[var(--color-bg-hover)] rounded animate-pulse" />
@@ -38,7 +40,7 @@ export default function CommodityTracker({ relatedCommodities }: CommodityTracke
   if (error) {
     return (
       <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-xl p-5">
-        <h3 className="text-lg font-bold mb-4">원자재 시세</h3>
+        <h3 className="text-lg font-bold mb-4">{t("commodityPrices")}</h3>
         <p className="text-[var(--color-accent-red)] text-sm">{error}</p>
       </div>
     );
@@ -46,7 +48,7 @@ export default function CommodityTracker({ relatedCommodities }: CommodityTracke
 
   return (
     <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-xl p-5">
-      <h3 className="text-lg font-bold mb-4">원자재 시세</h3>
+      <h3 className="text-lg font-bold mb-4">{t("commodityPrices")}</h3>
       <div className="space-y-1">
         {commodities.map((c) => {
           const pct = c.change_percent ?? c.changePercent ?? 0;

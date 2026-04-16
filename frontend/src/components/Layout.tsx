@@ -1,10 +1,12 @@
 import { Link, useLocation } from "react-router-dom";
-import { LogOut } from "lucide-react";
+import { LogOut, Globe } from "lucide-react";
+import { useLanguage } from "@/i18n";
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
   const isFullBleed = location.pathname === "/" || location.pathname.startsWith("/sector/");
   const nickname = localStorage.getItem("stock-nickname") || "";
+  const { lang, toggleLang, t } = useLanguage();
 
   const handleLogout = () => {
     localStorage.removeItem("stock-nickname");
@@ -19,15 +21,23 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           to="/"
           className="text-xs font-semibold text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors"
         >
-          미래 먹거리 주식 분석기
+          {t("siteTitle")}
         </Link>
 
         <div className="flex items-center gap-2">
           <span className="text-[10px] text-[var(--color-text-muted)] hidden sm:inline">{nickname}</span>
           <button
+            onClick={toggleLang}
+            className="flex items-center gap-1 text-[10px] text-[var(--color-text-muted)] hover:text-[#3b82f6] transition-colors px-1.5 py-0.5 rounded-md hover:bg-white/5"
+            title={lang === "ko" ? "Switch to English" : "한국어로 전환"}
+          >
+            <Globe size={11} />
+            <span className="font-bold">{lang === "ko" ? "EN" : "KR"}</span>
+          </button>
+          <button
             onClick={handleLogout}
             className="flex items-center gap-1 text-[10px] text-[var(--color-text-muted)] hover:text-[#ef4444] transition-colors"
-            title="로그아웃"
+            title={t("logout")}
           >
             <LogOut size={12} />
           </button>

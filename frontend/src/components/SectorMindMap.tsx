@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { Factory, Search, X, Trophy, TrendingUp, TrendingDown, ChevronDown, ChevronUp } from "lucide-react";
+import { useLanguage } from "@/i18n";
 import { SECTORS, normalizeWeights } from "@/data/sectors";
 import type { SectorDef } from "@/data/sectors";
 import { searchStocks, fetchChartData, fetchAnalysis, fetchChecklistLive, fetchEarnings, fetchNews, fetchTopRanked } from "@/api/client";
@@ -61,6 +62,7 @@ function getEvalCriteria(ticker: string, sectorName: string) {
 /* ───────────────────────── COMPONENT ───────────────────────── */
 
 export default function SectorMindMap() {
+  const { t } = useLanguage();
   const [year, setYear] = useState(1); // 2026년 기본값
   const [selected, setSelected] = useState<SectorDef | null>(null);
   const [hovered, setHovered] = useState<string | null>(null);
@@ -162,7 +164,7 @@ export default function SectorMindMap() {
   const openStock = useCallback((stock: { ticker: string; name: string; sectorName: string; sectorId?: string; flag?: "KR" | "US" }) => {
     setQuery("");
     setSearchOpen(false);
-    const resolvedSectorName = (stock as any).sector_name ?? stock.sectorName ?? "실시간 분석";
+    const resolvedSectorName = (stock as any).sector_name ?? stock.sectorName ?? t("realtimeAnalysis");
     const resolvedSectorId = (stock as any).sector_id ?? stock.sectorId;
     const resolvedFlag = stock.flag ?? (stock.ticker.endsWith(".KS") || stock.ticker.endsWith(".KQ") ? "KR" : "US");
 
@@ -184,18 +186,18 @@ export default function SectorMindMap() {
       flag: resolvedFlag as "KR" | "US",
     });
     setAnalysisProgress(0);
-    setAnalysisStage("기본 정보 수집 중...");
+    setAnalysisStage(t("gatheringBasicInfo"));
     analysisAbortRef.current = false;
 
     // Pre-fetch all data with progress tracking
-    const t = stock.ticker;
+    const tkr = stock.ticker;
     const sectorId = resolvedSectorId || SECTORS[0].id;
     const steps = [
-      { label: "주가 차트 데이터 수집 중...", weight: 25, fn: () => fetchChartData(t, "3mo") },
-      { label: "기술적 지표 분석 중...", weight: 20, fn: () => fetchAnalysis(t) },
-      { label: "실적 및 재무 데이터 수집 중...", weight: 20, fn: () => fetchEarnings(t) },
-      { label: "실시간 뉴스 수집 및 분석 중...", weight: 15, fn: () => fetchNews(resolvedSectorName).catch(() => []) },
-      { label: "투자 체크리스트 생성 중...", weight: 20, fn: () => fetchChecklistLive(t).catch(() => null) },
+      { label: t("gatheringChartData"), weight: 25, fn: () => fetchChartData(tkr, "3mo") },
+      { label: t("analyzingTechnical"), weight: 20, fn: () => fetchAnalysis(tkr) },
+      { label: t("gatheringEarnings"), weight: 20, fn: () => fetchEarnings(tkr) },
+      { label: t("analyzingNews"), weight: 15, fn: () => fetchNews(resolvedSectorName).catch(() => []) },
+      { label: t("creatingChecklist"), weight: 20, fn: () => fetchChecklistLive(tkr).catch(() => null) },
     ];
 
     let completed = 0;
@@ -213,7 +215,7 @@ export default function SectorMindMap() {
       }
       if (analysisAbortRef.current) return;
       setAnalysisProgress(100);
-      setAnalysisStage("분석 완료!");
+      setAnalysisStage(t("analysisComplete"));
 
       // Brief pause at 100% then navigate to analysis page
       await new Promise(r => setTimeout(r, 600));
@@ -258,7 +260,7 @@ export default function SectorMindMap() {
                   {selected.name}
                 </h3>
                 <p className="text-[11px] text-[var(--color-text-muted)]">
-                  {2025 + year}년 투자 비중{" "}
+                  {2025 + year}{t("investmentWeightFor")}{" "}
                   <span style={{ color: selected.color, fontWeight: 700 }}>
                     {Math.round((weights.get(selected.id) ?? 0) * 100)}%
                   </span>
@@ -380,7 +382,7 @@ export default function SectorMindMap() {
               }}
               onClick={() => navigate(`/sector/${selected.id}`)}
             >
-              섹터 상세 분석 →
+              {t("sectorDetailAnalysis")}
             </button>
           </div>
         )}
@@ -409,7 +411,7 @@ export default function SectorMindMap() {
                     onFocus={() => setSearchOpen(true)}
                     onBlur={() => window.setTimeout(() => setSearchOpen(false), 150)}
                     onKeyDown={(e) => { if (e.key === "Enter" && searchResults[0]) openStock(searchResults[0]); }}
-                    placeholder="AI 분석 개별종목 검색"
+                    placeholder={t("stockSearch")}
                     className="w-full bg-transparent text-sm text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] outline-none"
                   />
                   {query && (
@@ -424,7 +426,7 @@ export default function SectorMindMap() {
               {searchOpen && normalizedQuery && (
                 <div className="mt-2 glass rounded-2xl border border-white/10 overflow-hidden" style={{ boxShadow: "0 12px 36px rgba(0,0,0,0.4)" }}>
                   {searchLoading ? (
-                    <div className="px-4 py-4 text-xs text-[var(--color-text-muted)] animate-pulse">종목 검색 중입니다...</div>
+                    <div className="px-4 py-4 text-xs text-[var(--color-text-muted)] animate-pulse">{t("searchingStocks")}</div>
                   ) : searchResults.length > 0 ? (
                     searchResults.map((stock) => (
                       <button
@@ -436,7 +438,7 @@ export default function SectorMindMap() {
                         <div className="flex items-center justify-between gap-3">
                           <div className="min-w-0">
                             <p className="text-sm font-semibold text-[var(--color-text-primary)]">{stock.name}</p>
-                            <p className="text-[11px] text-[var(--color-text-muted)] mt-0.5">{stock.ticker} · {stock.sector_name ?? stock.sectorName ?? "실시간 분석"}</p>
+                            <p className="text-[11px] text-[var(--color-text-muted)] mt-0.5">{stock.ticker} · {stock.sector_name ?? stock.sectorName ?? t("realtimeAnalysis")}</p>
                           </div>
                           <span className="text-[10px] px-2 py-1 rounded-full font-bold shrink-0" style={{
                             background: stock.flag === "US" ? "rgba(59,130,246,0.15)" : "rgba(239,68,68,0.15)",
@@ -446,7 +448,7 @@ export default function SectorMindMap() {
                       </button>
                     ))
                   ) : (
-                    <div className="px-4 py-4 text-xs text-[var(--color-text-muted)]">검색 결과가 없습니다.</div>
+                    <div className="px-4 py-4 text-xs text-[var(--color-text-muted)]">{t("noStockResultsShort")}</div>
                   )}
                 </div>
               )}
@@ -456,8 +458,8 @@ export default function SectorMindMap() {
             <div className="px-4 py-2">
               <div className="glass rounded-2xl px-4 py-2.5 border border-white/10">
                 <div className="flex items-center justify-between mb-1.5">
-                  <span className="text-[11px] text-[var(--color-text-muted)] font-medium">투자 시점</span>
-                  <span className="text-sm font-bold text-gradient">{2025 + year}년</span>
+                  <span className="text-[11px] text-[var(--color-text-muted)] font-medium">{t("investmentTiming")}</span>
+                  <span className="text-sm font-bold text-gradient">{2025 + year}{t("yearUnit")}</span>
                 </div>
                 <input
                   type="range"
@@ -481,43 +483,60 @@ export default function SectorMindMap() {
               </div>
             </div>
 
-            {/* Sector cards — 2 column grid */}
+            {/* Sector cards — 2 column grid, sized by allocation weight */}
             <div className="px-4 py-2">
               <div className="grid grid-cols-2 gap-3">
                 {SECTORS.map((s, idx) => {
                   const w = weights.get(s.id) ?? 0;
                   const pct = Math.round(w * 100);
                   const isActive = selected?.id === s.id;
+                  // Scale card dimensions by weight (0→1 range, typically 0.05-0.20)
+                  const wNorm = Math.min(1, w * 6); // normalize: 0.17 → ~1.0
+                  const cardHeight = Math.round(lerp(95, 150, wNorm));
+                  const iconSize = Math.round(lerp(20, 32, wNorm));
+                  const iconBox = Math.round(lerp(40, 56, wNorm));
+                  const nameSize = lerp(11, 15, wNorm);
+                  const pctSize = lerp(10, 13, wNorm);
                   return (
                     <button
                       key={s.id}
-                      className="relative rounded-2xl p-4 flex flex-col items-center justify-center gap-2 transition-all duration-200 active:scale-95"
+                      className="relative rounded-2xl p-3 flex flex-col items-center justify-center gap-1.5 transition-all duration-500 active:scale-95"
                       style={{
                         background: isActive
                           ? `linear-gradient(135deg, ${s.color}30, ${s.color}15)`
-                          : "rgba(255,255,255,0.03)",
-                        border: `1.5px solid ${isActive ? s.color : "rgba(255,255,255,0.06)"}`,
-                        boxShadow: isActive ? `0 4px 20px ${s.color}25` : "none",
-                        minHeight: 110,
+                          : `linear-gradient(135deg, rgba(255,255,255,${0.01 + wNorm * 0.04}), rgba(255,255,255,0.01))`,
+                        border: `1.5px solid ${isActive ? s.color : `rgba(255,255,255,${0.04 + wNorm * 0.06})`}`,
+                        boxShadow: isActive
+                          ? `0 4px 20px ${s.color}25`
+                          : wNorm > 0.5
+                          ? `0 2px 12px ${s.color}10`
+                          : "none",
+                        minHeight: cardHeight,
                         animation: `fadeInUp 0.4s ease-out ${idx * 0.05}s both`,
                       }}
                       onClick={() => setSelected(isActive ? null : s)}
                     >
                       <div
-                        className="w-12 h-12 rounded-xl flex items-center justify-center"
+                        className="rounded-xl flex items-center justify-center transition-all duration-500"
                         style={{
-                          background: `linear-gradient(135deg, ${s.color}25, ${s.color}10)`,
+                          width: iconBox,
+                          height: iconBox,
+                          background: `linear-gradient(135deg, ${s.color}${Math.round(15 + wNorm * 20).toString(16).padStart(2, "0")}, ${s.color}10)`,
                           border: `1px solid ${s.color}30`,
                         }}
                       >
-                        <s.icon size={24} strokeWidth={1.5} style={{ color: s.color }} />
+                        <s.icon size={iconSize} strokeWidth={1.5} style={{ color: s.color }} />
                       </div>
-                      <span className="text-[13px] font-bold text-[var(--color-text-primary)] text-center leading-tight">
+                      <span
+                        className="font-bold text-[var(--color-text-primary)] text-center leading-tight transition-all duration-500"
+                        style={{ fontSize: nameSize }}
+                      >
                         {s.name}
                       </span>
                       <span
-                        className="text-[11px] font-mono px-2 py-0.5 rounded-full font-bold"
+                        className="font-mono px-2 py-0.5 rounded-full font-bold transition-all duration-500"
                         style={{
+                          fontSize: pctSize,
                           background: `linear-gradient(135deg, ${s.color}20, ${s.color}10)`,
                           color: s.color,
                           border: `1px solid ${s.color}20`,
@@ -539,16 +558,16 @@ export default function SectorMindMap() {
                   onClick={() => setShowTopRanked(!showTopRanked)}
                 >
                   <Trophy size={14} className="text-[#f59e0b]" />
-                  <span className="text-xs font-bold text-[var(--color-text-primary)]">종합 점수 TOP 10</span>
-                  <span className="text-[10px] text-[var(--color-text-muted)] ml-auto mr-2">실시간</span>
+                  <span className="text-xs font-bold text-[var(--color-text-primary)]">{t("overallScoreTop10")}</span>
+                  <span className="text-[10px] text-[var(--color-text-muted)] ml-auto mr-2">{t("realtime")}</span>
                   {showTopRanked ? <ChevronUp size={14} className="text-[var(--color-text-muted)]" /> : <ChevronDown size={14} className="text-[var(--color-text-muted)]" />}
                 </button>
                 {showTopRanked && (
                   <div className="border-t border-white/5">
                     {topRankedLoading ? (
-                      <div className="px-4 py-6 text-xs text-[var(--color-text-muted)] animate-pulse text-center">순위 계산 중...</div>
+                      <div className="px-4 py-6 text-xs text-[var(--color-text-muted)] animate-pulse text-center">{t("calculatingRanking")}</div>
                     ) : topRanked.length === 0 ? (
-                      <div className="px-4 py-4 text-xs text-[var(--color-text-muted)] text-center">데이터 로딩 중...</div>
+                      <div className="px-4 py-4 text-xs text-[var(--color-text-muted)] text-center">{t("loadingData")}</div>
                     ) : (
                       topRanked.map((stock, i) => (
                         <button
@@ -636,7 +655,7 @@ export default function SectorMindMap() {
             >
               {searchLoading ? (
                 <div className="px-4 py-4 text-xs text-[var(--color-text-muted)] animate-pulse">
-                  종목 검색 중입니다...
+                  {t("searchingStocks")}
                 </div>
               ) : searchResults.length > 0 ? (
                 searchResults.map((stock) => (
@@ -652,7 +671,7 @@ export default function SectorMindMap() {
                           {stock.name}
                         </p>
                         <p className="text-[11px] text-[var(--color-text-muted)] mt-0.5">
-                          {stock.ticker} · {stock.sector_name ?? stock.sectorName ?? "실시간 분석"}
+                          {stock.ticker} · {stock.sector_name ?? stock.sectorName ?? t("realtimeAnalysis")}
                         </p>
                       </div>
                       <span
@@ -669,7 +688,7 @@ export default function SectorMindMap() {
                 ))
               ) : (
                 <div className="px-4 py-4 text-xs text-[var(--color-text-muted)]">
-                  검색 결과가 없습니다. 티커 또는 종목명을 조금 더 구체적으로 입력해주세요.
+                  {t("noStockResults")}
                 </div>
               )}
             </div>
@@ -682,13 +701,13 @@ export default function SectorMindMap() {
             >
               <div className="px-4 py-3 border-b border-white/5 flex items-center gap-2">
                 <Trophy size={14} className="text-[#f59e0b]" />
-                <span className="text-xs font-bold text-[var(--color-text-primary)]">종합 점수 TOP 10</span>
-                <span className="text-[10px] text-[var(--color-text-muted)] ml-auto">실시간</span>
+                <span className="text-xs font-bold text-[var(--color-text-primary)]">{t("overallScoreTop10")}</span>
+                <span className="text-[10px] text-[var(--color-text-muted)] ml-auto">{t("realtime")}</span>
               </div>
               {topRankedLoading ? (
-                <div className="px-4 py-6 text-xs text-[var(--color-text-muted)] animate-pulse text-center">순위 계산 중...</div>
+                <div className="px-4 py-6 text-xs text-[var(--color-text-muted)] animate-pulse text-center">{t("calculatingRanking")}</div>
               ) : topRanked.length === 0 ? (
-                <div className="px-4 py-4 text-xs text-[var(--color-text-muted)] text-center">데이터 로딩 중...</div>
+                <div className="px-4 py-4 text-xs text-[var(--color-text-muted)] text-center">{t("loadingData")}</div>
               ) : (
                 topRanked.map((stock, i) => (
                   <button
@@ -756,8 +775,8 @@ export default function SectorMindMap() {
         <div className="fixed top-14 right-5 z-40 flex flex-col items-end gap-2">
           <div className="glass rounded-2xl px-5 py-3 flex flex-col gap-2" style={{ boxShadow: "0 8px 32px rgba(0,0,0,0.4)", width: 260 }}>
             <div className="flex items-center justify-between w-full">
-              <span className="text-[11px] text-[var(--color-text-muted)] font-medium">투자 시점</span>
-              <span className="text-sm font-bold text-gradient">{2025 + year}년</span>
+              <span className="text-[11px] text-[var(--color-text-muted)] font-medium">{t("investmentTiming")}</span>
+              <span className="text-sm font-bold text-gradient">{2025 + year}{t("yearUnit")}</span>
             </div>
             <div className="w-full relative">
               <input
@@ -788,7 +807,7 @@ export default function SectorMindMap() {
             </div>
           </div>
           <p className="text-[9px] text-[var(--color-text-muted)] tracking-wide pr-1">
-            {2025 + year}년에 투자한다면? — 선반영 감안 추천 비중
+            {2025 + year}{t("yearUnit")} {t("investmentAllocation")}
           </p>
         </div>
 
@@ -862,9 +881,9 @@ export default function SectorMindMap() {
           <div className="absolute inset-2 rounded-full" style={{ border: "1px solid rgba(59,130,246,0.1)" }} />
           <Factory size={32} className="mb-1" style={{ color: "#60a5fa", filter: "drop-shadow(0 0 10px rgba(59,130,246,0.4))" }} strokeWidth={1.5} />
           <span className="text-[13px] font-bold text-center leading-tight text-gradient">
-            미래 성장
+            {t("futureGrowth")}
             <br />
-            산업
+            {t("industry")}
           </span>
         </div>
 
@@ -948,21 +967,21 @@ export default function SectorMindMap() {
         <div className="absolute bottom-5 right-5 z-30 flex items-center gap-4 text-[10px] text-[var(--color-text-muted)] glass rounded-xl px-4 py-2.5">
           <span className="flex items-center gap-1.5">
             <span className="inline-block w-3 h-3 rounded-full" style={{ background: "rgba(59,130,246,0.2)", border: "1px solid rgba(59,130,246,0.3)" }} />
-            낮은 비중
+            {t("lowAllocation")}
           </span>
           <span className="flex items-center gap-1.5">
             <span className="inline-block w-5 h-5 rounded-full" style={{ background: "rgba(59,130,246,0.2)", border: "1px solid rgba(59,130,246,0.3)" }} />
-            중간
+            {t("medium")}
           </span>
           <span className="flex items-center gap-1.5">
             <span className="inline-block w-7 h-7 rounded-full" style={{ background: "rgba(59,130,246,0.2)", border: "1px solid rgba(59,130,246,0.3)" }} />
-            높은 비중
+            {t("highAllocation")}
           </span>
         </div>
 
         {/* Sector count */}
         <div className="absolute bottom-5 left-5 z-30 text-[11px] text-[var(--color-text-muted)] glass rounded-xl px-4 py-2.5 font-medium">
-          {SECTORS.length}개 섹터 · {SECTORS.reduce((a, s) => a + s.picks.length, 0)}개 종목
+          {SECTORS.length} {t("sectors")} · {SECTORS.reduce((a, s) => a + s.picks.length, 0)} {t("stocks")}
         </div>
           </>
         )}
@@ -1014,11 +1033,11 @@ export default function SectorMindMap() {
               {/* Analysis steps */}
               <div className="mt-5 space-y-2">
                 {[
-                  { label: "주가 차트 수집", threshold: 25 },
-                  { label: "기술적 지표 분석", threshold: 45 },
-                  { label: "재무 데이터 분석", threshold: 65 },
-                  { label: "뉴스 수집 및 감성 분석", threshold: 80 },
-                  { label: "투자 체크리스트 생성", threshold: 100 },
+                  { label: t("chartCollection"), threshold: 25 },
+                  { label: t("technicalAnalysis"), threshold: 45 },
+                  { label: t("financialAnalysis"), threshold: 65 },
+                  { label: t("newsAnalysis"), threshold: 80 },
+                  { label: t("checklistCreation"), threshold: 100 },
                 ].map((step) => {
                   const done = analysisProgress >= step.threshold;
                   const active = !done && analysisProgress >= step.threshold - 25;
@@ -1099,7 +1118,7 @@ export default function SectorMindMap() {
                     {selected.name}
                   </h3>
                   <p className="text-[11px] text-[var(--color-text-muted)]">
-                    {2025 + year}년 투자 비중{" "}
+                    {2025 + year}{t("investmentWeightFor")}{" "}
                     <span style={{ color: selected.color, fontWeight: 700 }}>
                       {Math.round((weights.get(selected.id) ?? 0) * 100)}%
                     </span>
@@ -1204,7 +1223,7 @@ export default function SectorMindMap() {
                 }}
                 onClick={() => navigate(`/sector/${selected.id}`)}
               >
-                섹터 상세 분석 →
+                {t("sectorDetailAnalysis")}
               </button>
             </div>
           </div>

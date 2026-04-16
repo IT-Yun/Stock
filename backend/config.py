@@ -24,6 +24,9 @@ class Settings:
     SUPABASE_URL: str = os.getenv("SUPABASE_URL", "")
     SUPABASE_KEY: str = os.getenv("SUPABASE_KEY", "")
 
+    # Finnhub — US stock fundamentals
+    FINNHUB_API_KEY: str = os.getenv("FINNHUB_API_KEY", "")
+
     # Gemini AI — checklist validation & custom analysis
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
 

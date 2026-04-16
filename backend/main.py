@@ -78,6 +78,42 @@ def _warmup_cache():
         print(f"[WARMUP] Partial failure (non-fatal): {e}")
 
 
+def _warmup_checklist_scores():
+    """Gradually pre-warm checklist-live scores for all top picks.
+    This runs after initial warmup so ranking scores match the detail page 종합점수.
+    Delays between calls to respect Gemini rate limits.
+    """
+    import time
+    time.sleep(30)  # let initial warmup finish first
+    try:
+        from api.analysis import TOP_PICK_SECTOR_MAP, get_checklist_live, _ANALYSIS_CACHE
+        tickers = list(TOP_PICK_SECTOR_MAP.keys())
+        warmed = 0
+        for ticker in tickers:
+            cache_key = f"checklist-live:{ticker}"
+            if cache_key in _ANALYSIS_CACHE:
+                continue  # already cached
+            try:
+                get_checklist_live(ticker)
+                warmed += 1
+                print(f"[CHECKLIST-WARMUP] {ticker} done ({warmed}/{len(tickers)})")
+                time.sleep(3)  # respect Gemini rate limit
+            except Exception as e:
+                print(f"[CHECKLIST-WARMUP] {ticker} failed: {e}")
+                time.sleep(2)
+        print(f"[CHECKLIST-WARMUP] Complete: {warmed} new scores warmed")
+        # Regenerate top-ranked with real scores
+        try:
+            from api.analysis import get_top_ranked, _ANALYSIS_CACHE as ac
+            ac.pop("top-ranked-v2", None)  # clear stale ranking
+            get_top_ranked()
+            print("[CHECKLIST-WARMUP] Top-ranked regenerated with real scores")
+        except Exception:
+            pass
+    except Exception as e:
+        print(f"[CHECKLIST-WARMUP] Failed: {e}")
+
+
 def _keep_alive():
     """Ping ourselves every 10 min to prevent Render free tier spin-down."""
     import time
@@ -182,6 +218,7 @@ async def lifespan(app: FastAPI):
     threading.Thread(target=_warmup_cache, daemon=True).start()
     threading.Thread(target=_keep_alive, daemon=True).start()
     threading.Thread(target=_daily_refresh_worker, daemon=True).start()
+    threading.Thread(target=_warmup_checklist_scores, daemon=True).start()
     yield
 
 

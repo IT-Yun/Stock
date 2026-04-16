@@ -61,107 +61,190 @@ _NAVER_HEADERS = {
 
 def _fetch_naver_fundamentals(ticker: str) -> dict:
     """
-    Fetch PER, PBR, ROE, dividend yield, revenue growth, margins from Naver Finance.
-    Works for KRX stocks (.KS, .KQ). No rate limits.
+    Fetch PER, PBR, ROE, dividend yield, revenue growth, margins from Naver Pay Securities API.
+    Primary: m.stock.naver.com JSON API (integration + finance).
+    Fallback: finance.naver.com HTML scraping (fetch_company_profile).
     """
+    try:
+        from services.naver_finance import NaverFinanceService
+    except ImportError:
+        return {}
+
     code = ticker.split(".")[0]
     result: dict = {}
 
-    try:
-        url = f"https://finance.naver.com/item/main.naver?code={code}"
-        with limit_http():
-            r = requests.get(url, headers=_NAVER_HEADERS, timeout=10)
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, "html.parser")
+    # ── Primary: Naver Pay Securities JSON API ──
+    integ = NaverFinanceService.fetch_stock_integration(code)
+    if integ and len(integ) > 2:
+        if integ.get("per") is not None:
+            result["pe_ratio"] = integ["per"]
+        if integ.get("forward_per") is not None:
+            result["forward_pe"] = integ["forward_per"]
+        if integ.get("pbr") is not None:
+            result["price_to_book"] = integ["pbr"]
+        if integ.get("dividend_yield") is not None:
+            result["dividend_yield"] = integ["dividend_yield"]
+        if integ.get("eps") is not None:
+            result["eps"] = integ["eps"]
+        if integ.get("forward_eps") is not None:
+            result["forward_eps"] = integ["forward_eps"]
+        if integ.get("bps") is not None:
+            result["bps"] = integ["bps"]
+        if integ.get("market_cap_억") is not None:
+            result["market_cap"] = integ["market_cap_억"] * 100_000_000
+        if integ.get("consensus_target_price") is not None:
+            result["consensus_target_price"] = integ["consensus_target_price"]
+            result["consensus_opinion"] = integ.get("consensus_opinion", "")
 
-        # PER, PBR from dedicated elements
-        per_el = soup.select_one("em#_per")
-        pbr_el = soup.select_one("em#_pbr")
-        cns_per_el = soup.select_one("em#_cns_per")
+    # ── Supplement with financials API for growth/margins ──
+    fin = NaverFinanceService.fetch_financials(code, "annual")
+    if fin.get("revenue_growth") is not None:
+        result["revenue_growth"] = fin["revenue_growth"]
+    if fin.get("earnings_growth") is not None:
+        result["earnings_growth"] = fin["earnings_growth"]
+    if fin.get("operating_profit_growth") is not None:
+        result["operating_profit_growth"] = fin["operating_profit_growth"]
+    if fin.get("consensus_revenue_growth") is not None:
+        result["consensus_revenue_growth"] = fin["consensus_revenue_growth"]
 
-        if per_el:
-            result["pe_ratio"] = _parse_float(per_el.text)
-        if cns_per_el:
-            result["forward_pe"] = _parse_float(cns_per_el.text)
-        if pbr_el:
-            result["price_to_book"] = _parse_float(pbr_el.text)
+    # Get margins/ROE from financials rows (latest actual period)
+    if fin.get("periods"):
+        actual_periods = [p for p in fin["periods"] if not p.get("is_consensus")]
+        if actual_periods:
+            latest_key = actual_periods[-1]["key"]
+            if fin.get("operating_margin"):
+                v = fin["operating_margin"].get(latest_key)
+                if v is not None:
+                    result["operating_margin"] = v / 100
+            if fin.get("net_margin"):
+                v = fin["net_margin"].get(latest_key)
+                if v is not None:
+                    result["profit_margin"] = v / 100
+            if fin.get("roe"):
+                v = fin["roe"].get(latest_key)
+                if v is not None:
+                    result["roe"] = v / 100
+            if fin.get("debt_ratio"):
+                v = fin["debt_ratio"].get(latest_key)
+                if v is not None:
+                    result["debt_ratio"] = v / 100
 
-        # Dividend yield from per_table
-        per_table = soup.select_one("table.per_table")
-        if per_table:
-            text = per_table.get_text()
-            m = re.search(r"배당수익률.*?([\d.]+)\s*%", text, re.DOTALL)
-            if m:
-                result["dividend_yield"] = float(m.group(1)) / 100  # as ratio
-
-        # Financial summary table (매출액, 영업이익, 영업이익률, ROE)
-        for div in soup.select("div.section"):
-            h4 = div.select_one("h4")
-            if not h4 or "기업실적" not in h4.get_text():
-                continue
-            table = div.select_one("table")
-            if not table:
-                continue
-
-            rows = {}
-            for tr in table.select("tbody tr"):
-                cells = [td.get_text(strip=True) for td in tr.select("td,th")]
-                if len(cells) >= 3:
-                    label = cells[0]
-                    rows[label] = cells[1:]  # annual columns followed by quarterly
-
-            # Revenue growth: compare last 2 annual columns
-            if "매출액" in rows:
-                rev_vals = rows["매출액"]
-                if len(rev_vals) >= 2:
-                    cur = _parse_float(rev_vals[1])  # most recent full year
-                    prev = _parse_float(rev_vals[0])  # year before
-                    if cur and prev and prev != 0:
-                        result["revenue_growth"] = (cur - prev) / abs(prev)
-
-            # Operating margin (latest)
-            if "영업이익률" in rows:
-                vals = rows["영업이익률"]
-                for v in reversed(vals):
-                    parsed = _parse_float(v)
-                    if parsed is not None:
-                        result["operating_margin"] = parsed / 100  # as ratio
-                        break
-
-            # Net profit margin
-            if "순이익률" in rows:
-                vals = rows["순이익률"]
-                for v in reversed(vals):
-                    parsed = _parse_float(v)
-                    if parsed is not None:
-                        result["profit_margin"] = parsed / 100
-                        break
-
-            # ROE
-            if "ROE(지배주주)" in rows:
-                vals = rows["ROE(지배주주)"]
-                for v in reversed(vals):
-                    parsed = _parse_float(v)
-                    if parsed is not None:
-                        result["roe"] = parsed / 100
-                        break
-
-            # Earnings growth from net income
-            if "당기순이익" in rows:
-                ni_vals = rows["당기순이익"]
-                if len(ni_vals) >= 2:
-                    cur = _parse_float(ni_vals[1])
-                    prev = _parse_float(ni_vals[0])
-                    if cur and prev and prev != 0:
-                        result["earnings_growth"] = (cur - prev) / abs(prev)
-
-    except Exception:
-        pass
+    # ── Fallback: HTML scraping for any missing fields ──
+    if len(result) < 5:
+        profile = NaverFinanceService.fetch_company_profile(code)
+        if profile:
+            field_map = {
+                "per": "pe_ratio", "forward_per": "forward_pe", "pbr": "price_to_book",
+                "dividend_yield": "dividend_yield", "revenue_growth": "revenue_growth",
+                "operating_margin": "operating_margin", "profit_margin": "profit_margin",
+                "roe": "roe", "earnings_growth": "earnings_growth",
+            }
+            for src_key, dst_key in field_map.items():
+                if dst_key not in result and profile.get(src_key) is not None:
+                    result[dst_key] = profile[src_key]
 
     return result
 
 
-# ─── US stocks: Yahoo Finance web scraping ───
+# ─── US stocks: Finnhub API (primary for US) ───
+
+def _fetch_finnhub_fundamentals(ticker: str) -> dict:
+    """
+    Fetch financial metrics from Finnhub API.
+    Free tier: 60 calls/min — plenty for our use case with 30min cache.
+    """
+    try:
+        from config import settings
+        api_key = settings.FINNHUB_API_KEY
+        if not api_key:
+            return {}
+    except Exception:
+        return {}
+
+    result: dict = {}
+    try:
+        url = f"https://finnhub.io/api/v1/stock/metric?symbol={ticker}&metric=all&token={api_key}"
+        with limit_http():
+            r = requests.get(url, timeout=10)
+        if r.status_code != 200:
+            print(f"[FINNHUB] {ticker} status {r.status_code}")
+            return {}
+
+        data = r.json()
+        m = data.get("metric", {})
+        if not m:
+            return {}
+
+        # PE ratio
+        pe = m.get("peBasicExclExtraTTM") or m.get("peTTM")
+        if pe:
+            result["pe_ratio"] = pe
+
+        # Forward PE (from annual estimate)
+        fpe = m.get("peBasicExclExtraAnnual")
+        if fpe:
+            result["forward_pe"] = fpe
+
+        # Price to Book
+        pb = m.get("pbQuarterly") or m.get("pbAnnual")
+        if pb:
+            result["price_to_book"] = pb
+
+        # Profit margin (net margin)
+        npm = m.get("netProfitMarginTTM") or m.get("netProfitMarginAnnual")
+        if npm is not None:
+            result["profit_margin"] = npm / 100
+
+        # Operating margin
+        opm = m.get("operatingMarginTTM") or m.get("operatingMarginAnnual")
+        if opm is not None:
+            result["operating_margin"] = opm / 100
+
+        # ROE
+        roe = m.get("roeTTM") or m.get("roeAnnual")
+        if roe is not None:
+            result["roe"] = roe / 100
+
+        # Revenue growth (YoY)
+        rg = m.get("revenueGrowthQuarterlyYoy") or m.get("revenueGrowth3Y")
+        if rg is not None:
+            result["revenue_growth"] = rg / 100
+
+        # Earnings growth (EPS growth)
+        eg = m.get("epsGrowthQuarterlyYoy") or m.get("epsGrowth3Y")
+        if eg is not None:
+            result["earnings_growth"] = eg / 100
+
+        # Dividend yield
+        dy = m.get("dividendYieldIndicatedAnnual")
+        if dy is not None:
+            result["dividend_yield"] = dy / 100
+
+        # Market cap
+        mc = m.get("marketCapitalization")
+        if mc:
+            result["market_cap"] = mc * 1_000_000  # Finnhub returns in millions
+
+        # Beta
+        beta = m.get("beta")
+        if beta:
+            result["beta"] = beta
+
+        # Free cash flow
+        fcf = m.get("freeCashFlowTTM")
+        if fcf:
+            result["free_cash_flow"] = fcf * 1_000_000
+
+        if result:
+            print(f"[FINNHUB] {ticker}: got {len(result)} metrics")
+
+    except Exception as e:
+        print(f"[FINNHUB] {ticker} error: {e}")
+
+    return result
+
+
+# ─── US stocks: Yahoo Finance web scraping (fallback) ───
 
 _YAHOO_IMPERSONATIONS = ["chrome", "safari", "safari_ios", "edge"]
 
@@ -261,7 +344,14 @@ def fetch_fundamentals(ticker: str) -> dict:
     if is_krx:
         data = _fetch_naver_fundamentals(ticker)
     else:
-        data = _fetch_yahoo_web_fundamentals(ticker)
+        # US stocks: Finnhub first, then fill gaps with Yahoo scraping
+        data = _fetch_finnhub_fundamentals(ticker)
+        if len(data) < 5:
+            # Not enough data from Finnhub — supplement with Yahoo
+            yahoo = _fetch_yahoo_web_fundamentals(ticker)
+            for k, v in yahoo.items():
+                if k not in data or data[k] is None:
+                    data[k] = v
 
     if data:
         _set_cached(cache_key, data)

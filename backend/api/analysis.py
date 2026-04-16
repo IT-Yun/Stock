@@ -5330,21 +5330,26 @@ def get_top_ranked() -> dict:
                 return None
 
             price = float(hist["Close"].iloc[-1])
-            name = TOP_PICK_NAME_MAP.get(_ticker_key(ticker), ticker)
+            name = TOP_PICK_NAME_MAP.get(_ticker_key(ticker), "")
 
-            # Try to get name from cached info (warmup stores this)
-            info_cached = _ANALYSIS_CACHE.get(f"info:{ticker}")
-            if info_cached:
-                _, info_data = info_cached
-                name = info_data.get("name", ticker) if isinstance(info_data, dict) else ticker
+            # Only fall back to cached info name if TOP_PICK_NAME_MAP didn't have it
+            if not name:
+                info_cached = _ANALYSIS_CACHE.get(f"info:{ticker}")
+                if info_cached:
+                    _, info_data = info_cached
+                    if isinstance(info_data, dict) and info_data.get("name"):
+                        name = info_data["name"]
 
-            # If no cached name, try StockDataService cache
-            from services.stock_data import _cache as _stock_cache
-            stock_cached = _stock_cache.get(f"info:{ticker}")
-            if stock_cached and isinstance(stock_cached, tuple) and len(stock_cached) >= 2:
-                sc_data = stock_cached[1]
-                if isinstance(sc_data, dict) and sc_data.get("name"):
-                    name = sc_data["name"]
+                if not name:
+                    from services.stock_data import _cache as _stock_cache
+                    stock_cached = _stock_cache.get(f"info:{ticker}")
+                    if stock_cached and isinstance(stock_cached, tuple) and len(stock_cached) >= 2:
+                        sc_data = stock_cached[1]
+                        if isinstance(sc_data, dict) and sc_data.get("name"):
+                            name = sc_data["name"]
+
+            if not name:
+                name = ticker
 
             score = 50  # base
             rsi = None

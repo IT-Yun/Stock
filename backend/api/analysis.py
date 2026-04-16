@@ -7050,32 +7050,31 @@ def search_stocks(query: str) -> dict:
 
     is_korean_query = any("\uac00" <= ch <= "\ud7a3" for ch in normalized_query)
 
-    # Korean query → Naver Finance search FIRST (much better than yfinance for Korean names)
-    if is_korean_query:
-        try:
-            from services.naver_finance import NaverFinanceService
-            naver_results = NaverFinanceService.search_stocks(normalized_query)
-            for nr in naver_results:
-                suffix = ".KS" if nr.get("market") == "KOSPI" else ".KQ"
-                symbol = nr["code"] + suffix
-                if symbol in seen:
-                    continue
-                seen.add(symbol)
-                sector_id = _infer_sector_id_from_profile(symbol, info={"shortName": nr["name"]})
-                results.append({
-                    "ticker": symbol,
-                    "name": nr["name"],
-                    "exchange": "KSC" if suffix == ".KS" else "KOE",
-                    "flag": "KR",
-                    "sector_id": sector_id,
-                    "sector_name": SECTOR_NAME_MAP.get(sector_id or "", "실시간 분석"),
-                    "is_top_pick": symbol in TOP_PICK_SECTOR_MAP,
-                    "analysis_mode": "prebuilt_top_pick" if symbol in TOP_PICK_SECTOR_MAP else "dynamic_live",
-                })
-                if len(results) >= 8:
-                    break
-        except Exception:
-            pass
+    # Naver Finance search FIRST — works for Korean names AND English names of Korean stocks (LG, SK, POSCO)
+    try:
+        from services.naver_finance import NaverFinanceService
+        naver_results = NaverFinanceService.search_stocks(normalized_query)
+        for nr in naver_results:
+            suffix = ".KS" if nr.get("market") == "KOSPI" else ".KQ"
+            symbol = nr["code"] + suffix
+            if symbol in seen:
+                continue
+            seen.add(symbol)
+            sector_id = _infer_sector_id_from_profile(symbol, info={"shortName": nr["name"]})
+            results.append({
+                "ticker": symbol,
+                "name": nr["name"],
+                "exchange": "KSC" if suffix == ".KS" else "KOE",
+                "flag": "KR",
+                "sector_id": sector_id,
+                "sector_name": SECTOR_NAME_MAP.get(sector_id or "", "실시간 분석"),
+                "is_top_pick": symbol in TOP_PICK_SECTOR_MAP,
+                "analysis_mode": "prebuilt_top_pick" if symbol in TOP_PICK_SECTOR_MAP else "dynamic_live",
+            })
+            if len(results) >= 8:
+                break
+    except Exception:
+        pass
 
     # yfinance search (primary for English queries, fallback for Korean)
     if len(results) < 8:

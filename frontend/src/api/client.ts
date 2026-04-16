@@ -230,7 +230,9 @@ export async function fetchSectorPulse(sectorId: string): Promise<any> {
 }
 
 export async function searchStocks(query: string): Promise<any> {
-  const res = await dedupedGet(`/analysis/stock-search/${encodeURIComponent(query)}`);
+  const res = await api.get(`/analysis/stock-search/${encodeURIComponent(query)}`, {
+    params: { _t: Date.now() },  // cache-bust to avoid stale browser cache
+  });
   return res.data;
 }
 

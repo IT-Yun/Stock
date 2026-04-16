@@ -70,8 +70,8 @@ class NaverFinanceService:
     @staticmethod
     def search_stocks(query: str, max_results: int = 10) -> list[dict]:
         """
-        Search Naver Finance for Korean stocks.
-        Returns list of {code, name, market, current_price, change_percent}.
+        Search Naver Finance for Korean stocks using autocomplete API.
+        Returns list of {code, name, market}.
         """
         cache_key = f"nf-search:{query}"
         cached = _get_cached(cache_key, 600)  # 10min
@@ -80,33 +80,26 @@ class NaverFinanceService:
 
         results: list[dict] = []
         try:
-            url = f"https://finance.naver.com/search/searchList.naver?query={quote(query)}"
+            url = f"https://ac.stock.naver.com/ac?q={quote(query)}&target=stock"
             with limit_http():
                 r = requests.get(url, headers=_HEADERS, timeout=8)
             if r.status_code != 200:
                 return []
 
-            soup = BeautifulSoup(r.text, "html.parser")
-            # Naver Finance search returns a table with stock listings
-            for a_tag in soup.select("a.tit"):
-                href = a_tag.get("href", "")
-                # Extract code from href like /item/main.naver?code=005930
-                code_match = re.search(r"code=(\d{6})", href)
-                if not code_match:
+            data = r.json()
+            for item in data.get("items", []):
+                code = item.get("code", "")
+                name = item.get("name", "")
+                if not code or not name:
                     continue
-                code = code_match.group(1)
-                name = a_tag.get_text(strip=True)
-                if not name:
+                # Only Korean stocks
+                if item.get("nationCode") != "KOR":
                     continue
-
-                # Determine market from parent row
-                row = a_tag.find_parent("tr")
-                market = "KOSPI"
-                if row:
-                    row_text = row.get_text()
-                    if "코스닥" in row_text:
-                        market = "KOSDAQ"
-
+                # Skip preferred shares (우선주)
+                if name.endswith("우") and item.get("category") == "stock":
+                    pass  # include preferred shares too
+                type_code = item.get("typeCode", "KOSPI")
+                market = "KOSPI" if type_code == "KOSPI" else "KOSDAQ"
                 results.append({
                     "code": code,
                     "name": name,

@@ -12,57 +12,225 @@ function lerp(a: number, b: number, t: number) {
   return a + (b - a) * t;
 }
 
-const STOCK_EVAL_CRITERIA: Record<string, string[]> = {
-  "NVDA": ["AI CAPEX 지속 여부", "데이터센터 매출 성장률", "HBM 공급 타이트 유지", "영업이익률 방어"],
-  "TSM": ["파운드리 가동률", "주요 고객 수요", "매출 성장 추세", "고마진 유지"],
-  "AVGO": ["AI 네트워킹 수요", "커스텀칩 기대", "VMware 시너지", "영업이익률 확장"],
-  "000660.KS": ["DRAM 업황 선행 신호", "HBM 믹스 확대", "영업이익률 피크아웃 여부", "환율 수혜"],
-  "005930.KS": ["메모리 업황 회복", "HBM/파운드리 개선", "반도체 이익률", "밸류 부담"],
-  "TSLA": ["자동차 마진 회복", "인도량과 판가", "Optimus/FSD 기대", "배터리 원가 부담"],
-  "ISRG": ["수술 건수 성장", "설치 대수 확대", "이익률 유지", "고객 락인 강화"],
-  "CEG": ["전력 수요 증가", "원전 장기계약", "유틸리티 흐름", "정책 리스크"],
-  "CCJ": ["우라늄 가격 추세", "공급 부족 기대", "장기 계약 가격", "이익률 확장"],
-  "CRWD": ["ARR 성장 유지", "플랫폼 확장", "대형 계약 증가", "운영 리스크 재발 여부"],
-  "PANW": ["플랫폼 통합 확장", "보안 지출 유지", "성장률 방어", "수익성 유지"],
-  "FTNT": ["방화벽/OT 수요", "성장 재가속", "고이익률 유지", "보안 섹터 심리"],
-  "ZS": ["제로트러스트 확산", "고성장 유지", "흑자전환", "멀티플 방어"],
-  "S": ["초고성장 유지", "적자폭 축소", "보안 섹터 심리", "자금조달 우려"],
-  "RKLB": ["수주/발사 모멘텀", "Neutron 일정", "우주 테마 심리", "정부 예산 기대"],
-  "LMT": ["방산/우주 수주", "예산 안정성", "현금흐름 방어", "우주 옵션 가치"],
-  "BA": ["턴어라운드 신뢰 회복", "품질/규제 이슈", "생산 정상화", "우주 사업 기대"],
-  "CRSP": ["임상/승인 일정", "현금 런웨이", "바이오 위험선호", "상업화 초기 매출"],
-  "LLY": ["GLP-1 처방 모멘텀", "공급 확장", "경쟁사 점유율", "이익률 유지"],
-  "ILMN": ["시퀀싱 수요 회복", "장비 CAPEX 흐름", "이익률 방어", "바이오 심리"],
-  "207940.KS": ["CDMO 수주잔고", "증설 효과", "고마진 유지", "환율 수혜"],
-  "068270.KS": ["미국 판매 확대", "가격 경쟁 압박", "이익률 방어", "환율 효과"],
-  "IONQ": ["기술 로드맵 진척", "현금 소진 속도", "양자 섹터 심리", "수주/매출 성장"],
-  "GOOG": ["본업 현금창출", "양자 옵션 가치", "클라우드 성장", "빅테크 위험선호"],
-  "IBM": ["기업용 양자 신뢰", "본업 성장 바닥", "현금흐름 유지", "배당 매력"],
-  "RGTI": ["기술 검증 기대", "자금조달 압박", "양자 심리", "매출 성장 유지"],
-  "MSFT": ["Azure/AI 성장", "대형 CAPEX 유지", "고이익률 방어", "양자 옵션"],
-  "BE": ["데이터센터 전력 수요", "매출 성장 전환", "흑자전환", "클린에너지 심리"],
-  "PLUG": ["정책/보조금 기대", "적자폭 축소", "클린에너지 심리", "자금조달 리스크"],
-  "ENPH": ["태양광 수요 회복", "금리 부담", "고마진 유지", "설치 경기 회복"],
-  "005380.KS": ["친환경차 믹스", "자동차 섹터 심리", "이익률 유지", "환율 효과"],
-  "336260.KS": ["수소발전 정책", "프로젝트 수주", "흑자전환", "클린에너지 심리"],
+const STOCK_EVAL_CRITERIA: Record<string, { ko: string; en: string }[]> = {
+  "NVDA": [
+    { ko: "AI CAPEX 지속 여부", en: "AI CAPEX sustainability" },
+    { ko: "데이터센터 매출 성장률", en: "Datacenter revenue growth" },
+    { ko: "HBM 공급 타이트 유지", en: "HBM supply tightness" },
+    { ko: "영업이익률 방어", en: "Operating margin defense" },
+  ],
+  "TSM": [
+    { ko: "파운드리 가동률", en: "Foundry utilization" },
+    { ko: "주요 고객 수요", en: "Key customer demand" },
+    { ko: "매출 성장 추세", en: "Revenue growth trend" },
+    { ko: "고마진 유지", en: "High margin maintenance" },
+  ],
+  "AVGO": [
+    { ko: "AI 네트워킹 수요", en: "AI networking demand" },
+    { ko: "커스텀칩 기대", en: "Custom chip expectations" },
+    { ko: "VMware 시너지", en: "VMware synergies" },
+    { ko: "영업이익률 확장", en: "Operating margin expansion" },
+  ],
+  "000660.KS": [
+    { ko: "DRAM 업황 선행 신호", en: "DRAM leading indicators" },
+    { ko: "HBM 믹스 확대", en: "HBM mix expansion" },
+    { ko: "영업이익률 피크아웃 여부", en: "Operating margin peak-out risk" },
+    { ko: "환율 수혜", en: "FX tailwind" },
+  ],
+  "005930.KS": [
+    { ko: "메모리 업황 회복", en: "Memory cycle recovery" },
+    { ko: "HBM/파운드리 개선", en: "HBM/foundry improvement" },
+    { ko: "반도체 이익률", en: "Semiconductor margins" },
+    { ko: "밸류 부담", en: "Valuation burden" },
+  ],
+  "TSLA": [
+    { ko: "자동차 마진 회복", en: "Auto margin recovery" },
+    { ko: "인도량과 판가", en: "Deliveries & ASP" },
+    { ko: "Optimus/FSD 기대", en: "Optimus/FSD expectations" },
+    { ko: "배터리 원가 부담", en: "Battery cost pressure" },
+  ],
+  "ISRG": [
+    { ko: "수술 건수 성장", en: "Procedure volume growth" },
+    { ko: "설치 대수 확대", en: "Installation expansion" },
+    { ko: "이익률 유지", en: "Margin maintenance" },
+    { ko: "고객 락인 강화", en: "Customer lock-in" },
+  ],
+  "CEG": [
+    { ko: "전력 수요 증가", en: "Power demand growth" },
+    { ko: "원전 장기계약", en: "Nuclear long-term contracts" },
+    { ko: "유틸리티 흐름", en: "Utility sector flow" },
+    { ko: "정책 리스크", en: "Policy risk" },
+  ],
+  "CCJ": [
+    { ko: "우라늄 가격 추세", en: "Uranium price trend" },
+    { ko: "공급 부족 기대", en: "Supply shortage expectation" },
+    { ko: "장기 계약 가격", en: "Long-term contract price" },
+    { ko: "이익률 확장", en: "Margin expansion" },
+  ],
+  "CRWD": [
+    { ko: "ARR 성장 유지", en: "ARR growth maintenance" },
+    { ko: "플랫폼 확장", en: "Platform expansion" },
+    { ko: "대형 계약 증가", en: "Large deal growth" },
+    { ko: "운영 리스크 재발 여부", en: "Operational risk recurrence" },
+  ],
+  "PANW": [
+    { ko: "플랫폼 통합 확장", en: "Platform consolidation" },
+    { ko: "보안 지출 유지", en: "Security spending stability" },
+    { ko: "성장률 방어", en: "Growth defense" },
+    { ko: "수익성 유지", en: "Profitability maintenance" },
+  ],
+  "FTNT": [
+    { ko: "방화벽/OT 수요", en: "Firewall/OT demand" },
+    { ko: "성장 재가속", en: "Growth re-acceleration" },
+    { ko: "고이익률 유지", en: "High margin maintenance" },
+    { ko: "보안 섹터 심리", en: "Security sector sentiment" },
+  ],
+  "ZS": [
+    { ko: "제로트러스트 확산", en: "Zero trust adoption" },
+    { ko: "고성장 유지", en: "High growth maintenance" },
+    { ko: "흑자전환", en: "Profitability inflection" },
+    { ko: "멀티플 방어", en: "Multiple defense" },
+  ],
+  "S": [
+    { ko: "초고성장 유지", en: "Hyper-growth maintenance" },
+    { ko: "적자폭 축소", en: "Loss narrowing" },
+    { ko: "보안 섹터 심리", en: "Security sector sentiment" },
+    { ko: "자금조달 우려", en: "Funding concerns" },
+  ],
+  "RKLB": [
+    { ko: "수주/발사 모멘텀", en: "Orders/launch momentum" },
+    { ko: "Neutron 일정", en: "Neutron timeline" },
+    { ko: "우주 테마 심리", en: "Space theme sentiment" },
+    { ko: "정부 예산 기대", en: "Government budget expectations" },
+  ],
+  "LMT": [
+    { ko: "방산/우주 수주", en: "Defense/space orders" },
+    { ko: "예산 안정성", en: "Budget stability" },
+    { ko: "현금흐름 방어", en: "Cash flow defense" },
+    { ko: "우주 옵션 가치", en: "Space option value" },
+  ],
+  "BA": [
+    { ko: "턴어라운드 신뢰 회복", en: "Turnaround trust recovery" },
+    { ko: "품질/규제 이슈", en: "Quality/regulatory issues" },
+    { ko: "생산 정상화", en: "Production normalization" },
+    { ko: "우주 사업 기대", en: "Space business expectations" },
+  ],
+  "CRSP": [
+    { ko: "임상/승인 일정", en: "Clinical/approval timeline" },
+    { ko: "현금 런웨이", en: "Cash runway" },
+    { ko: "바이오 위험선호", en: "Biotech risk appetite" },
+    { ko: "상업화 초기 매출", en: "Early commercialization revenue" },
+  ],
+  "LLY": [
+    { ko: "GLP-1 처방 모멘텀", en: "GLP-1 Rx momentum" },
+    { ko: "공급 확장", en: "Supply expansion" },
+    { ko: "경쟁사 점유율", en: "Competitor share" },
+    { ko: "이익률 유지", en: "Margin maintenance" },
+  ],
+  "ILMN": [
+    { ko: "시퀀싱 수요 회복", en: "Sequencing demand recovery" },
+    { ko: "장비 CAPEX 흐름", en: "Equipment CAPEX flow" },
+    { ko: "이익률 방어", en: "Margin defense" },
+    { ko: "바이오 심리", en: "Biotech sentiment" },
+  ],
+  "207940.KS": [
+    { ko: "CDMO 수주잔고", en: "CDMO order backlog" },
+    { ko: "증설 효과", en: "Expansion effects" },
+    { ko: "고마진 유지", en: "High margin maintenance" },
+    { ko: "환율 수혜", en: "FX tailwind" },
+  ],
+  "068270.KS": [
+    { ko: "미국 판매 확대", en: "US sales expansion" },
+    { ko: "가격 경쟁 압박", en: "Price competition pressure" },
+    { ko: "이익률 방어", en: "Margin defense" },
+    { ko: "환율 효과", en: "FX effects" },
+  ],
+  "IONQ": [
+    { ko: "기술 로드맵 진척", en: "Tech roadmap progress" },
+    { ko: "현금 소진 속도", en: "Cash burn rate" },
+    { ko: "양자 섹터 심리", en: "Quantum sector sentiment" },
+    { ko: "수주/매출 성장", en: "Order/revenue growth" },
+  ],
+  "GOOG": [
+    { ko: "본업 현금창출", en: "Core cash generation" },
+    { ko: "양자 옵션 가치", en: "Quantum option value" },
+    { ko: "클라우드 성장", en: "Cloud growth" },
+    { ko: "빅테크 위험선호", en: "Big tech risk appetite" },
+  ],
+  "IBM": [
+    { ko: "기업용 양자 신뢰", en: "Enterprise quantum trust" },
+    { ko: "본업 성장 바닥", en: "Core business bottoming" },
+    { ko: "현금흐름 유지", en: "Cash flow maintenance" },
+    { ko: "배당 매력", en: "Dividend appeal" },
+  ],
+  "RGTI": [
+    { ko: "기술 검증 기대", en: "Tech validation expectations" },
+    { ko: "자금조달 압박", en: "Funding pressure" },
+    { ko: "양자 심리", en: "Quantum sentiment" },
+    { ko: "매출 성장 유지", en: "Revenue growth maintenance" },
+  ],
+  "MSFT": [
+    { ko: "Azure/AI 성장", en: "Azure/AI growth" },
+    { ko: "대형 CAPEX 유지", en: "Large CAPEX maintenance" },
+    { ko: "고이익률 방어", en: "High margin defense" },
+    { ko: "양자 옵션", en: "Quantum option" },
+  ],
+  "BE": [
+    { ko: "데이터센터 전력 수요", en: "Datacenter power demand" },
+    { ko: "매출 성장 전환", en: "Revenue growth inflection" },
+    { ko: "흑자전환", en: "Profitability inflection" },
+    { ko: "클린에너지 심리", en: "Clean energy sentiment" },
+  ],
+  "PLUG": [
+    { ko: "정책/보조금 기대", en: "Policy/subsidy expectations" },
+    { ko: "적자폭 축소", en: "Loss narrowing" },
+    { ko: "클린에너지 심리", en: "Clean energy sentiment" },
+    { ko: "자금조달 리스크", en: "Funding risk" },
+  ],
+  "ENPH": [
+    { ko: "태양광 수요 회복", en: "Solar demand recovery" },
+    { ko: "금리 부담", en: "Interest rate burden" },
+    { ko: "고마진 유지", en: "High margin maintenance" },
+    { ko: "설치 경기 회복", en: "Installation activity recovery" },
+  ],
+  "005380.KS": [
+    { ko: "친환경차 믹스", en: "Green vehicle mix" },
+    { ko: "자동차 섹터 심리", en: "Auto sector sentiment" },
+    { ko: "이익률 유지", en: "Margin maintenance" },
+    { ko: "환율 효과", en: "FX effects" },
+  ],
+  "336260.KS": [
+    { ko: "수소발전 정책", en: "Hydrogen power policy" },
+    { ko: "프로젝트 수주", en: "Project orders" },
+    { ko: "흑자전환", en: "Profitability inflection" },
+    { ko: "클린에너지 심리", en: "Clean energy sentiment" },
+  ],
 };
 
-function getEvalCriteria(ticker: string, sectorName: string) {
-  return (
-    STOCK_EVAL_CRITERIA[ticker] ??
-    [
-      `${sectorName} 업황 방향`,
-      "매출 성장과 이익률",
-      "핵심 선행 지표 추세",
-      "기대감이 꺾이는 위험 신호",
-    ]
-  );
+function getEvalCriteria(ticker: string, sectorName: string, lang: "ko" | "en"): string[] {
+  const entries = STOCK_EVAL_CRITERIA[ticker];
+  if (entries) {
+    return entries.map((e) => e[lang]);
+  }
+  return lang === "en"
+    ? [
+        `${sectorName} industry outlook`,
+        "Revenue growth & margins",
+        "Key leading indicator trends",
+        "Warning signs of fading expectations",
+      ]
+    : [
+        `${sectorName} 업황 방향`,
+        "매출 성장과 이익률",
+        "핵심 선행 지표 추세",
+        "기대감이 꺾이는 위험 신호",
+      ];
 }
 
 /* ───────────────────────── COMPONENT ───────────────────────── */
 
 export default function SectorMindMap() {
-  const { t } = useLanguage();
+  const { t, lang } = useLanguage();
   const [year, setYear] = useState(1); // 2026년 기본값
   const [selected, setSelected] = useState<SectorDef | null>(null);
   const [hovered, setHovered] = useState<string | null>(null);
@@ -176,7 +344,7 @@ export default function SectorMindMap() {
     }
 
     // For non-top-pick stocks: show loading screen, pre-fetch data, then show modal
-    const criteria = getEvalCriteria(stock.ticker, resolvedSectorName);
+    const criteria = getEvalCriteria(stock.ticker, resolvedSectorName, lang);
     setEvaluatingStock({
       ticker: stock.ticker,
       name: stock.name,
@@ -642,7 +810,7 @@ export default function SectorMindMap() {
                     openStock(searchResults[0]);
                   }
                 }}
-                placeholder="AI 분석 개별종목 검색"
+                placeholder={t("stockSearch")}
                 className="w-full bg-transparent text-sm text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] outline-none"
               />
             </div>

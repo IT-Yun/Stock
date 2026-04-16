@@ -421,6 +421,10 @@ const translations = {
   "defaultMomentum2Title": { ko: "산업 트렌드 수혜", en: "Industry trend tailwind" },
   "defaultMomentum2Detail": { ko: "해당 산업의 구조적 성장이 이 종목의 실적으로 이어지고 있습니다", en: "Structural industry growth translates to this stock's earnings" },
   "defaultMomentum2Cond": { ko: "산업 성장률이 유지되고, 경쟁사 대비 점유율이 유지/확대되어야 합니다", en: "Industry growth must continue and market share must hold or expand vs peers" },
+
+  // ── Korean number units ──
+  "trillionUnit": { ko: "조", en: "T" },
+  "hundredMillionUnit": { ko: "억", en: "B" },
 } as const;
 
 export type TranslationKey = keyof typeof translations;

@@ -553,42 +553,60 @@ def _is_article_relevant(title: str, source: str, name_variants: list[str]) -> t
     score = mention_score
 
     # ── Stage 3: Content quality scoring ──
-    # Specific financial data = high quality
+    # HIGH VALUE: Business-substantive news (contracts, clinical, products, tech)
     if any(kw in text for kw in ["실적", "매출", "영업이익", "순이익", "earnings", "revenue", "profit", "eps"]):
-        score += 4.0
+        score += 5.0
     if any(kw in text for kw in ["가이던스", "guidance", "outlook", "전망치"]):
+        score += 4.5
+    if any(kw in text for kw in ["승인", "approval", "fda", "ema", "수주", "contract", "계약", "납품"]):
+        score += 5.0
+    if any(kw in text for kw in ["임상", "clinical", "trial", "phase", "pipeline", "파이프라인"]):
+        score += 5.0
+    if any(kw in text for kw in ["신제품", "출시", "launch", "발표", "공개", "신기술", "양산", "production"]):
+        score += 4.5
+    if any(kw in text for kw in ["인수", "합병", "m&a", "acquisition"]):
+        score += 4.0
+    if any(kw in text for kw in ["규제", "regulation", "소송", "lawsuit", "조사", "probe", "관세", "tariff", "ban"]):
         score += 3.5
-    if any(kw in text for kw in ["승인", "approval", "fda", "수주", "contract", "계약", "납품"]):
-        score += 3.5
-    if any(kw in text for kw in ["목표가", "목표주가", "target price", "tp ", "투자의견", "rating"]):
+    if any(kw in text for kw in ["partnership", "제휴", "협력", "collaboration", "joint venture"]):
+        score += 4.0
+    if any(kw in text for kw in ["restructur", "구조조정", "layoff", "감원", "cost cutting"]):
         score += 3.0
-    if any(kw in text for kw in ["인수", "합병", "m&a", "acquisition", "지분", "stake"]):
-        score += 3.0
-    if any(kw in text for kw in ["규제", "regulation", "소송", "lawsuit", "조사", "probe", "관세", "tariff"]):
-        score += 2.5
-    if any(kw in text for kw in ["신제품", "출시", "launch", "발표", "공개", "신기술"]):
-        score += 2.5
 
     # Numbers = specificity (articles with actual numbers are more informative)
     number_matches = re.findall(r'\d+[.,%조억만원달러$B]', text)
     if number_matches:
         score += min(len(number_matches) * 0.5, 2.0)
 
-    # Named sources boost (analyst, broker name = credible)
-    if any(kw in text for kw in ["증권", "애널리스트", "analyst", "리서치", "모건스탠리", "morgan stanley",
-                                  "골드만", "goldman", "jp모건", "ubs", "citigroup", "바클레이즈"]):
-        score += 1.5
-
-    # ── Stage 4: Penalty for generic/low-value content ──
+    # ── Stage 4: Penalty for LOW-VALUE financial noise ──
+    # HEAVY penalty: Institutional ownership filings (buys/sells/trims shares)
+    if any(kw in text for kw in ["buys shares", "sells shares", "trims stock", "trims holdings",
+                                  "purchases shares", "reduces stake", "adds to position",
+                                  "new position in", "bought shares", "sold shares",
+                                  "지분 확대", "지분 축소", "지분 매각", "주식 매수", "주식 매도"]):
+        score -= 6.0
+    # HEAVY penalty: Brokerage recommendation summaries (not actionable)
+    if any(kw in text for kw in ["given average recommendation", "average recommendation of",
+                                  "consensus rating", "remains a buy on", "remains a hold",
+                                  "given consensus", "brokerages", "what you should know",
+                                  "investor attention", "attracting investor"]):
+        score -= 5.0
+    # Moderate penalty: Analyst target/rating news (less important than business news)
+    if any(kw in text for kw in ["목표가", "목표주가", "target price", "투자의견", "rating",
+                                  "price target", "initiates coverage", "reiterates"]):
+        score -= 1.0
     # Penalize vague/generic articles
     if any(kw in text for kw in ["동향", "전반적", "overall", "overview", "summary", "요약"]):
-        score -= 1.0
+        score -= 1.5
     # Penalize opinion pieces without data
     if any(kw in text for kw in ["칼럼", "column", "사설", "editorial", "의견", "opinion piece"]):
-        score -= 1.5
+        score -= 2.0
     # Penalize promotional content
     if any(kw in text for kw in ["무료", "이벤트", "특가", "할인", "프로모션"]):
         score -= 3.0
+    # Penalize MarketBeat institutional ownership spam specifically
+    if "marketbeat" in (source or "").lower() and any(kw in text for kw in ["shares of", "stock holdings", "holdings in"]):
+        score -= 4.0
 
     return score > 2.0, max(score, 0.0)
 
@@ -1161,6 +1179,116 @@ def _classify_sentiment_detailed(title: str, company_name: str) -> tuple[str, st
     return "neutral", "모니터링 필요", _build_explanation("중립", detail, "후속 뉴스로 방향성 확인이 필요합니다")
 
 
+def _fetch_article_snippet(url: str, max_chars: int = 800) -> str:
+    """Fetch the first ~max_chars of an article's text content."""
+    if not url:
+        return ""
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                          "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        }
+        with limit_http():
+            r = requests.get(url, headers=headers, timeout=8, allow_redirects=True)
+        if r.status_code != 200:
+            return ""
+        soup = BeautifulSoup(r.text, "html.parser")
+        # Remove scripts, styles, nav, footer
+        for tag in soup(["script", "style", "nav", "footer", "header", "aside", "iframe"]):
+            tag.decompose()
+        # Try article body first, then main, then body
+        body = soup.find("article") or soup.find("main") or soup.find("body")
+        if not body:
+            return ""
+        paragraphs = body.find_all("p")
+        text = " ".join(p.get_text(strip=True) for p in paragraphs if len(p.get_text(strip=True)) > 20)
+        return text[:max_chars].strip()
+    except Exception:
+        return ""
+
+
+def _gemini_analyze_news_batch(
+    articles: list[dict], ticker: str, company_name: str
+) -> list[dict] | None:
+    """
+    Use Gemini to analyze a batch of news articles for a stock.
+    Returns list of {direction, category, explanation} per article, or None on failure.
+    """
+    api_key = settings.GEMINI_API_KEY
+    if not api_key or not articles:
+        return None
+
+    # Build article descriptions with snippets
+    article_texts = []
+    for i, art in enumerate(articles):
+        title = art.get("title", "")
+        snippet = art.get("snippet", "")
+        source = art.get("source", "")
+        entry = f"[{i+1}] {title}"
+        if source:
+            entry += f" (출처: {source})"
+        if snippet:
+            entry += f"\n    본문 요약: {snippet[:400]}"
+        article_texts.append(entry)
+
+    articles_block = "\n".join(article_texts)
+
+    prompt = f"""너는 주식 투자 뉴스 분석 전문가야. 아래는 {company_name} ({ticker}) 관련 뉴스 기사 목록이야.
+
+각 기사를 읽고 **이 기사가 {company_name} 주가에 구체적으로 어떤 영향을 주는지** 분석해줘.
+
+## 뉴스 기사 목록:
+{articles_block}
+
+## 분석 규칙:
+1. 기사 제목과 본문을 **정확히 읽고** 내용을 파악해
+2. 제목에 나오는 숫자, 기관명, 금액 등 **구체적 사실**을 분석에 포함해
+3. direction은 이 뉴스가 주가에 미치는 영향: "positive", "negative", "neutral"
+4. category는 한국어로 핵심 주제 (예: "기관 매도 수급", "실적 호조", "애널리스트 매수 유지", "파이프라인 확장")
+5. explanation은 2-3문장으로: (1) 이 뉴스가 뭘 말하는지 (2) 왜 주가에 그런 영향인지 (3) 투자자가 주목할 포인트
+6. 단순히 제목을 번역하지 말고, **주가 영향 메커니즘**을 설명해
+
+## 출력 형식 (JSON):
+```json
+[
+  {{"idx": 1, "direction": "negative", "category": "기관 매도 수급", "explanation": "스미토모 미쓰이 트러스트가 20.5만주를 매도했다. 대형 기관의 매도는 단기 수급 악화 신호이며, 매도 물량이 소화되기까지 주가 하방 압력이 있을 수 있다. 매도 이유(리밸런싱 vs 비관적 전망)를 확인할 필요가 있다."}},
+  ...
+]
+```"""
+
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+        resp = requests.post(url, json={
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": 0.3,
+                "maxOutputTokens": 2000,
+                "thinkingConfig": {"thinkingBudget": 1024},
+            },
+        }, timeout=25)
+
+        if resp.status_code != 200:
+            print(f"[GEMINI-NEWS] {ticker} status {resp.status_code}")
+            return None
+
+        data = resp.json()
+        text = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[-1].get("text", "")
+        json_match = re.search(r'\[[\s\S]*\]', text)
+        if not json_match:
+            return None
+
+        results = json.loads(json_match.group())
+        if not isinstance(results, list):
+            return None
+
+        print(f"[GEMINI-NEWS] {ticker}: analyzed {len(results)} articles")
+        return results
+
+    except Exception as e:
+        print(f"[GEMINI-NEWS] {ticker} error: {e}")
+        return None
+
+
 def _extract_live_impact_news(ticker: str, info: dict | None = None, sector_id: str | None = None) -> list[dict]:
     cache_key = f"live-impact-news:{_ticker_key(ticker)}"
     cached = _get_cached_ttl(cache_key, 180)  # 3분 — 뉴스는 실시간
@@ -1175,18 +1303,49 @@ def _extract_live_impact_news(ticker: str, info: dict | None = None, sector_id: 
     # Direct search with built-in relevance filtering
     raw_articles = _search_stock_latest_news(queries, max_per_query=6, ticker=ticker, company_name=company_name)
 
-    # Already filtered by _is_article_relevant — now classify sentiment
+    if not raw_articles:
+        _set_cached(cache_key, [])
+        return []
+
+    # Fetch article snippets for top articles (parallel-ish, limited)
+    from concurrent.futures import ThreadPoolExecutor
+    top_raw = raw_articles[:8]
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        snippets = list(pool.map(lambda a: _fetch_article_snippet(a.get("url", "")), top_raw))
+    for art, snip in zip(top_raw, snippets):
+        art["snippet"] = snip
+
+    # Use Gemini for deep analysis of all articles at once
+    gemini_results = _gemini_analyze_news_batch(top_raw, ticker, company_name)
+
     candidates = []
-    for art in raw_articles:
+    for i, art in enumerate(top_raw):
         title = art["title"]
-
-        # Classify sentiment with detailed analysis
-        direction, category, analysis = _classify_sentiment_detailed(title, company_name)
-
-        # Use the relevance score from filtering + sentiment bonus
         score = art.get("relevance_score", 5.0)
+
+        # Use Gemini result if available, fallback to keyword matching
+        if gemini_results and i < len(gemini_results):
+            gr = gemini_results[i] if isinstance(gemini_results[i], dict) else {}
+            # Match by idx or position
+            matched = None
+            for g in gemini_results:
+                if isinstance(g, dict) and g.get("idx") == i + 1:
+                    matched = g
+                    break
+            if not matched and i < len(gemini_results) and isinstance(gemini_results[i], dict):
+                matched = gemini_results[i]
+
+            if matched:
+                direction = matched.get("direction", "neutral")
+                category = matched.get("category", "뉴스")
+                analysis = matched.get("explanation", "")
+            else:
+                direction, category, analysis = _classify_sentiment_detailed(title, company_name)
+        else:
+            direction, category, analysis = _classify_sentiment_detailed(title, company_name)
+
         if direction != "neutral":
-            score += 3  # actionable news scores higher
+            score += 3
 
         candidates.append({
             "title": title,

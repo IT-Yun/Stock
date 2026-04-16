@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import { LineChart, Line, ResponsiveContainer } from "recharts";
+import { useLanguage } from "@/i18n";
 import type { Stock } from "@/types";
 
 function generateSparkline(price: number, changePct: number) {
@@ -20,13 +21,14 @@ interface StockCardProps {
 }
 
 export default function StockCard({ stock }: StockCardProps) {
+  const { lang } = useLanguage();
   const changePct = stock.change_percent ?? stock.changePercent ?? 0;
   const isPositive = changePct >= 0;
   const sparkData = generateSparkline(stock.price, changePct);
 
   const isKRX = stock.ticker.endsWith(".KS") || stock.ticker.endsWith(".KQ");
   const priceStr = isKRX
-    ? `${Math.round(stock.price).toLocaleString()}원`
+    ? `${lang === "ko" ? "" : "₩"}${Math.round(stock.price).toLocaleString()}${lang === "ko" ? "원" : ""}`
     : `$${stock.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
   return (

@@ -15,7 +15,7 @@ import {
   ReferenceArea,
 } from "recharts";
 import { ArrowLeft, AlertTriangle, Activity, Newspaper, Zap, ChevronRight, TrendingUp, TrendingDown, CheckCircle2, XCircle, MinusCircle, Shield, Globe } from "lucide-react";
-import { useLanguage } from "@/i18n";
+import { useLanguage, t as t_static, type TranslationKey } from "@/i18n";
 import { SECTORS } from "@/data/sectors";
 import type { SectorDef, StockPick } from "@/data/sectors";
 import { fetchChartData, fetchAnalysis, fetchEarnings, fetchPatternAnalysis, fetchCommodityHistory, searchNews, fetchPrediction, fetchMoveReasons, fetchChecklistLive, fetchSectorPulse, fetchMacroEvents, fetchTradingTargets, fetchNewsAnalysis } from "@/api/client";
@@ -36,9 +36,9 @@ const useIsMobile = () => {
 /* ── Internal analysis engine (user never sees raw indicators) ── */
 
 /** Convert a 0-100 score to label + color. Single source of truth for all verdicts. */
-type TFn = (key: string) => string;
+type TFn = (key: TranslationKey) => string;
 function scoreToVerdict(score: number, t?: TFn): { label: string; color: string; action: string } {
-  const tr = t ?? ((k: string) => k);
+  const tr: TFn = t ?? ((k) => t_static(k, "ko"));
   if (score >= 80) return { label: tr("verdictStrongBuy"), color: "#16a34a", action: tr("actionStrongBuy") };
   if (score >= 65) return { label: tr("verdictBuy"), color: "#22c55e", action: tr("actionBuy") };
   if (score >= 45) return { label: tr("verdictHold"), color: "#eab308", action: tr("actionHold") };
@@ -52,7 +52,7 @@ function analyzeChart(analysis: AnalysisResult | null, chartData: ChartDataPoint
   color: string;
   reason: string;
 } {
-  const tr = t ?? ((k: string) => k);
+  const tr: TFn = t ?? ((k) => t_static(k, "ko"));
   if (!analysis) return { score100: 50, label: tr("analyzing"), color: "#64748b", reason: tr("dataLoadingMsg") };
   const ind = analysis.indicators;
   const price = chartData.length > 0 ? chartData[chartData.length - 1].close : null;
@@ -129,69 +129,15 @@ function analyzeChart(analysis: AnalysisResult | null, chartData: ChartDataPoint
   return { score100, label: v.label, color: v.color, reason: reasons.join(" · ") };
 }
 
-function analyzeFundamentals(earnings: any, patternData: any, checklistLive: any, t?: TFn): {
+function analyzeFundamentals(earnings: any, patternData: any, t?: TFn): {
   score100: number;
   label: string;
   color: string;
   reason: string;
 } {
-  const tr = t ?? ((k: string) => k);
-  // ── PRIMARY: Use checklist score if available (most comprehensive, per-stock analysis) ──
-  // The checklist already evaluates earnings, commodities, sector health, and news per stock
-  if (checklistLive?.summary?.score != null) {
-    const clScore = checklistLive.summary.score as number;
-    const items = (checklistLive?.checklist ?? []).filter((c: any) =>
-      !c.is_news_item && !c.name?.startsWith("뉴스:") && !c.name?.startsWith("이슈 모니터링:")
-    );
-    const positives = items.filter((c: any) => c.status === "positive").length;
-    const negatives = items.filter((c: any) => c.status === "negative").length;
-    const reasons: string[] = [];
-
-    // Enrich with earnings data if available
-    let earningsBonus = 0;
-    if (earnings && !earnings.error) {
-      if (earnings.revenue_growth != null) {
-        if (earnings.revenue_growth > 0.2) { earningsBonus += 5; reasons.push(`${tr("revenueShort")} +${(earnings.revenue_growth * 100).toFixed(0)}%`); }
-        else if (earnings.revenue_growth > 0.05) { earningsBonus += 2; reasons.push(`${tr("revenueShort")} +${(earnings.revenue_growth * 100).toFixed(0)}%`); }
-        else if (earnings.revenue_growth < -0.05) { earningsBonus -= 5; reasons.push(`${tr("revenueShort")} ${(earnings.revenue_growth * 100).toFixed(0)}%`); }
-      }
-      if (earnings.earnings_growth != null) {
-        if (earnings.earnings_growth > 0.3) earningsBonus += 4;
-        else if (earnings.earnings_growth > 0) earningsBonus += 1;
-        else if (earnings.earnings_growth < -0.1) earningsBonus -= 4;
-      }
-      if (earnings.pe_ratio != null && earnings.forward_pe != null) {
-        if (earnings.forward_pe < earnings.pe_ratio * 0.7) {
-          earningsBonus += 3;
-          reasons.push(`Forward PE ${earnings.forward_pe.toFixed(0)} < Trailing ${earnings.pe_ratio.toFixed(0)}`);
-        } else if (earnings.forward_pe > earnings.pe_ratio * 1.2) {
-          earningsBonus -= 2;
-        }
-      }
-      if (earnings.profit_margin != null) {
-        if (earnings.profit_margin > 0.2) earningsBonus += 2;
-        else if (earnings.profit_margin < 0) { earningsBonus -= 3; reasons.push(tr("netLossState")); }
-      }
-    }
-
-    // Pattern analysis bonus
-    if (patternData?.summary) {
-      if (patternData.summary.up_probability > 65) { earningsBonus += 3; reasons.push(`${tr("patternUpProb")} ${patternData.summary.up_probability}%`); }
-      else if (patternData.summary.up_probability < 35) { earningsBonus -= 3; reasons.push(`${tr("patternUpProb")} ${patternData.summary.up_probability}%`); }
-    }
-
-    // Combine: checklist score (primary) + earnings/pattern bonus (secondary)
-    // Checklist score is 0-100; earningsBonus is small adjustment ±15 max
-    const finalScore = Math.round(Math.max(0, Math.min(100, clScore + earningsBonus)));
-
-    if (positives > 0) reasons.push(`${positives} ${tr("keyIndicatorsPositive")}`);
-    if (negatives > 0) reasons.push(`${negatives} ${tr("riskIndicators")}`);
-
-    const v = scoreToVerdict(finalScore, t);
-    return { score100: finalScore, label: v.label, color: v.color, reason: reasons.join(" · ") };
-  }
-
-  // ── FALLBACK: earnings-only scoring when checklist not loaded yet ──
+  const tr: TFn = t ?? ((k) => t_static(k, "ko"));
+  // Pure earnings/fundamentals scoring — matches backend score_stock() fund_score100.
+  // Checklist score is handled separately in the overall weighted formula.
   if (!earnings || earnings.error) return { score100: 50, label: tr("noData"), color: "#64748b", reason: "" };
 
   let score = 0;
@@ -238,122 +184,219 @@ function analyzeFundamentals(earnings: any, patternData: any, checklistLive: any
   return { score100, label: v.label, color: v.color, reason: reasons.join(" · ") };
 }
 
-/* ── Stock checklist & momentum data ── */
+/* ── Stock checklist & momentum data (bilingual) ── */
 
+type BiStr = { ko: string; en: string };
+type MomentumItemBi = { title: BiStr; detail: BiStr; condition: BiStr };
 type MomentumItem = { title: string; detail: string; condition: string };
-const STOCK_META: Record<string, { checklist: string[]; momentum: MomentumItem[] }> = {
+const STOCK_META_BI: Record<string, { checklist: BiStr[]; momentum: MomentumItemBi[] }> = {
   "NVDA": {
-    checklist: ["데이터센터 매출 성장률 (QoQ)", "HBM/GPU ASP 추이", "AI 캡엑스 지출 (MSFT/GOOG/META)", "중국 수출 규제 변동", "경쟁사 AMD MI300 점유율"],
+    checklist: [
+      { ko: "데이터센터 매출 성장률 (QoQ)", en: "Data center revenue growth (QoQ)" },
+      { ko: "HBM/GPU ASP 추이", en: "HBM/GPU ASP trend" },
+      { ko: "AI 캡엑스 지출 (MSFT/GOOG/META)", en: "AI capex (MSFT/GOOG/META)" },
+      { ko: "중국 수출 규제 변동", en: "China export regulation changes" },
+      { ko: "경쟁사 AMD MI300 점유율", en: "Competitor AMD MI300 share" },
+    ],
     momentum: [
-      { title: "Blackwell Ultra 출시 (2026 H2)", detail: "차세대 GPU 출시로 데이터센터 교체 수요가 본격화됩니다", condition: "출시 일정이 지켜지고, 주요 고객(MS/Google/Meta)의 사전 주문이 유지되어야 합니다" },
-      { title: "데이터센터 캡엑스 $200B+ 지속", detail: "빅테크 AI 인프라 투자가 계속 확대되고 있어 GPU 수요를 뒷받침합니다", condition: "빅테크 실적 발표에서 AI 캡엑스 가이던스가 유지/상향되어야 합니다" },
-      { title: "자율주행/로봇 GPU 수요 신규", detail: "자동차·로봇 분야에서 새로운 GPU 수요처가 열리고 있습니다", condition: "Tesla FSD, Waymo 등 자율주행 실적이 가시화되어야 합니다" },
-      { title: "중국 규제 완화 가능성", detail: "미중 관계 개선 시 수출 규제 완화로 중국 매출 회복 가능", condition: "미국 정부의 수출 규제 정책 변화 여부를 모니터링해야 합니다" },
+      { title: { ko: "Blackwell Ultra 출시 (2026 H2)", en: "Blackwell Ultra launch (2026 H2)" }, detail: { ko: "차세대 GPU 출시로 데이터센터 교체 수요가 본격화됩니다", en: "Next-gen GPU launch drives datacenter upgrade demand" }, condition: { ko: "출시 일정이 지켜지고, 주요 고객(MS/Google/Meta)의 사전 주문이 유지되어야 합니다", en: "Launch schedule must hold; key customer pre-orders (MS/Google/Meta) must be maintained" } },
+      { title: { ko: "데이터센터 캡엑스 $200B+ 지속", en: "Datacenter capex $200B+ continues" }, detail: { ko: "빅테크 AI 인프라 투자가 계속 확대되고 있어 GPU 수요를 뒷받침합니다", en: "Big tech AI infra investment expansion supports GPU demand" }, condition: { ko: "빅테크 실적 발표에서 AI 캡엑스 가이던스가 유지/상향되어야 합니다", en: "Big tech must maintain/raise AI capex guidance" } },
+      { title: { ko: "자율주행/로봇 GPU 수요 신규", en: "New autonomous/robotics GPU demand" }, detail: { ko: "자동차·로봇 분야에서 새로운 GPU 수요처가 열리고 있습니다", en: "New GPU demand from automotive and robotics sectors" }, condition: { ko: "Tesla FSD, Waymo 등 자율주행 실적이 가시화되어야 합니다", en: "Tesla FSD, Waymo must show tangible results" } },
+      { title: { ko: "중국 규제 완화 가능성", en: "Potential China regulation easing" }, detail: { ko: "미중 관계 개선 시 수출 규제 완화로 중국 매출 회복 가능", en: "US-China improvement could ease export controls, recovering China revenue" }, condition: { ko: "미국 정부의 수출 규제 정책 변화 여부를 모니터링해야 합니다", en: "Monitor US government export regulation policy changes" } },
     ],
   },
   "TSM": {
-    checklist: ["3nm/2nm 가동률", "웨이퍼 ASP 변동", "월별 매출 공시 (MoM)", "지정학 리스크 (대만 해협)", "CAPEX 집행률"],
+    checklist: [
+      { ko: "3nm/2nm 가동률", en: "3nm/2nm utilization" },
+      { ko: "웨이퍼 ASP 변동", en: "Wafer ASP changes" },
+      { ko: "월별 매출 공시 (MoM)", en: "Monthly revenue (MoM)" },
+      { ko: "지정학 리스크 (대만 해협)", en: "Geopolitical risk (Taiwan Strait)" },
+      { ko: "CAPEX 집행률", en: "CAPEX execution rate" },
+    ],
     momentum: [
-      { title: "2nm 양산 시작 (2026)", detail: "차세대 2nm 공정 양산이 시작되면 ASP 상승과 점유율 확대가 기대됩니다", condition: "2nm 수율이 목표치에 도달하고, Apple/NVDA 등 핵심 고객 주문이 확정되어야 합니다" },
-      { title: "미국 애리조나 팹 가동", detail: "미국 현지 생산으로 지정학 리스크 완화 + 미국 정부 보조금 수혜", condition: "팹 가동률이 경제성 있는 수준까지 올라야 하며, 인력 확보가 순조로워야 합니다" },
+      { title: { ko: "2nm 양산 시작 (2026)", en: "2nm mass production (2026)" }, detail: { ko: "차세대 2nm 공정 양산이 시작되면 ASP 상승과 점유율 확대가 기대됩니다", en: "2nm production expected to drive ASP increase and market share gain" }, condition: { ko: "2nm 수율이 목표치에 도달하고, Apple/NVDA 등 핵심 고객 주문이 확정되어야 합니다", en: "2nm yield must hit targets; Apple/NVDA orders must be confirmed" } },
+      { title: { ko: "미국 애리조나 팹 가동", en: "US Arizona fab ramp-up" }, detail: { ko: "미국 현지 생산으로 지정학 리스크 완화 + 미국 정부 보조금 수혜", en: "US local production mitigates geopolitical risk + government subsidies" }, condition: { ko: "팹 가동률이 경제성 있는 수준까지 올라야 하며, 인력 확보가 순조로워야 합니다", en: "Fab utilization must reach economic viability; talent acquisition must be smooth" } },
     ],
   },
   "AVGO": {
-    checklist: ["커스텀 AI칩 수주 현황", "VMware 통합 시너지", "네트워킹 매출 비중", "배당 성장률", "Google TPU 계약"],
+    checklist: [
+      { ko: "커스텀 AI칩 수주 현황", en: "Custom AI chip orders" },
+      { ko: "VMware 통합 시너지", en: "VMware integration synergies" },
+      { ko: "네트워킹 매출 비중", en: "Networking revenue mix" },
+      { ko: "배당 성장률", en: "Dividend growth rate" },
+      { ko: "Google TPU 계약", en: "Google TPU contract" },
+    ],
     momentum: [
-      { title: "Google TPU v6 대량 수주", detail: "Google 커스텀 AI칩 수주가 매출 성장의 핵심 동력입니다", condition: "Google의 AI 인프라 투자가 유지되고, TPU 점유율이 NVDA GPU 대비 확대되어야 합니다" },
-      { title: "AI 네트워킹 스위치 수요 급증", detail: "AI 데이터센터 확장에 필수적인 네트워킹 장비 수요가 폭발적으로 증가 중", condition: "데이터센터 신규 건설 속도가 유지되어야 합니다" },
+      { title: { ko: "Google TPU v6 대량 수주", en: "Google TPU v6 large orders" }, detail: { ko: "Google 커스텀 AI칩 수주가 매출 성장의 핵심 동력입니다", en: "Google custom AI chip orders are the key revenue growth driver" }, condition: { ko: "Google의 AI 인프라 투자가 유지되고, TPU 점유율이 NVDA GPU 대비 확대되어야 합니다", en: "Google AI investment must continue; TPU share must expand vs NVDA GPU" } },
+      { title: { ko: "AI 네트워킹 스위치 수요 급증", en: "AI networking switch demand surge" }, detail: { ko: "AI 데이터센터 확장에 필수적인 네트워킹 장비 수요가 폭발적으로 증가 중", en: "Explosive networking equipment demand for AI datacenter expansion" }, condition: { ko: "데이터센터 신규 건설 속도가 유지되어야 합니다", en: "New datacenter construction pace must be maintained" } },
     ],
   },
   "000660.KS": {
-    checklist: ["DRAM 현물/계약가격 추이", "HBM 출하량/ASP", "재고 수준 (bit growth)", "NVDA HBM 공급 비중", "영업이익률 추이"],
+    checklist: [
+      { ko: "DRAM 현물/계약가격 추이", en: "DRAM spot/contract price trend" },
+      { ko: "HBM 출하량/ASP", en: "HBM shipment/ASP" },
+      { ko: "재고 수준 (bit growth)", en: "Inventory (bit growth)" },
+      { ko: "NVDA HBM 공급 비중", en: "NVDA HBM supply share" },
+      { ko: "영업이익률 추이", en: "Operating margin trend" },
+    ],
     momentum: [
-      { title: "HBM4 양산 (2026)", detail: "차세대 HBM4 양산으로 NVDA 독점 공급 지위를 공고히 합니다", condition: "HBM4 수율이 양산 가능 수준이고, NVDA의 차세대 GPU에 채택이 확정되어야 합니다" },
-      { title: "DRAM 업사이클 진입", detail: "서버 DRAM 가격 상승 사이클이 시작되어 실적 개선이 가속화됩니다", condition: "DRAM 현물가격이 계약가격 대비 프리미엄을 유지해야 합니다. 재고가 쌓이면 사이클이 꺾입니다" },
+      { title: { ko: "HBM4 양산 (2026)", en: "HBM4 mass production (2026)" }, detail: { ko: "차세대 HBM4 양산으로 NVDA 독점 공급 지위를 공고히 합니다", en: "Next-gen HBM4 solidifies exclusive NVDA supply position" }, condition: { ko: "HBM4 수율이 양산 가능 수준이고, NVDA의 차세대 GPU에 채택이 확정되어야 합니다", en: "HBM4 yield must be production-ready; adoption in NVDA next-gen GPU confirmed" } },
+      { title: { ko: "DRAM 업사이클 진입", en: "DRAM upcycle entry" }, detail: { ko: "서버 DRAM 가격 상승 사이클이 시작되어 실적 개선이 가속화됩니다", en: "Server DRAM price upcycle accelerates earnings improvement" }, condition: { ko: "DRAM 현물가격이 계약가격 대비 프리미엄을 유지해야 합니다. 재고가 쌓이면 사이클이 꺾입니다", en: "DRAM spot must maintain premium over contract. Inventory buildup ends the cycle" } },
     ],
   },
   "005930.KS": {
-    checklist: ["DRAM/NAND 가격 추이", "파운드리 수율 개선", "HBM 수율 이슈", "갤럭시 판매량", "자사주 매입"],
+    checklist: [
+      { ko: "DRAM/NAND 가격 추이", en: "DRAM/NAND price trend" },
+      { ko: "파운드리 수율 개선", en: "Foundry yield improvement" },
+      { ko: "HBM 수율 이슈", en: "HBM yield issues" },
+      { ko: "갤럭시 판매량", en: "Galaxy sales volume" },
+      { ko: "자사주 매입", en: "Share buyback" },
+    ],
     momentum: [
-      { title: "HBM3E 수율 개선 기대", detail: "HBM 수율 문제가 해결되면 NVDA 공급 확대로 실적이 크게 개선됩니다", condition: "HBM3E 수율이 경쟁사(SK하이닉스) 수준까지 올라야 하며, NVDA 인증을 통과해야 합니다" },
-      { title: "밸류업 프로그램 (주주환원)", detail: "자사주 매입·소각으로 주당가치 상승이 기대됩니다", condition: "자사주 매입 규모가 기대 이상이어야 하며, 지속적인 주주환원 정책이 확인되어야 합니다" },
+      { title: { ko: "HBM3E 수율 개선 기대", en: "HBM3E yield improvement expected" }, detail: { ko: "HBM 수율 문제가 해결되면 NVDA 공급 확대로 실적이 크게 개선됩니다", en: "Resolving HBM yield issues expands NVDA supply, significantly boosting earnings" }, condition: { ko: "HBM3E 수율이 경쟁사(SK하이닉스) 수준까지 올라야 하며, NVDA 인증을 통과해야 합니다", en: "HBM3E yield must reach SK Hynix levels; NVDA certification required" } },
+      { title: { ko: "밸류업 프로그램 (주주환원)", en: "Value-up program (shareholder returns)" }, detail: { ko: "자사주 매입·소각으로 주당가치 상승이 기대됩니다", en: "Share buyback & cancellation expected to increase per-share value" }, condition: { ko: "자사주 매입 규모가 기대 이상이어야 하며, 지속적인 주주환원 정책이 확인되어야 합니다", en: "Buyback size must exceed expectations with continued shareholder return policy" } },
     ],
   },
   "TSLA": {
-    checklist: ["차량 인도량 (QoQ)", "Optimus 로봇 진행상황", "FSD 라이센싱 수익", "마진율 추이", "에너지 사업 매출"],
+    checklist: [
+      { ko: "차량 인도량 (QoQ)", en: "Vehicle deliveries (QoQ)" },
+      { ko: "Optimus 로봇 진행상황", en: "Optimus robot progress" },
+      { ko: "FSD 라이센싱 수익", en: "FSD licensing revenue" },
+      { ko: "마진율 추이", en: "Margin trend" },
+      { ko: "에너지 사업 매출", en: "Energy business revenue" },
+    ],
     momentum: [
-      { title: "Optimus 2027 공장 투입", detail: "휴머노이드 로봇이 공장에 투입되면 로봇 사업의 매출 가시성이 생깁니다", condition: "2027년 일정이 지켜져야 하며, 로봇 성능이 실제 공장 작업에 적합해야 합니다" },
-      { title: "로보택시 출시", detail: "자율주행 택시 서비스가 시작되면 소프트웨어 반복매출이 폭발합니다", condition: "규제 승인과 안전 기록이 확보되어야 하며, 사고 리스크가 통제되어야 합니다" },
+      { title: { ko: "Optimus 2027 공장 투입", en: "Optimus factory deployment 2027" }, detail: { ko: "휴머노이드 로봇이 공장에 투입되면 로봇 사업의 매출 가시성이 생깁니다", en: "Humanoid robot factory deployment creates robotics revenue visibility" }, condition: { ko: "2027년 일정이 지켜져야 하며, 로봇 성능이 실제 공장 작업에 적합해야 합니다", en: "2027 timeline must hold; robot must suit actual factory tasks" } },
+      { title: { ko: "로보택시 출시", en: "Robotaxi launch" }, detail: { ko: "자율주행 택시 서비스가 시작되면 소프트웨어 반복매출이 폭발합니다", en: "Autonomous taxi launch drives explosive recurring software revenue" }, condition: { ko: "규제 승인과 안전 기록이 확보되어야 하며, 사고 리스크가 통제되어야 합니다", en: "Regulatory approval + safety record required; accident risk must be controlled" } },
     ],
   },
   "ISRG": {
-    checklist: ["다빈치 시술 건수 (QoQ)", "시스템 설치 대수", "반복매출 비중", "경쟁사 진입 여부", "중국 시장 확대"],
+    checklist: [
+      { ko: "다빈치 시술 건수 (QoQ)", en: "Da Vinci procedures (QoQ)" },
+      { ko: "시스템 설치 대수", en: "System installations" },
+      { ko: "반복매출 비중", en: "Recurring revenue share" },
+      { ko: "경쟁사 진입 여부", en: "Competitor entry" },
+      { ko: "중국 시장 확대", en: "China market expansion" },
+    ],
     momentum: [
-      { title: "다빈치 5 신규 설치 가속", detail: "최신 다빈치 5 시스템 설치가 빨라지면 반복매출(소모품)이 크게 증가합니다", condition: "병원들의 설비 투자 예산이 유지되고, 경쟁 로봇(Medtronic Hugo)이 점유율을 빼앗지 않아야 합니다" },
+      { title: { ko: "다빈치 5 신규 설치 가속", en: "Da Vinci 5 installation acceleration" }, detail: { ko: "최신 다빈치 5 시스템 설치가 빨라지면 반복매출(소모품)이 크게 증가합니다", en: "Faster Da Vinci 5 installations significantly increase recurring revenue" }, condition: { ko: "병원들의 설비 투자 예산이 유지되고, 경쟁 로봇(Medtronic Hugo)이 점유율을 빼앗지 않아야 합니다", en: "Hospital capex must hold; competitors (Medtronic Hugo) must not take share" } },
     ],
   },
   "CEG": {
-    checklist: ["원전 가동률", "전력 계약 가격(PPA)", "Microsoft/Google 전력 계약", "규제 환경 변화", "전력 수요 전망"],
+    checklist: [
+      { ko: "원전 가동률", en: "Nuclear utilization" },
+      { ko: "전력 계약 가격(PPA)", en: "Power contract price (PPA)" },
+      { ko: "Microsoft/Google 전력 계약", en: "Microsoft/Google power contracts" },
+      { ko: "규제 환경 변화", en: "Regulatory changes" },
+      { ko: "전력 수요 전망", en: "Power demand outlook" },
+    ],
     momentum: [
-      { title: "AI 데이터센터 전력 수요 폭증", detail: "AI 데이터센터 확장으로 안정적인 원전 전력 수요가 급증하고 있습니다", condition: "빅테크의 데이터센터 건설 계획이 유지되고, 전력 장기계약(PPA) 가격이 상승 추세여야 합니다" },
+      { title: { ko: "AI 데이터센터 전력 수요 폭증", en: "AI datacenter power demand surge" }, detail: { ko: "AI 데이터센터 확장으로 안정적인 원전 전력 수요가 급증하고 있습니다", en: "AI datacenter expansion drives surging nuclear power demand" }, condition: { ko: "빅테크의 데이터센터 건설 계획이 유지되고, 전력 장기계약(PPA) 가격이 상승 추세여야 합니다", en: "Big tech datacenter plans must continue; long-term PPA prices must trend up" } },
     ],
   },
   "CCJ": {
-    checklist: ["우라늄 현물가격", "장기 계약가격", "공급 부족 규모", "카자흐스탄 생산량", "러시아 수출 제재"],
+    checklist: [
+      { ko: "우라늄 현물가격", en: "Uranium spot price" },
+      { ko: "장기 계약가격", en: "Long-term contract price" },
+      { ko: "공급 부족 규모", en: "Supply deficit" },
+      { ko: "카자흐스탄 생산량", en: "Kazakhstan production" },
+      { ko: "러시아 수출 제재", en: "Russia export sanctions" },
+    ],
     momentum: [
-      { title: "우라늄 $100/lb 돌파", detail: "우라늄 가격 상승은 CCJ 매출과 이익에 직결됩니다", condition: "러시아 우라늄 수출 제재가 유지되고, 신규 원전 건설 수주가 계속되어야 합니다" },
+      { title: { ko: "우라늄 $100/lb 돌파", en: "Uranium breaking $100/lb" }, detail: { ko: "우라늄 가격 상승은 CCJ 매출과 이익에 직결됩니다", en: "Rising uranium prices directly impact CCJ revenue and profits" }, condition: { ko: "러시아 우라늄 수출 제재가 유지되고, 신규 원전 건설 수주가 계속되어야 합니다", en: "Russia sanctions must persist; new nuclear plant orders must continue" } },
     ],
   },
   "CRWD": {
-    checklist: ["ARR 성장률", "고객당 모듈 수", "순유지율(NRR)", "경쟁사 대비 점유율", "보안사고 리스크"],
+    checklist: [
+      { ko: "ARR 성장률", en: "ARR growth rate" },
+      { ko: "고객당 모듈 수", en: "Modules per customer" },
+      { ko: "순유지율(NRR)", en: "Net retention (NRR)" },
+      { ko: "경쟁사 대비 점유율", en: "Share vs competitors" },
+      { ko: "보안사고 리스크", en: "Security incident risk" },
+    ],
     momentum: [
-      { title: "AI 기반 위협탐지 확대", detail: "AI 보안 솔루션 수요가 기존 방화벽을 대체하며 빠르게 성장합니다", condition: "ARR 성장률 30%+ 유지와 신규 모듈 채택률이 증가해야 합니다. 블루스크린 같은 보안사고 재발 시 급락 위험" },
+      { title: { ko: "AI 기반 위협탐지 확대", en: "AI threat detection expansion" }, detail: { ko: "AI 보안 솔루션 수요가 기존 방화벽을 대체하며 빠르게 성장합니다", en: "AI security demand rapidly replacing traditional firewalls" }, condition: { ko: "ARR 성장률 30%+ 유지와 신규 모듈 채택률이 증가해야 합니다. 블루스크린 같은 보안사고 재발 시 급락 위험", en: "Must maintain 30%+ ARR growth. Blue screen-type incidents could trigger sharp decline" } },
     ],
   },
   "CRSP": {
-    checklist: ["임상시험 진행 단계", "FDA 승인 일정", "적응증 확대 파이프라인", "현금 보유량(런웨이)", "경쟁 유전자치료 동향"],
+    checklist: [
+      { ko: "임상시험 진행 단계", en: "Clinical trial stage" },
+      { ko: "FDA 승인 일정", en: "FDA approval timeline" },
+      { ko: "적응증 확대 파이프라인", en: "Indication pipeline" },
+      { ko: "현금 보유량(런웨이)", en: "Cash reserves (runway)" },
+      { ko: "경쟁 유전자치료 동향", en: "Gene therapy competition" },
+    ],
     momentum: [
-      { title: "Casgevy FDA 승인 완료", detail: "겸상적혈구병 유전자치료제가 FDA 승인을 받아 상업화 매출이 시작됩니다", condition: "보험사 커버리지 확대로 환자 접근성이 높아져야 하고, 경쟁 치료제(블루버드바이오) 대비 효능 우위가 유지되어야 합니다" },
-      { title: "적응증 확대 (암, 심혈관)", detail: "유전자편집 기술을 암·심혈관 질환으로 확장하면 시장이 수십배 커집니다", condition: "임상 2/3상 결과가 긍정적이어야 하며, FDA의 유전자치료 안전성 기준이 강화되지 않아야 합니다" },
-      { title: "유전자편집 기술 특허 독점", detail: "CRISPR 원천기술 특허로 경쟁사 진입을 막고 라이센스 수익이 가능합니다", condition: "특허 소송에서 승리해야 하며, 차세대 편집 기술(프라임 에디팅)이 CRISPR를 대체하지 않아야 합니다" },
+      { title: { ko: "Casgevy FDA 승인 완료", en: "Casgevy FDA approved" }, detail: { ko: "겸상적혈구병 유전자치료제가 FDA 승인을 받아 상업화 매출이 시작됩니다", en: "Sickle cell gene therapy FDA-approved; commercial revenue begins" }, condition: { ko: "보험사 커버리지 확대로 환자 접근성이 높아져야 하고, 경쟁 치료제(블루버드바이오) 대비 효능 우위가 유지되어야 합니다", en: "Insurance coverage must expand; must maintain efficacy advantage over bluebird bio" } },
+      { title: { ko: "적응증 확대 (암, 심혈관)", en: "Indication expansion (oncology, CV)" }, detail: { ko: "유전자편집 기술을 암·심혈관 질환으로 확장하면 시장이 수십배 커집니다", en: "Expanding gene editing to oncology/cardiovascular multiplies the market" }, condition: { ko: "임상 2/3상 결과가 긍정적이어야 하며, FDA의 유전자치료 안전성 기준이 강화되지 않아야 합니다", en: "Phase 2/3 results must be positive; FDA gene therapy standards must not tighten" } },
+      { title: { ko: "유전자편집 기술 특허 독점", en: "Gene editing patent monopoly" }, detail: { ko: "CRISPR 원천기술 특허로 경쟁사 진입을 막고 라이센스 수익이 가능합니다", en: "CRISPR core patents block competitors and enable licensing revenue" }, condition: { ko: "특허 소송에서 승리해야 하며, 차세대 편집 기술(프라임 에디팅)이 CRISPR를 대체하지 않아야 합니다", en: "Must win patent litigation; prime editing must not replace CRISPR" } },
     ],
   },
   "LLY": {
-    checklist: ["비만약(GLP-1) 처방 데이터", "분기별 매출 서프라이즈", "파이프라인 임상 결과", "경쟁사(NVO) 동향", "보험 커버리지 확대"],
+    checklist: [
+      { ko: "비만약(GLP-1) 처방 데이터", en: "Obesity drug (GLP-1) Rx data" },
+      { ko: "분기별 매출 서프라이즈", en: "Quarterly revenue surprise" },
+      { ko: "파이프라인 임상 결과", en: "Pipeline clinical results" },
+      { ko: "경쟁사(NVO) 동향", en: "Competitor (NVO) trends" },
+      { ko: "보험 커버리지 확대", en: "Insurance coverage expansion" },
+    ],
     momentum: [
-      { title: "비만약 시장 $100B 성장", detail: "GLP-1 비만약 시장이 2030년까지 $100B 이상으로 성장할 전망입니다", condition: "보험사 커버리지 확대 + 공급 부족 해소가 필요합니다. 노보노디스크와의 경쟁에서 점유율을 지켜야 합니다" },
-      { title: "알츠하이머 신약 도나네맙", detail: "알츠하이머 치료제 시장은 연간 $10B+ 규모로, 승인 시 큰 매출원이 됩니다", condition: "임상 데이터가 경쟁약(레카네맙) 대비 우월해야 하며, 보험 급여가 확대되어야 합니다" },
+      { title: { ko: "비만약 시장 $100B 성장", en: "Obesity market growing to $100B" }, detail: { ko: "GLP-1 비만약 시장이 2030년까지 $100B 이상으로 성장할 전망입니다", en: "GLP-1 obesity market projected to exceed $100B by 2030" }, condition: { ko: "보험사 커버리지 확대 + 공급 부족 해소가 필요합니다. 노보노디스크와의 경쟁에서 점유율을 지켜야 합니다", en: "Insurance expansion + supply resolution needed. Must defend share vs Novo Nordisk" } },
+      { title: { ko: "알츠하이머 신약 도나네맙", en: "Alzheimer's drug donanemab" }, detail: { ko: "알츠하이머 치료제 시장은 연간 $10B+ 규모로, 승인 시 큰 매출원이 됩니다", en: "Alzheimer's market is $10B+/yr; approval creates major revenue stream" }, condition: { ko: "임상 데이터가 경쟁약(레카네맙) 대비 우월해야 하며, 보험 급여가 확대되어야 합니다", en: "Clinical data must beat lecanemab; insurance reimbursement must expand" } },
     ],
   },
   "IONQ": {
-    checklist: ["큐비트 수 로드맵 진척", "매출 증가율", "현금 소진율", "정부/기업 계약", "기술적 마일스톤"],
+    checklist: [
+      { ko: "큐비트 수 로드맵 진척", en: "Qubit roadmap progress" },
+      { ko: "매출 증가율", en: "Revenue growth rate" },
+      { ko: "현금 소진율", en: "Cash burn rate" },
+      { ko: "정부/기업 계약", en: "Government/enterprise contracts" },
+      { ko: "기술적 마일스톤", en: "Technical milestones" },
+    ],
     momentum: [
-      { title: "양자 우위 달성 임박", detail: "양자 컴퓨터가 기존 슈퍼컴퓨터를 넘는 순간 시장이 폭발합니다", condition: "큐비트 수 로드맵이 지켜지고, 오류율이 실용 수준으로 낮아져야 합니다. 현금이 바닥나기 전에 성과를 내야 합니다" },
+      { title: { ko: "양자 우위 달성 임박", en: "Quantum advantage imminent" }, detail: { ko: "양자 컴퓨터가 기존 슈퍼컴퓨터를 넘는 순간 시장이 폭발합니다", en: "Market explodes when quantum surpasses classical supercomputers" }, condition: { ko: "큐비트 수 로드맵이 지켜지고, 오류율이 실용 수준으로 낮아져야 합니다. 현금이 바닥나기 전에 성과를 내야 합니다", en: "Qubit roadmap must hold; error rates must drop. Must deliver before cash runs out" } },
     ],
   },
   "RKLB": {
-    checklist: ["발사 횟수/성공률", "Neutron 로켓 개발 진척", "우주시스템 매출 비중", "수주잔고", "경쟁사(SpaceX) 동향"],
+    checklist: [
+      { ko: "발사 횟수/성공률", en: "Launch count/success rate" },
+      { ko: "Neutron 로켓 개발 진척", en: "Neutron development progress" },
+      { ko: "우주시스템 매출 비중", en: "Space systems revenue share" },
+      { ko: "수주잔고", en: "Order backlog" },
+      { ko: "경쟁사(SpaceX) 동향", en: "Competitor (SpaceX) trends" },
+    ],
     momentum: [
-      { title: "Neutron 첫 발사 예정", detail: "중형 로켓 Neutron 성공 시 발사 시장 점유율이 크게 확대됩니다", condition: "발사 일정이 지켜지고, 첫 발사가 성공해야 합니다. 실패 시 주가 30%+ 급락 위험" },
+      { title: { ko: "Neutron 첫 발사 예정", en: "Neutron first launch" }, detail: { ko: "중형 로켓 Neutron 성공 시 발사 시장 점유율이 크게 확대됩니다", en: "Successful Neutron significantly expands launch market share" }, condition: { ko: "발사 일정이 지켜지고, 첫 발사가 성공해야 합니다. 실패 시 주가 30%+ 급락 위험", en: "Schedule must hold and first launch must succeed. Failure risks 30%+ drop" } },
     ],
   },
   "BE": {
-    checklist: ["SOFC 주문 잔고", "매출총이익률 추이", "AI 데이터센터 계약", "수소 전환 로드맵", "정부 보조금 현황"],
+    checklist: [
+      { ko: "SOFC 주문 잔고", en: "SOFC order backlog" },
+      { ko: "매출총이익률 추이", en: "Gross margin trend" },
+      { ko: "AI 데이터센터 계약", en: "AI datacenter contracts" },
+      { ko: "수소 전환 로드맵", en: "Hydrogen transition roadmap" },
+      { ko: "정부 보조금 현황", en: "Government subsidies" },
+    ],
     momentum: [
-      { title: "AI 데이터센터 분산전원 계약", detail: "데이터센터가 그리드 전력 부족으로 분산전원(연료전지)을 도입하고 있습니다", condition: "대형 데이터센터 계약이 추가되어야 하며, 전력 단가가 그리드 대비 경쟁력을 가져야 합니다" },
-      { title: "흑자 전환 임박", detail: "매출 확대와 원가 개선으로 흑자 전환이 예상됩니다", condition: "매출총이익률이 25%+ 유지되고, 운영비 증가를 통제해야 합니다" },
+      { title: { ko: "AI 데이터센터 분산전원 계약", en: "AI datacenter distributed power" }, detail: { ko: "데이터센터가 그리드 전력 부족으로 분산전원(연료전지)을 도입하고 있습니다", en: "Datacenters adopting fuel cells due to grid power shortage" }, condition: { ko: "대형 데이터센터 계약이 추가되어야 하며, 전력 단가가 그리드 대비 경쟁력을 가져야 합니다", en: "Must add large datacenter contracts; cost must be competitive vs grid" } },
+      { title: { ko: "흑자 전환 임박", en: "Profitability imminent" }, detail: { ko: "매출 확대와 원가 개선으로 흑자 전환이 예상됩니다", en: "Revenue growth + cost improvement expected to drive profitability" }, condition: { ko: "매출총이익률이 25%+ 유지되고, 운영비 증가를 통제해야 합니다", en: "Gross margin must stay above 25%; opex growth must be controlled" } },
     ],
   },
 };
 
-function getStockMeta(ticker: string) {
-  const meta = STOCK_META[ticker] || STOCK_META[ticker.replace(".KS", "").replace(".KQ", "")];
-  if (meta) return meta;
+/** Resolve bilingual STOCK_META to current language */
+function getStockMeta(ticker: string, lang: "ko" | "en" = "ko"): { checklist: string[]; momentum: MomentumItem[] } {
+  const raw = STOCK_META_BI[ticker] || STOCK_META_BI[ticker.replace(".KS", "").replace(".KQ", "")];
+  const pick = (b: BiStr) => b[lang] || b.ko;
+  if (raw) return {
+    checklist: raw.checklist.map(pick),
+    momentum: raw.momentum.map(m => ({ title: pick(m.title), detail: pick(m.detail), condition: pick(m.condition) })),
+  };
   return {
-    checklist: ["분기 실적 발표 확인", "경쟁사 대비 밸류에이션", "산업 성장률 전망", "규제 환경 변화"],
+    checklist: [t_static("defaultChecklist1", lang), t_static("defaultChecklist2", lang), t_static("defaultChecklist3", lang), t_static("defaultChecklist4", lang)],
     momentum: [
-      { title: "분기 실적 발표 예정", detail: "다음 분기 실적이 시장 기대치를 충족하는지가 핵심입니다", condition: "매출 성장률과 이익률이 전분기 대비 개선되어야 합니다" },
-      { title: "산업 트렌드 수혜", detail: "해당 산업의 구조적 성장이 이 종목의 실적으로 이어지고 있습니다", condition: "산업 성장률이 유지되고, 경쟁사 대비 점유율이 유지/확대되어야 합니다" },
+      { title: t_static("defaultMomentum1Title", lang), detail: t_static("defaultMomentum1Detail", lang), condition: t_static("defaultMomentum1Cond", lang) },
+      { title: t_static("defaultMomentum2Title", lang), detail: t_static("defaultMomentum2Detail", lang), condition: t_static("defaultMomentum2Cond", lang) },
     ],
   };
 }
@@ -375,13 +418,13 @@ function ElapsedTimer({ active }: { active: boolean }) {
 /* ── StockAnalysisCard ── */
 
 function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor: string }) {
-  const { t } = useLanguage();
+  const { t, lang } = useLanguage();
   const mob = useIsMobile();
   const [chartData, setChartData] = useState<ChartDataPoint[]>([]);
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [earnings, setEarnings] = useState<any>(null);
   const [patternData, setPatternData] = useState<any>(null);
-  const [prediction, setPrediction] = useState<any>(null);
+  const [_prediction, setPrediction] = useState<any>(null);
   const [moveReasons, setMoveReasons] = useState<any>(null);
   const [checklistLive, setChecklistLive] = useState<any>(null);
   const [newsAnalysis, setNewsAnalysis] = useState<any>(null);
@@ -579,9 +622,9 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
   }, [pick.ticker]);
 
   const latestPrice = chartData.length > 0 ? chartData[chartData.length - 1].close : null;
-  const chartVerdict = analyzeChart(analysis, chartData);
-  const fundVerdict = analyzeFundamentals(earnings, patternData, checklistLive);
-  const meta = getStockMeta(pick.ticker);
+  const chartVerdict = analyzeChart(analysis, chartData, t);
+  const fundVerdict = analyzeFundamentals(earnings, patternData, t);
+  const meta = getStockMeta(pick.ticker, lang);
 
   const isKRX = pick.ticker.endsWith(".KS") || pick.ticker.endsWith(".KQ");
   const currency = isKRX ? "₩" : "$";
@@ -609,10 +652,10 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
     return moveReasons.moves.find((m: any) => m.date === date) || null;
   }, [moveReasons]);
 
-  // Unified scoring: chart 40% + fundamentals 30% + prediction 30%
+  // Unified scoring — MUST match backend score_stock() formula:
+  //   chart 30% + checklist 45% + fundamentals 25%
   const chartScore100 = chartVerdict.score100;
   const fundScore100 = fundVerdict.score100;
-  const predScore100 = prediction?.overall_score != null ? Math.round(Math.max(0, Math.min(100, (prediction.overall_score + 100) / 2))) : null;
   const checklistScore100 = checklistLive?.summary?.score != null
     ? checklistLive.summary.score
     : (() => {
@@ -623,16 +666,15 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
         return Math.round(Math.max(0, Math.min(100, 50 + ((positives - negatives) / items.length) * 50)));
       })();
   const weightedParts = [
-    { score: chartScore100, weight: 0.3 },
+    { score: chartScore100, weight: 0.30 },
+    { score: checklistScore100, weight: 0.45 },
     { score: fundScore100, weight: 0.25 },
-    { score: checklistScore100, weight: 0.2 },
-    { score: predScore100, weight: 0.25 },
   ].filter((part) => part.score != null) as { score: number; weight: number }[];
   const totalWeight = weightedParts.reduce((sum, part) => sum + part.weight, 0);
   const overallScore100 = totalWeight > 0
-    ? Math.round(weightedParts.reduce((sum, part) => sum + part.score * part.weight, 0) / totalWeight)
+    ? Math.round(Math.max(5, Math.min(98, weightedParts.reduce((sum, part) => sum + part.score * part.weight, 0) / totalWeight)))
     : 50;
-  const overall = scoreToVerdict(overallScore100);
+  const overall = scoreToVerdict(overallScore100, t);
   // Use fast newsAnalysis endpoint data immediately; upgrade to checklistLive data when it arrives
   const momentumNotes = checklistLive?.summary?.momentum_notes?.length
     ? checklistLive.summary.momentum_notes
@@ -1134,7 +1176,7 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
               {checklistLive.summary.annual_financials?.periods?.length > 0 && (() => {
                 const fin = checklistLive.summary.annual_financials;
                 const periods = fin.periods;
-                const fmt = (v: number | null) => v == null ? "-" : v >= 10000 ? `${(v/10000).toFixed(1)}조` : `${Math.round(v).toLocaleString()}억`;
+                const fmt = (v: number | null) => v == null ? "-" : v >= 10000 ? `${(v/10000).toFixed(1)}${t("trillionUnit")}` : `${Math.round(v).toLocaleString()}${t("hundredMillionUnit")}`;
                 return (
                   <div>
                     <div className="flex items-center gap-2 mb-2 px-1">
@@ -1858,8 +1900,8 @@ function StockAnalysisCard({ pick, sectorColor }: { pick: StockPick; sectorColor
                   </div>
                 </div>
               ))}
-              {/* Show missing meta items as "pending" when live checklist has fewer items */}
-              {checklistLive?.checklist && (() => {
+              {/* Show missing meta items as "pending" — only for stocks with specific meta (not default fallback) */}
+              {checklistLive?.checklist && (STOCK_META_BI[pick.ticker] || STOCK_META_BI[pick.ticker.replace(".KS", "").replace(".KQ", "")]) && (() => {
                 const liveNames = new Set((checklistLive.checklist as any[]).map((c: any) => c.name?.toLowerCase()));
                 const missing = meta.checklist.filter((item) => !liveNames.has(item.toLowerCase()));
                 if (missing.length === 0) return null;

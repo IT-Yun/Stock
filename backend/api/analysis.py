@@ -1736,24 +1736,26 @@ TOP_PICK_NAME_MAP = _load_top_pick_name_map()
 
 # Ensure all TOP_PICK_SECTOR_MAP tickers have a name — fallback for tickers missing from sectors.json
 _FALLBACK_NAMES: dict[str, str] = {
-    "NVDA": "엔비디아", "TSM": "TSMC", "AVGO": "브로드컴",
+    # US stocks — English names
+    "NVDA": "NVIDIA", "TSM": "TSMC", "AVGO": "Broadcom",
+    "TSLA": "Tesla", "ISRG": "Intuitive Surgical",
+    "CEG": "Constellation Energy", "CCJ": "Cameco",
+    "CRWD": "CrowdStrike", "PANW": "Palo Alto Networks",
+    "FTNT": "Fortinet", "ZS": "Zscaler", "S": "SentinelOne",
+    "RKLB": "Rocket Lab", "LMT": "Lockheed Martin", "BA": "Boeing",
+    "CRSP": "CRISPR Therapeutics", "LLY": "Eli Lilly", "ILMN": "Illumina",
+    "IONQ": "IonQ", "GOOG": "Alphabet (Google)", "IBM": "IBM",
+    "RGTI": "Rigetti Computing", "MSFT": "Microsoft",
+    "BE": "Bloom Energy", "PLUG": "Plug Power", "ENPH": "Enphase Energy",
+    "BWXT": "BWX Technologies",
+    # KR stocks — Korean names
     "000660.KS": "SK하이닉스", "005930.KS": "삼성전자",
-    "TSLA": "테슬라", "ISRG": "인튜이티브서지컬",
-    "CEG": "컨스텔레이션에너지", "CCJ": "카메코",
-    "CRWD": "크라우드스트라이크", "PANW": "팔로알토네트웍스",
-    "FTNT": "포티넷", "ZS": "지스케일러", "S": "센티넬원",
-    "RKLB": "로켓랩", "LMT": "록히드마틴", "BA": "보잉",
-    "CRSP": "크리스퍼테라퓨틱스", "LLY": "일라이릴리", "ILMN": "일루미나",
     "207940.KS": "삼성바이오로직스", "068270.KS": "셀트리온",
-    "IONQ": "아이온큐", "GOOG": "구글(알파벳)", "IBM": "IBM",
-    "RGTI": "리게티컴퓨팅", "MSFT": "마이크로소프트",
-    "BE": "블룸에너지", "PLUG": "플러그파워", "ENPH": "엔페이즈에너지",
     "005380.KS": "현대자동차", "336260.KS": "두산퓨얼셀",
     "086520.KS": "에코프로", "247540.KS": "에코프로비엠",
     "373220.KS": "LG에너지솔루션", "006400.KS": "삼성SDI",
     "047810.KS": "한국항공우주", "012450.KS": "한화에어로스페이스",
     "267250.KS": "현대로보틱스", "034020.KS": "두산에너빌리티",
-    "BWXT": "BWX Technologies",
 }
 for _tk, _nm in _FALLBACK_NAMES.items():
     if _ticker_key(_tk) not in TOP_PICK_NAME_MAP:

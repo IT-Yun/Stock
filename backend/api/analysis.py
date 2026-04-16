@@ -242,8 +242,33 @@ def _classify_news_driver(title: str) -> str:
 
 def _build_stock_news_queries(ticker: str, info: dict | None = None, sector_id: str | None = None) -> list[str]:
     normalized = _ticker_key(ticker)
-    company_name = str((info or {}).get("shortName") or (info or {}).get("longName") or ticker).strip()
-    queries: list[str] = [company_name, normalized]
+    short_name = str((info or {}).get("shortName") or "").strip()
+    long_name = str((info or {}).get("longName") or "").strip()
+    company_name = short_name or long_name or ticker
+
+    # If shortName == ticker or is too short/generic, prefer longName or Korean name
+    bare_ticker = normalized.replace(".KS", "").replace(".KQ", "")
+    if company_name.upper() == bare_ticker.upper() or len(company_name) <= 5:
+        # shortName is just the ticker — try longName or fetch Korean name
+        if long_name and long_name.upper() != bare_ticker.upper():
+            company_name = long_name
+        else:
+            # Try Korean name from Naver/KRX
+            fetched = _fetch_stock_industry(ticker)
+            if fetched and fetched.get("name"):
+                company_name = fetched["name"]
+
+    is_krx = normalized.endswith(".KS") or normalized.endswith(".KQ")
+
+    queries: list[str] = [company_name]
+    # For KRX stocks, always search Korean name first — never bare English ticker
+    if is_krx:
+        queries.append(f"{company_name} 주가")
+    elif company_name.upper() != bare_ticker.upper():
+        # US stock with proper name — add ticker-based query too
+        queries.append(f"{bare_ticker} stock")
+    else:
+        queries.append(f"{bare_ticker} stock price")
 
     # Per-stock enriched news queries — covers all sector top picks
     _STOCK_NEWS_QUERIES = {
@@ -2024,13 +2049,20 @@ def _build_dynamic_checklist_sources(ticker: str, info: dict | None = None) -> l
     yf_sector = str(info.get("sector") or "").lower()
     name = str(info.get("shortName") or info.get("longName") or ticker)
 
+    # If name is just the ticker symbol, try to get a proper company name
+    bare = ticker.replace(".KS", "").replace(".KQ", "")
+    if name.upper() == bare.upper() or len(name) <= 5:
+        long = str(info.get("longName") or "").strip()
+        if long and long.upper() != bare.upper():
+            name = long
+
     if not industry_raw and not yf_sector:
         # yfinance failed — actively fetch from Naver/Yahoo
         fetched = _fetch_stock_industry(ticker)
         if fetched:
             industry_raw = str(fetched.get("industry") or "").lower()
             yf_sector = str(fetched.get("sector") or "").lower()
-            if fetched.get("name") and name == ticker:
+            if fetched.get("name") and (name == ticker or name.upper() == bare.upper() or len(name) <= 5):
                 name = fetched["name"]
             # Merge into info for downstream use
             if not info.get("industry"):

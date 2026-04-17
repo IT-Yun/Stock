@@ -147,7 +147,8 @@ async def add_member(
             sb.table("members").insert({"nickname": name, "role": "member"}).execute()
             return {"message": f"'{name}' 멤버 추가 완료"}
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"DB 저장 실패: {e}")
+            print(f"[MEMBERS] Supabase add failed, falling back to JSON: {e}")
+            # Fall through to JSON fallback
 
     data = _read_json()
     data["members"].append(name)
@@ -181,7 +182,8 @@ async def remove_member(
         except HTTPException:
             raise
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"DB 삭제 실패: {e}")
+            print(f"[MEMBERS] Supabase delete failed, falling back to JSON: {e}")
+            # Fall through to JSON fallback
 
     data = _read_json()
     original_len = len(data["members"])

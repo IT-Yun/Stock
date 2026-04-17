@@ -38,8 +38,8 @@ class AuthMiddleware:
         if not path.startswith("/api"):
             return await self.app(scope, receive, send)
 
-        # Login verification — allow without auth (user isn't logged in yet)
-        if path == "/api/members/verify":
+        # Login verification & visit recording — allow without auth
+        if path in ("/api/members/verify", "/api/members/visit"):
             return await self.app(scope, receive, send)
 
         # POST/PUT/DELETE on /api/ — check auth

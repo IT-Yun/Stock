@@ -1049,9 +1049,9 @@ export default function SectorMindMap() {
           <div className="absolute inset-2 rounded-full" style={{ border: "1px solid rgba(59,130,246,0.1)" }} />
           <Factory size={32} className="mb-1" style={{ color: "#60a5fa", filter: "drop-shadow(0 0 10px rgba(59,130,246,0.4))" }} strokeWidth={1.5} />
           <span className="text-[13px] font-bold text-center leading-tight text-gradient">
-            {t("futureGrowth")}
+            미래 성장
             <br />
-            {t("industry")}
+            산업
           </span>
         </div>
 

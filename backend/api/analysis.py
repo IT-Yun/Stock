@@ -11,7 +11,7 @@ from fastapi import APIRouter
 from bs4 import BeautifulSoup
 from pathlib import Path
 from models.schemas import AnalysisResult, TechnicalIndicators, CommodityPrice
-from services.stock_data import StockDataService, get_yf_info, get_yf_financials
+from services.stock_data import StockDataService, get_yf_info, get_yf_financials, frame_metadata
 from services.technical_analysis import TechnicalAnalysisService
 from services.commodity_data import CommodityDataService
 from services.news_crawler import NewsCrawlerService
@@ -4250,7 +4250,7 @@ def get_chart_data(ticker: str, period: str = "3mo") -> dict:
         stale = _load_disk_cached(cache_key, 1800, allow_stale=True)
         if stale is not None:
             return stale
-        return {"ticker": ticker, "data": []}
+        return {"ticker": ticker, "data": [], "metadata": frame_metadata(df)}
 
     close = df["Close"]
 
@@ -4302,7 +4302,7 @@ def get_chart_data(ticker: str, period: str = "3mo") -> dict:
             point[name] = round(float(v), 2) if not pd.isna(v) else None
         data.append(point)
 
-    result = {"ticker": ticker.upper(), "data": data}
+    result = {"ticker": ticker.upper(), "data": data, "metadata": frame_metadata(df)}
     _set_cached(cache_key, result)
     _save_disk_cached(cache_key, result)
     return result
@@ -7250,7 +7250,7 @@ def get_commodity_history(symbol: str, period: str = "6mo") -> dict:
     try:
         hist = StockDataService.get_stock_history(symbol, period=period)
         if hist.empty:
-            return {"symbol": symbol, "data": []}
+            return {"symbol": symbol, "data": [], "metadata": frame_metadata(hist)}
 
         data = []
         for idx, row in hist.iterrows():
@@ -7259,9 +7259,9 @@ def get_commodity_history(symbol: str, period: str = "6mo") -> dict:
                 "close": round(float(row["Close"]), 2),
                 "volume": int(row["Volume"]) if not pd.isna(row["Volume"]) else 0,
             })
-        return {"symbol": symbol, "data": data}
+        return {"symbol": symbol, "data": data, "metadata": frame_metadata(hist)}
     except Exception:
-        return {"symbol": symbol, "data": []}
+        return {"symbol": symbol, "data": [], "metadata": {"source": "unavailable", "is_stale": True}}
 
 
 @router.get("/analysis/rankings/top-ranked")

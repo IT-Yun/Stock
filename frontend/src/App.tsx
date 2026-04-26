@@ -1,33 +1,13 @@
 import { Suspense, lazy } from "react";
-import { Navigate, Route, Routes, useParams } from "react-router-dom";
+import { Navigate, Route, Routes } from "react-router-dom";
 import Layout from "./components/Layout";
 import LoginGate, { isAdmin } from "./components/LoginGate";
-import { SECTORS } from "./data/sectors";
 
-const SectorMindMap = lazy(() => import("./components/SectorMindMap"));
-const SectorList = lazy(() => import("./components/SectorList"));
-const SectorDetailPage = lazy(() => import("./components/SectorDetailPage"));
 const AdminPanel = lazy(() => import("./components/AdminPanel"));
-
-function StockRedirect() {
-  const { ticker } = useParams<{ ticker: string }>();
-  const decoded = ticker ?? "";
-  const sector = SECTORS.find((s) => s.picks.some((p) => p.ticker === decoded));
-
-  if (sector) {
-    return <Navigate to={`/sector/${sector.id}?stock=${encodeURIComponent(decoded)}`} replace />;
-  }
-
-  // For stocks not in any sector's top picks, use "dynamic" mode with a fallback sector ID
-  const flag = decoded.endsWith(".KS") || decoded.endsWith(".KQ") ? "KR" : "US";
-  const params = new URLSearchParams({
-    stock: decoded,
-    name: decoded,
-    flag,
-    dynamic: "1",
-  });
-  return <Navigate to={`/sector/_dynamic?${params.toString()}`} replace />;
-}
+const MacroCommodities = lazy(() => import("./components/macro/Commodities"));
+const MacroIndicators = lazy(() => import("./components/macro/Indicators"));
+const MacroOutlook = lazy(() => import("./components/macro/Outlook"));
+const MacroValueChain = lazy(() => import("./components/macro/ValueChain"));
 
 export default function App() {
   return (
@@ -46,10 +26,18 @@ export default function App() {
             }
           >
             <Routes>
-              <Route path="/" element={<SectorMindMap />} />
-              <Route path="/list" element={<SectorList />} />
-              <Route path="/sector/:id" element={<SectorDetailPage />} />
-              <Route path="/stock/:ticker" element={<StockRedirect />} />
+              <Route path="/" element={<Navigate to="/commodities" replace />} />
+              <Route path="/commodities" element={<MacroCommodities />} />
+              <Route path="/indicators" element={<MacroIndicators />} />
+              <Route path="/outlook" element={<MacroOutlook />} />
+              <Route path="/value-chain" element={<MacroValueChain />} />
+              {/* 구버전 URL backward-compat */}
+              <Route path="/macro" element={<Navigate to="/commodities" replace />} />
+              <Route path="/macro/commodities" element={<Navigate to="/commodities" replace />} />
+              <Route path="/macro/indicators" element={<Navigate to="/indicators" replace />} />
+              <Route path="/macro/outlook" element={<Navigate to="/outlook" replace />} />
+              <Route path="/macro/value-chain" element={<Navigate to="/value-chain" replace />} />
+              <Route path="*" element={<Navigate to="/commodities" replace />} />
             </Routes>
           </Suspense>
         </Layout>

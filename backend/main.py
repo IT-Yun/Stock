@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 from config import settings
-from api import sectors_router, analysis_router, news_router, members_router
+from api import sectors_router, analysis_router, news_router, members_router, macro_router
 from api.members import get_all_allowed, _normalize
 
 
@@ -202,6 +202,21 @@ def _run_daily_refresh():
         except Exception as e:
             print(f"[DAILY-REFRESH] Top-ranked failed: {e}")
 
+        # 5. Commodity regime history (5y percentile + regime persistence + daily report)
+        try:
+            from services.commodity_regime_history import run_daily_update
+            regime_result = run_daily_update(verbose=False)
+            _last_daily_refresh["regime_updated"] = regime_result.get("updated_count", 0)
+            _last_daily_refresh["regime_changes"] = regime_result.get("regime_changes", 0)
+            _last_daily_refresh["regime_report"] = regime_result.get("daily_report")
+            print(
+                f"[DAILY-REFRESH] Commodity regime: {regime_result.get('updated_count', 0)} updated, "
+                f"{regime_result.get('regime_changes', 0)} regime changes, "
+                f"{regime_result.get('errors_count', 0)} errors"
+            )
+        except Exception as e:
+            print(f"[DAILY-REFRESH] Commodity regime failed: {e}")
+
         _last_daily_refresh["stocks_updated"] = updated
         _last_daily_refresh["errors"] = errors
         _last_daily_refresh["status"] = "done"
@@ -245,6 +260,7 @@ app.include_router(sectors_router)
 app.include_router(analysis_router)
 app.include_router(news_router)
 app.include_router(members_router)
+app.include_router(macro_router)
 
 
 @app.get("/health")

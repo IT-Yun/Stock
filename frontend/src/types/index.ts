@@ -8,6 +8,11 @@ export interface Stock {
   change?: number;
   volume?: number;
   marketCap?: number;
+  source?: string | null;
+  fetched_at?: string | null;
+  data_as_of?: string | null;
+  is_stale?: boolean;
+  cache_ttl_sec?: number | null;
 }
 
 export interface Sector {
@@ -84,4 +89,9 @@ export interface CommodityPrice {
   change?: number;
   changePercent?: number;
   unit?: string;
+  source?: string | null;
+  fetched_at?: string | null;
+  data_as_of?: string | null;
+  is_stale?: boolean;
+  cache_ttl_sec?: number | null;
 }

@@ -1,6 +1,6 @@
 import time
 from models.schemas import CommodityPrice
-from services.stock_data import StockDataService
+from services.stock_data import StockDataService, frame_metadata
 
 
 COMMODITIES = {
@@ -39,6 +39,7 @@ def _fetch_single(name: str, info: dict) -> CommodityPrice | None:
         hist = StockDataService.get_stock_history(info["symbol"], period="5d")
         if hist.empty:
             return None
+        metadata = frame_metadata(hist)
 
         current_price = float(hist["Close"].iloc[-1])
         if len(hist) >= 2:
@@ -53,6 +54,11 @@ def _fetch_single(name: str, info: dict) -> CommodityPrice | None:
             price=round(current_price, 2),
             change_percent=round(change_percent, 2),
             unit=info["unit"],
+            source=metadata.get("source"),
+            fetched_at=metadata.get("fetched_at"),
+            data_as_of=metadata.get("data_as_of"),
+            is_stale=metadata.get("is_stale", False),
+            cache_ttl_sec=metadata.get("cache_ttl_sec"),
         )
         _commodity_cache[name] = (time.time(), result)
         return result

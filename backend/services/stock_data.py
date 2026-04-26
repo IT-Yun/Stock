@@ -27,6 +27,63 @@ _CACHE_DIR = Path(settings.CACHE_DIR) if settings.CACHE_DIR else (_render_cache_
 _CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _now_iso() -> str:
+    return datetime.now().astimezone().isoformat()
+
+
+def _last_index_iso(df: pd.DataFrame) -> str | None:
+    if df.empty:
+        return None
+    idx = df.index[-1]
+    if hasattr(idx, "isoformat"):
+        return idx.isoformat()
+    return str(idx)
+
+
+def _with_info_meta(
+    data: dict,
+    *,
+    source: str,
+    fetched_at: str | None = None,
+    data_as_of: str | None = None,
+    is_stale: bool = False,
+) -> dict:
+    result = dict(data)
+    result.setdefault("source", source)
+    result.setdefault("fetched_at", fetched_at or _now_iso())
+    if data_as_of is not None:
+        result.setdefault("data_as_of", data_as_of)
+    result["is_stale"] = is_stale
+    result["cache_ttl_sec"] = CACHE_TTL
+    return result
+
+
+def _set_frame_meta(
+    df: pd.DataFrame,
+    *,
+    source: str,
+    fetched_at: str | None = None,
+    is_stale: bool = False,
+) -> pd.DataFrame:
+    df.attrs["source"] = source
+    df.attrs["fetched_at"] = fetched_at or _now_iso()
+    df.attrs["data_as_of"] = _last_index_iso(df)
+    df.attrs["is_stale"] = is_stale
+    df.attrs["cache_ttl_sec"] = CACHE_TTL
+    return df
+
+
+def frame_metadata(df: pd.DataFrame) -> dict:
+    """Return compact source/freshness metadata for API responses."""
+    return {
+        "source": df.attrs.get("source", "unknown"),
+        "fetched_at": df.attrs.get("fetched_at"),
+        "data_as_of": df.attrs.get("data_as_of", _last_index_iso(df)),
+        "is_stale": bool(df.attrs.get("is_stale", False)),
+        "cache_ttl_sec": df.attrs.get("cache_ttl_sec", CACHE_TTL),
+    }
+
+
 def _get_cached(key: str):
     if key in _cache:
         ts, data = _cache[key]
@@ -45,8 +102,10 @@ _yf_session = None
 try:
     from curl_cffi.requests import Session as CffiSession
     _yf_session = CffiSession(impersonate="chrome")
-    # Patch yfinance to use curl_cffi session globally
-    yf.utils.get_json = lambda *a, **kw: yf.utils.get_json(*a, **{**kw, "session": _yf_session})
+    # Patch yfinance to use curl_cffi session globally where supported.
+    _original_yf_get_json = getattr(yf.utils, "get_json", None)
+    if _original_yf_get_json is not None:
+        yf.utils.get_json = lambda *a, **kw: _original_yf_get_json(*a, **{**kw, "session": _yf_session})
 except (ImportError, Exception):
     pass
 
@@ -212,7 +271,22 @@ class StockDataService:
             return cached
 
         disk_cached = _load_disk_json(f"info:{ticker}")
-        if disk_cached is not None:
+        disk_cache_source = str((disk_cached or {}).get("source", ""))
+        prefer_fdr = FDR_AVAILABLE and StockDataService._is_krx(ticker)
+        use_disk_info = (
+            disk_cached is not None
+            and disk_cached.get("source")
+            and disk_cached.get("data_as_of")
+            and (not prefer_fdr or disk_cache_source.startswith("FinanceDataReader"))
+        )
+        if use_disk_info:
+            disk_cached = _with_info_meta(
+                disk_cached,
+                source=disk_cached.get("source", "disk-cache"),
+                fetched_at=disk_cached.get("fetched_at"),
+                data_as_of=disk_cached.get("data_as_of"),
+                is_stale=False,
+            )
             _set_cached(f"info:{ticker}", disk_cached)
             return disk_cached
 
@@ -238,6 +312,11 @@ class StockDataService:
                         "price": round(current_price, 2),
                         "change_percent": round(change_pct, 2),
                     }
+                    result = _with_info_meta(
+                        result,
+                        source="FinanceDataReader/KRX",
+                        data_as_of=_last_index_iso(df),
+                    )
                     _set_cached(f"info:{ticker}", result)
                     _save_disk_json(f"info:{ticker}", result)
                     return result
@@ -270,12 +349,30 @@ class StockDataService:
                 "price": round(current_price, 2),
                 "change_percent": round(change_percent, 2),
             }
+            result = _with_info_meta(
+                result,
+                source="Yahoo Finance/yfinance",
+                data_as_of=_last_index_iso(hist),
+            )
         except Exception:
             stale = _load_disk_json(f"info:{ticker}", allow_stale=True)
             if stale is not None:
+                stale = _with_info_meta(
+                    stale,
+                    source=stale.get("source", "stale-disk-cache"),
+                    fetched_at=stale.get("fetched_at"),
+                    data_as_of=stale.get("data_as_of"),
+                    is_stale=True,
+                )
                 _set_cached(f"info:{ticker}", stale)
                 return stale
 
+        result = _with_info_meta(
+            result,
+            source=result.get("source", "unavailable"),
+            data_as_of=result.get("data_as_of"),
+            is_stale=result.get("source") is None,
+        )
         _set_cached(f"info:{ticker}", result)
         _save_disk_json(f"info:{ticker}", result)
         return result
@@ -289,7 +386,9 @@ class StockDataService:
             return cached
 
         disk_cached = _load_disk_frame(cache_key)
-        if disk_cached is not None:
+        disk_source = str(disk_cached.attrs.get("source", "")) if disk_cached is not None else ""
+        prefer_fdr = FDR_AVAILABLE and StockDataService._is_krx(ticker)
+        if disk_cached is not None and disk_source and (not prefer_fdr or disk_source.startswith("FinanceDataReader")):
             _set_cached(cache_key, disk_cached)
             return disk_cached
 
@@ -302,6 +401,7 @@ class StockDataService:
                 start = end - timedelta(days=period_days)
                 df = fdr.DataReader(code, start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"))
                 if not df.empty:
+                    _set_frame_meta(df, source="FinanceDataReader/KRX")
                     _set_cached(cache_key, df)
                     _save_disk_frame(cache_key, df)
                     return df
@@ -313,6 +413,8 @@ class StockDataService:
             with limit_yfinance():
                 stock = _make_yf_ticker(ticker)
                 hist = stock.history(period=period)
+            if not hist.empty:
+                _set_frame_meta(hist, source="Yahoo Finance/yfinance")
             _set_cached(cache_key, hist)
             if not hist.empty:
                 _save_disk_frame(cache_key, hist)
@@ -320,9 +422,16 @@ class StockDataService:
         except Exception:
             stale = _load_disk_frame(cache_key, allow_stale=True)
             if stale is not None:
+                _set_frame_meta(
+                    stale,
+                    source=stale.attrs.get("source", "stale-disk-cache"),
+                    fetched_at=stale.attrs.get("fetched_at"),
+                    is_stale=True,
+                )
                 _set_cached(cache_key, stale)
                 return stale
             empty = pd.DataFrame()
+            _set_frame_meta(empty, source="unavailable", is_stale=True)
             _set_cached(cache_key, empty)
             return empty
 

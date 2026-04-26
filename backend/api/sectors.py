@@ -32,6 +32,11 @@ def list_sectors() -> list[Sector]:
                 sector=st.get("sector", s["name"]),
                 price=st.get("price", 0.0),
                 change_percent=st.get("change_percent", 0.0),
+                source=st.get("source"),
+                fetched_at=st.get("fetched_at"),
+                data_as_of=st.get("data_as_of"),
+                is_stale=st.get("is_stale", False),
+                cache_ttl_sec=st.get("cache_ttl_sec"),
             )
             for st in s.get("stocks", [])
         ]
@@ -54,6 +59,11 @@ def get_sector_stocks(sector_name: str) -> list[Stock]:
             sector=st.get("sector", sector_name),
             price=st.get("price", 0.0),
             change_percent=st.get("change_percent", 0.0),
+            source=st.get("source"),
+            fetched_at=st.get("fetched_at"),
+            data_as_of=st.get("data_as_of"),
+            is_stale=st.get("is_stale", False),
+            cache_ttl_sec=st.get("cache_ttl_sec"),
         )
         for st in stocks_data
     ]

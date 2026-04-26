@@ -1,10 +1,8 @@
-import { Link, useLocation } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { LogOut, Globe } from "lucide-react";
 import { useLanguage } from "@/i18n";
 
 export default function Layout({ children }: { children: React.ReactNode }) {
-  const location = useLocation();
-  const isFullBleed = location.pathname === "/" || location.pathname.startsWith("/sector/");
   const nickname = localStorage.getItem("stock-nickname") || "";
   const { lang, toggleLang, t } = useLanguage();
 
@@ -44,7 +42,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         </div>
       </header>
 
-      <main className={`flex-1 overflow-hidden ${isFullBleed ? "" : "overflow-y-auto p-3 sm:p-4 lg:p-6"}`}>
+      <main className="flex-1 overflow-hidden">
         {children}
       </main>
     </div>

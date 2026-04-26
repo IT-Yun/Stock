@@ -29,7 +29,10 @@ function readResponseCache<T>(key: string): T | null {
     if (!raw) return null;
     const parsed = JSON.parse(raw) as { ts: number; data: T };
     if (!parsed || typeof parsed.ts !== "number") return null;
-    if (Date.now() - parsed.ts > responseCacheTtlMs) return parsed.data ?? null;
+    if (Date.now() - parsed.ts > responseCacheTtlMs) {
+      localStorage.removeItem(`${responseCachePrefix}${key}`);
+      return null;
+    }
     return parsed.data ?? null;
   } catch {
     return null;
@@ -123,6 +126,13 @@ type ChartApiResponse = {
   ticker: string;
   data: ChartDataPoint[];
   indicators?: Record<string, (number | null)[]>;
+  metadata?: {
+    source?: string | null;
+    fetched_at?: string | null;
+    data_as_of?: string | null;
+    is_stale?: boolean;
+    cache_ttl_sec?: number | null;
+  };
 };
 
 export async function fetchSectors(): Promise<Sector[]> {

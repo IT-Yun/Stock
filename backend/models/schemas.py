@@ -7,6 +7,11 @@ class Stock(BaseModel):
     sector: str
     price: float
     change_percent: float
+    source: str | None = None
+    fetched_at: str | None = None
+    data_as_of: str | None = None
+    is_stale: bool = False
+    cache_ttl_sec: int | None = None
 
 
 class Sector(BaseModel):
@@ -42,6 +47,11 @@ class CommodityPrice(BaseModel):
     price: float
     change_percent: float
     unit: str
+    source: str | None = None
+    fetched_at: str | None = None
+    data_as_of: str | None = None
+    is_stale: bool = False
+    cache_ttl_sec: int | None = None
 
 
 class AnalysisResult(BaseModel):

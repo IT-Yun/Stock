@@ -90,3 +90,18 @@ Stock Analysis 프로젝트의 지식 베이스 목차.
 UI/UX 디자인 결정 기록 (before/after 스크린샷 포함)
 
 > 아직 페이지 없음. `wiki/dev/design/` 에 추가 예정.
+
+## Research / Cross-check (애널리스트 cross-check)
+
+웹 공개 컨센서스 + sell-side 인용으로 자체 매핑 검증. 80+ 종목 9개 섹터 — broker bias 차단 룰 적용. [워크플로우 가이드](research/CLAUDE.md)
+
+- [[research/index|cross-check 통합 인덱스]] — 9개 섹터 신뢰도 + critical 수정 항목 + 추가/제거 후보 + 다음 단계
+- [[ai-semi|AI/반도체]] — 솔브레인 NVDA leading 방향 OK, 시차 추가 검증
+- [[robotics|로봇]] — ⚠️ 에스비비테크 Optimus 공급 미확인, 종목코드 오기
+- [[smr-nuclear|SMR/원자력]] — OKLO≠NuScale-SMR, CEG·VST 누락
+- [[cybersec|사이버보안]] — wiki claim 4건 전부 검증 통과 ✅
+- [[aerospace|우주항공/방산]] — DSCA → K-방산 G2G 직판매라 적용 안 됨
+- [[biotech|생명공학]] — 펩트론 평가기간 연장, 알테오젠/에스티팜 격상
+- [[quantum|양자컴퓨팅]] — 헬륨-3 superconducting 한정, IONQ trapped-ion 무관
+- [[battery|이차전지]] — SKIET → 더블유씨피로 hidden alpha 라벨 교체
+- [[hydrogen-energy|수소/에너지]] — PLUG/BLDP 컨센 망가짐, 효성중공업·S-Oil 분류 의심

@@ -10,6 +10,10 @@ tags: [log, changelog]
 
 | 날짜 | 변경 내용 | 관련 페이지 |
 |------|----------|------------|
+| 2026-04-26 | **9개 섹터 cross-check 통합 완료 + value chain critical 패치** — Hidden Alpha 재정렬: 에스비비테크 "진짜 알파" → "thematic, Optimus 공급 미확인"으로 격하, 펩트론 코드 217340→087010 정정 + "선명한 알파" → "옵션 가치" 톤다운 (LLY 본계약 미체결 평가기간 연장), SKIET hidden alpha 회수 → 더블유씨피로 교체 (FEOC base film 면제 후), 알테오젠/에스티팜/삼성바이오 격상, CEG·VST(원전 운용사) 신규. backend `_HIDDEN_ALPHA_TOP` + wiki/macro/04-value-chain.md 동시 패치 | [[research/index]], 04-value-chain, backend/api/macro.py |
+| 2026-04-26 | **wiki/research/ 신규 폴더 + 9개 섹터 cross-check 작성** — AI/반도체·로봇·SMR/원자력·사이버보안·우주항공/방산·생명공학·양자컴퓨팅·이차전지·수소/에너지. 9개 agent 병렬 실행, 80+종목 공개 컨센서스 + sell-side 인용으로 자체 매핑 검증 | [[research/index]], wiki/research/cross-check/* |
+| 2026-04-26 | **wiki/research/CLAUDE.md 작성** — 애널리스트 리포트 ingest 워크플로우. PDF 수집 (raw/research/) → 사실/의견 분리 추출 → 사업구조 검증 → 월별 누적. broker bias 차단 룰 명시 | wiki/research/CLAUDE.md |
+| 2026-04-26 | **Cybersecurity 섹터 컨센서스 교차 검증 작성** — CRWD/PANW/FTNT/ZS/S/OKTA/NET + KR 안랩·이글루·윈스·시큐브 11종 애널리스트 TP. CRWD outage 회복(Gross retention 97%, FY26 ARR $5.25B) + PANW XSIAM AI ARR $545M(+2.5x) 매출화 입증 + KR structural underperform 확정 | [[cybersec]], index.md |
 | 2026-04-26 | **원자재 Regime Phase A 구현 완료** — `backend/services/commodity_regime_history.py` (5년 일봉 캐시 + 25개 항목 regime 분류 + state 영속화 + 일일/주간 리포트). 기존 `_run_daily_refresh` step 5에 통합되어 매일 KST 06:00 자동 실행. 첫 실행 25/25 성공 → `Output/reports/commodity-regime-2026-04-26.md` | `commodity_regime_history.py`, [[05-regime-scoring]] |
 | 2026-04-26 | **Phase B 워크플로우 가이드 작성** — `wiki/macro/regime-causes/CLAUDE.md`. regime 변화 감지 시 24시간 내 사실/원인분류(Structural/Transient)/시나리오/종목매핑(사업구조검증)/추천 순으로 누적 | `regime-causes/CLAUDE.md` |
 | 2026-04-26 | **원자재 Regime 점수화 v1 (locked) 작성** — Phase A 자동화 대상 정의 + Phase B 수동 hidden bottleneck 워크플로우 + 6 regime 라벨 + 추천 매트릭스(Regime × Cause) + false signal 가드레일. 기존 `macro_commodity.py` 단기 점수 위에 history 레이어로 얹힘 | [[05-regime-scoring]], index.md |

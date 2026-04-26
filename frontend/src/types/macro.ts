@@ -211,18 +211,28 @@ export interface OutlookResponse {
   policy_alerts: string[];
 }
 
+export interface ValueChainPlayerKR {
+  name: string;
+  ticker: string;
+}
+
 export interface ValueChainTier {
   level: 0 | 1 | 2 | 3 | 4 | 5;
   name: string;
   players: string[];
+  players_kr?: ValueChainPlayerKR[];
+  players_us?: string[];
   is_korean_alpha?: boolean;
 }
 
 export interface ValueChainSector {
   sector_id: string;
+  sector_no?: number;
   sector_name: string;
   tiers: ValueChainTier[];
   hidden_alpha: string;
+  mermaid?: string;
+  wiki_section_anchor?: string;
 }
 
 export interface HiddenAlphaItem {
@@ -233,9 +243,10 @@ export interface HiddenAlphaItem {
 
 export interface ValueChainResponse {
   status: string;
+  source?: string;
   total_sectors: number;
-  total_kr_stocks: string;
-  total_us_stocks: string;
+  total_kr_stocks: number | string;
+  total_us_stocks: number | string;
   sectors: ValueChainSector[];
   hidden_alpha_top: HiddenAlphaItem[];
   warnings: string[];

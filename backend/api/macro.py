@@ -23,6 +23,7 @@ from services.commodity_regime_history import (
     load_state as load_regime_state,
     RECOMMENDATION_MATRIX as REGIME_RECOMMENDATION,
 )
+from services.value_chain_parser import parse_value_chain
 
 router = APIRouter(prefix="/api/macro", tags=["macro"])
 
@@ -528,19 +529,27 @@ _HIDDEN_ALPHA_TOP = [
 
 @router.get("/value-chain")
 async def get_value_chain(sector_id: str | None = None) -> dict[str, Any]:
-    """27섹터 × Tier 0~5 Value Chain. wiki/macro/04-value-chain.md 기반."""
-    items = _VALUE_CHAIN_FEATURED
+    """27섹터 × Tier 0~5 Value Chain. wiki/macro/04-value-chain.md를 런타임 파싱하여 노출.
+
+    각 섹터: tiers (Mermaid에서 추출한 KR/US 종목 매핑) + hidden_alpha + raw mermaid 다이어그램.
+    """
+    parsed = parse_value_chain()
     if sector_id:
-        items = [s for s in _VALUE_CHAIN_FEATURED if s["sector_id"] == sector_id]
+        parsed = [s for s in parsed if s["sector_id"] == sector_id]
+
+    total_kr = sum(sum(len(t["players_kr"]) for t in s["tiers"]) for s in parsed)
+    total_us = sum(sum(len(t["players_us"]) for t in s["tiers"]) for s in parsed)
+
     return {
         "status": "mapped",
-        "total_sectors": 27,
-        "total_kr_stocks": "360+",
-        "total_us_stocks": "100+",
-        "sectors": items,
+        "source": "wiki/macro/04-value-chain.md (parsed)",
+        "total_sectors": len(parsed),
+        "total_kr_stocks": total_kr,
+        "total_us_stocks": total_us,
+        "sectors": parsed,
         "hidden_alpha_top": _HIDDEN_ALPHA_TOP,
         "warnings": [
-            "양자컴퓨팅 — 한국 직접 알파 부족 (5개 indirect만), 억지 매핑 회피",
+            "Mermaid 다이어그램 파싱 기반 — 일부 종목명·역할 텍스트는 wiki 원문 참조 권장 (/api/macro/page/value-chain)",
         ],
     }
 

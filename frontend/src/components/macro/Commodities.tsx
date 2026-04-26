@@ -4,6 +4,58 @@ import MacroLayout from "./MacroLayout";
 import ChartView from "@/components/ChartView";
 import { fetchCommodities, fetchRegime } from "@/api/macro";
 import type { CommoditiesResponse, CommodityFeedItem, RegimeItem, RegimeLabel, RegimeResponse } from "@/types/macro";
+import Sparkline from "./Sparkline";
+
+// 카테고리 → 가장 영향을 받는 섹터 매핑 (wiki/macro/01-commodities.md 기반)
+const CATEGORY_TO_SECTORS: Record<string, { sector: string; effect: string }[]> = {
+  "에너지": [
+    { sector: "수소/에너지", effect: "정유·LNG 마진" },
+    { sector: "우주항공/방산", effect: "지정학 동반 발주" },
+    { sector: "조선", effect: "LNG선·VLCC 발주" },
+  ],
+  "산업금속": [
+    { sector: "AI/반도체", effect: "구리·은 = 데이터센터 인프라" },
+    { sector: "이차전지", effect: "구리·니켈·알루미늄" },
+    { sector: "전기차 완성차", effect: "구리·알루미늄 차체" },
+    { sector: "조선", effect: "철강 후판" },
+    { sector: "건설/건자재", effect: "철근·구리" },
+  ],
+  "귀금속": [
+    { sector: "AI/반도체", effect: "은 = 본딩와이어, 백금/팔라듐 = 촉매" },
+    { sector: "전기차 완성차", effect: "팔라듐·백금 = 자동차 촉매" },
+    { sector: "수소/에너지", effect: "백금·이리듐 = 전해조 촉매" },
+  ],
+  "희소금속": [
+    { sector: "이차전지", effect: "리튬·코발트·망간 = 양극재" },
+    { sector: "EV 소재/부품", effect: "리튬·흑연·니켈" },
+    { sector: "AI/반도체", effect: "갈륨·게르마늄 = 화합물반도체" },
+    { sector: "수소/에너지", effect: "이리듐 = PEM 전해조" },
+    { sector: "양자컴퓨팅", effect: "헬륨-3 = dilution refrigerator" },
+  ],
+  "반도체 가스": [
+    { sector: "AI/반도체", effect: "네온·크립톤·크세논 = EUV/DUV 노광" },
+    { sector: "디스플레이", effect: "특수가스 = OLED 증착" },
+  ],
+  "양자/방산 특수재": [
+    { sector: "양자컴퓨팅", effect: "헬륨-3·이리듐 = 핵심 병목" },
+    { sector: "우주항공/방산", effect: "티타늄 = 항공기 동체" },
+  ],
+  "농산물": [
+    { sector: "음식료", effect: "곡물·설탕·코코아 원가" },
+    { sector: "화장품", effect: "면화·코코아 = 일부 ODM" },
+  ],
+  "화학원료": [
+    { sector: "이차전지", effect: "황산·NaOH = 전해질 가공" },
+    { sector: "AI/반도체", effect: "고순도 인산 = HBM 식각" },
+  ],
+  "바이오 원료": [
+    { sector: "생명공학", effect: "GLP-1 펩타이드 등 CDMO 원료" },
+    { sector: "의료기기/미용", effect: "필러·톡신 원료" },
+  ],
+  "매크로신호": [
+    { sector: "전체 섹터", effect: "위험선호도 측정 (구리/금, 금/은 비율)" },
+  ],
+};
 
 const BUY_ACTIONS = new Set(["분할 매수 관심", "눌림 매수 후보"]);
 const SELL_ACTIONS = new Set(["매도·회피", "추격 금지"]);
@@ -32,6 +84,12 @@ export default function Commodities() {
       fetchRegime().then(setRegime).catch((e) => console.error("regime", e)),
     ]).finally(() => setLoading(false));
   }, []);
+
+  const regimeMap = useMemo(() => {
+    const map = new Map<string, RegimeItem>();
+    regime?.items.forEach((it) => map.set(it.id, it));
+    return map;
+  }, [regime]);
 
   const matrix = useMemo(() => {
     const feed = data?.feed ?? [];
@@ -106,6 +164,17 @@ export default function Commodities() {
           onSelect={setSelected}
         />
       </section>
+
+      <AllCommoditiesSection
+        feed={data.feed}
+        regimeMap={regimeMap}
+        onSelect={setSelected}
+      />
+
+      <SectorImpactSection
+        feed={data.feed}
+        onSelect={setSelected}
+      />
 
       {selected && <CommodityModal item={selected} onClose={() => setSelected(null)} />}
     </MacroLayout>
@@ -265,6 +334,198 @@ function xPriority(item: CommodityFeedItem) {
   if (item.is_multi_month_uptrend) return 3;
   if (item.is_plunge) return 2;
   return 1;
+}
+
+// ─────────────────────────────────────────────
+// 전체 원자재 섹션 (53개 모두 + 카테고리별 그룹 + 인라인 차트)
+// ─────────────────────────────────────────────
+function AllCommoditiesSection({
+  feed,
+  regimeMap,
+  onSelect,
+}: {
+  feed: CommodityFeedItem[];
+  regimeMap: Map<string, RegimeItem>;
+  onSelect: (item: CommodityFeedItem) => void;
+}) {
+  const grouped = useMemo(() => {
+    const map = new Map<string, CommodityFeedItem[]>();
+    feed.forEach((item) => {
+      const key = item.category || "기타";
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(item);
+    });
+    return Array.from(map.entries());
+  }, [feed]);
+
+  return (
+    <section className="mt-6">
+      <header className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <BarChart3 size={18} className="text-sky-300" />
+          <h3 className="text-sm font-semibold text-slate-200">전체 원자재 ({feed.length}개)</h3>
+          <span className="text-xs text-slate-400">카테고리별 그룹 · 클릭 시 상세 모달</span>
+        </div>
+      </header>
+
+      <div className="space-y-4">
+        {grouped.map(([category, items]) => (
+          <div key={category}>
+            <h4 className="text-xs font-semibold text-slate-300 mb-2 flex items-center gap-2">
+              <span className="text-slate-100">{category}</span>
+              <span className="text-slate-500">({items.length})</span>
+            </h4>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
+              {items.map((item) => (
+                <CommodityRowCard
+                  key={item.id}
+                  item={item}
+                  regime={regimeMap.get(item.id)}
+                  onClick={() => onSelect(item)}
+                />
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function CommodityRowCard({
+  item,
+  regime,
+  onClick,
+}: {
+  item: CommodityFeedItem;
+  regime?: RegimeItem;
+  onClick: () => void;
+}) {
+  const change = item.change_pct_60d ?? item.change_pct_20d ?? item.change_pct_5d ?? 0;
+  const changeColor = change >= 0 ? "text-emerald-400" : "text-rose-400";
+  const isHidden = item.is_hidden_bottleneck;
+  const regimeStyle = regime ? REGIME_STYLE[regime.current_regime] : null;
+
+  return (
+    <button
+      onClick={onClick}
+      className="text-left rounded-lg border border-slate-800 bg-slate-950/40 p-2.5 hover:border-slate-600 hover:bg-slate-900/50 transition group"
+    >
+      <div className="flex items-start justify-between gap-2 mb-1.5">
+        <div className="min-w-0 flex-1">
+          <div className="text-[13px] font-medium text-slate-200 truncate">{item.name}</div>
+          <div className="text-[10px] text-slate-500 mt-0.5 flex items-center gap-1.5 flex-wrap">
+            <span>{item.unit}</span>
+            {item.ticker && <span className="font-mono text-slate-600">{item.ticker}</span>}
+            {isHidden && <span className="text-amber-500" title="시장 저평가 hidden bottleneck">★</span>}
+            {item.is_proxy && <span className="text-slate-600" title="ETF/proxy 데이터">proxy</span>}
+            {regimeStyle && (
+              <span className={`px-1 rounded text-[9px] font-semibold ${regimeStyle.bg} ${regimeStyle.text}`}>
+                {regimeStyle.label}
+              </span>
+            )}
+          </div>
+        </div>
+        <div className="text-right shrink-0">
+          <div className={`text-xs font-semibold ${changeColor}`}>
+            {change >= 0 ? "+" : ""}{change.toFixed(1)}%
+          </div>
+          <div className="text-[9px] text-slate-500">60d</div>
+        </div>
+      </div>
+      <div className="flex items-end justify-between gap-2">
+        <div className="text-[10px] text-slate-500">
+          {item.price ? (
+            <>가격 <span className="text-slate-300 font-mono">{item.price.toLocaleString(undefined, { maximumFractionDigits: 4 })}</span></>
+          ) : (
+            <span className="text-slate-600">가격 미수집</span>
+          )}
+        </div>
+        <Sparkline ticker={item.ticker} width={100} height={28} period="3mo" />
+      </div>
+    </button>
+  );
+}
+
+// ─────────────────────────────────────────────
+// 섹터별 영향 섹션 (원자재 → 어떤 섹터에 영향)
+// ─────────────────────────────────────────────
+function SectorImpactSection({
+  feed,
+  onSelect,
+}: {
+  feed: CommodityFeedItem[];
+  onSelect: (item: CommodityFeedItem) => void;
+}) {
+  // 섹터 → 그 섹터에 영향 주는 원자재들 매핑
+  const sectorMap = useMemo(() => {
+    const map = new Map<string, { effect: string; commodities: CommodityFeedItem[] }>();
+    feed.forEach((item) => {
+      const cat = item.category || "기타";
+      const sectors = CATEGORY_TO_SECTORS[cat] ?? [];
+      sectors.forEach(({ sector, effect }) => {
+        if (!map.has(sector)) {
+          map.set(sector, { effect, commodities: [] });
+        }
+        map.get(sector)!.commodities.push(item);
+      });
+    });
+    return Array.from(map.entries()).sort((a, b) => b[1].commodities.length - a[1].commodities.length);
+  }, [feed]);
+
+  return (
+    <section className="mt-6 mb-4">
+      <header className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <Target size={18} className="text-amber-300" />
+          <h3 className="text-sm font-semibold text-slate-200">섹터별 영향 매핑</h3>
+          <span className="text-xs text-slate-400">원자재 → 가장 영향받는 산업 (wiki/macro/01-commodities.md 기반)</span>
+        </div>
+      </header>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+        {sectorMap.map(([sector, { effect, commodities }]) => (
+          <div key={sector} className="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="text-sm font-semibold text-slate-200">{sector}</h4>
+              <span className="text-[10px] text-slate-500">{commodities.length}개 원자재</span>
+            </div>
+            <p className="text-[11px] text-slate-400 mb-2 leading-snug">{effect}</p>
+            <div className="space-y-1">
+              {commodities
+                .sort((a, b) => Math.abs(b.change_pct_60d ?? 0) - Math.abs(a.change_pct_60d ?? 0))
+                .slice(0, 8)
+                .map((item) => {
+                  const change = item.change_pct_60d ?? 0;
+                  const changeColor = change >= 0 ? "text-emerald-400" : "text-rose-400";
+                  return (
+                    <button
+                      key={item.id}
+                      onClick={() => onSelect(item)}
+                      className="w-full flex items-center justify-between gap-2 px-2 py-1 rounded hover:bg-slate-900/50 transition text-left"
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="text-xs text-slate-300 truncate">{item.name}</span>
+                        {item.is_hidden_bottleneck && <span className="text-[9px] text-amber-500">★</span>}
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <Sparkline ticker={item.ticker} width={50} height={16} period="3mo" />
+                        <span className={`text-[11px] font-semibold tabular-nums ${changeColor} w-12 text-right`}>
+                          {change >= 0 ? "+" : ""}{change.toFixed(1)}%
+                        </span>
+                      </div>
+                    </button>
+                  );
+                })}
+              {commodities.length > 8 && (
+                <div className="text-[10px] text-slate-600 text-center pt-1">+{commodities.length - 8}개 더</div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
 }
 
 function SignalPanel({

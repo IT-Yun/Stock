@@ -192,6 +192,12 @@ export interface CurrentMacroEvent {
   evidence: string[];
   favorable_sectors: string[];
   unfavorable_sectors: string[];
+  sector_impacts?: {
+    sector_id: string;
+    score: number;
+    direction: "favorable" | "unfavorable";
+    reason: string;
+  }[];
   source_notes: string[];
 }
 
@@ -231,12 +237,18 @@ export interface ValueChainPlayerKR {
 }
 
 export interface ValueChainTier {
+  node_id?: string;
   level: 0 | 1 | 2 | 3 | 4 | 5;
   name: string;
   players: string[];
   players_kr?: ValueChainPlayerKR[];
   players_us?: string[];
   is_korean_alpha?: boolean;
+  roles?: string[];
+  signals?: string[];
+  cost_drivers?: string[];
+  signal_map?: string[];
+  materials?: string[];
 }
 
 export interface ValueChainSector {

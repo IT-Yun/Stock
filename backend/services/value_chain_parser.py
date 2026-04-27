@@ -54,7 +54,7 @@ _PARSED_CACHE: tuple[float, list[dict[str, Any]]] | None = None
 RE_SECTOR_HEADING = re.compile(r"^## (\d+)\.\s+(.+?)\s*$", re.MULTILINE)
 RE_MERMAID_BLOCK = re.compile(r"```mermaid\s*\n(.*?)\n```", re.DOTALL)
 RE_TIER_NODE = re.compile(
-    r"T(\d+)(?:_\w+)?\s*\[\s*\"((?:[^\"\\]|\\.)*)\"\s*\]"
+    r"(T(\d+)(?:_\w+)?)\s*\[\s*\"((?:[^\"\\]|\\.)*)\"\s*\]"
 )
 RE_KR_TICKER = re.compile(r"([가-힣A-Za-z][가-힣A-Za-z0-9·\-\.\s]*)\((\d{6})\)")
 RE_US_TICKER = re.compile(r"\b([A-Z]{1,6})(?:\s*\(US\))?\b")
@@ -137,47 +137,128 @@ def _clean_tier_role(label: str) -> str:
     return head or "—"
 
 
-def _parse_mermaid_tiers(mermaid_text: str) -> list[dict[str, Any]]:
-    """Mermaid graph에서 T<level> 노드들을 추출."""
-    tiers: dict[int, dict[str, Any]] = {}
+def _parse_inline_list(text: str) -> list[str]:
+    text = text.strip()
+    if not (text.startswith("[") and text.endswith("]")):
+        return []
+    return [p.strip().strip("\"'") for p in text[1:-1].split(",") if p.strip()]
+
+
+def _clean_yaml_value(value: str) -> str:
+    return value.strip().strip("\"'")
+
+
+def _parse_yaml_tier_details(yaml_text: str) -> dict[int, dict[str, Any]]:
+    """YAML block에서 화면에 필요한 tier 설명만 가볍게 추출.
+
+    PyYAML 의존성을 추가하지 않고 role/signal/cost_drivers/signal_map/materials만 잡는다.
+    """
+    details: dict[int, dict[str, Any]] = {}
+    current_level: int | None = None
+    current_list: str | None = None
+
+    for raw in yaml_text.splitlines():
+        line = raw.rstrip()
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+
+        top = re.match(r"^tier_(\d+)_[A-Za-z0-9_]+:\s*$", line)
+        if top:
+            current_level = int(top.group(1))
+            details.setdefault(
+                current_level,
+                {"roles": [], "signals": [], "cost_drivers": [], "signal_map": [], "materials": []},
+            )
+            current_list = None
+            continue
+
+        if current_level is None or not line.startswith("  "):
+            current_list = None
+            continue
+
+        bucket = details[current_level]
+        stripped = line.strip()
+        kv = re.match(r"^([A-Za-z_]+):\s*(.*)$", stripped)
+        if kv:
+            key, value = kv.group(1), kv.group(2)
+            current_list = key if value == "" else None
+            if key == "role" and value:
+                role = _clean_yaml_value(value)
+                if role not in bucket["roles"]:
+                    bucket["roles"].append(role)
+            elif key == "signal" and value:
+                signal = _clean_yaml_value(value)
+                if signal not in bucket["signals"]:
+                    bucket["signals"].append(signal)
+            elif key == "cost_drivers" and value:
+                for item in _parse_inline_list(value):
+                    if item not in bucket["cost_drivers"]:
+                        bucket["cost_drivers"].append(item)
+            continue
+
+        if stripped.startswith("- ") and current_list:
+            item = stripped[2:].strip()
+            item = item.strip("\"'")
+            if item.startswith("{") and item.endswith("}"):
+                item = item[1:-1]
+                parts = []
+                for piece in item.split(","):
+                    if ":" in piece:
+                        k, v = piece.split(":", 1)
+                        if k.strip() in {"name", "use", "source", "role"}:
+                            parts.append(_clean_yaml_value(v))
+                item = " · ".join(parts) if parts else item
+            target = "signal_map" if current_list == "signal_map" else "materials" if current_list == "materials" else ""
+            if target and item and item not in bucket[target]:
+                bucket[target].append(item)
+
+    return details
+
+
+def _parse_mermaid_tiers(mermaid_text: str, yaml_details: dict[int, dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    """Mermaid graph에서 T<level> 노드들을 추출.
+
+    같은 T4라도 양극재/음극재/분리막처럼 세부 공정이 갈라지면 합치지 않고 별도 카드로 노출한다.
+    """
+    tiers: list[dict[str, Any]] = []
+    seen_node_ids: set[str] = set()
     for m in RE_TIER_NODE.finditer(mermaid_text):
-        level = int(m.group(1))
-        raw_label = m.group(2).replace('\\"', '"')
-        # 같은 level이 여러 노드에 분리돼 있을 수 있음 (T4_C, T4_A 등) — 합치기
-        existing = tiers.setdefault(level, {"level": level, "name_parts": [], "players_kr": [], "players_us": []})
-        existing["name_parts"].append(_clean_tier_role(raw_label))
-        existing["players_kr"].extend(_extract_kr_players(raw_label))
-        existing["players_us"].extend(_extract_us_players(raw_label))
-    # name 합치고, 중복 제거
-    out: list[dict[str, Any]] = []
-    for level in sorted(tiers.keys()):
-        t = tiers[level]
+        node_id = m.group(1)
+        if node_id in seen_node_ids:
+            continue
+        seen_node_ids.add(node_id)
+        level = int(m.group(2))
+        raw_label = m.group(3).replace('\\"', '"')
+        tier_name = _clean_tier_role(raw_label)
+        kr_players = _extract_kr_players(raw_label)
+        us_players = _extract_us_players(raw_label)
+
         seen_kr_tickers: set[str] = set()
         kr_unique = []
-        for p in t["players_kr"]:
+        for p in kr_players:
             if p["ticker"] in seen_kr_tickers:
                 continue
             seen_kr_tickers.add(p["ticker"])
             kr_unique.append(p)
-        us_unique = list(dict.fromkeys(t["players_us"]))
-        # name: 분리된 부분들 중 unique
-        unique_parts = list(dict.fromkeys([p for p in t["name_parts"] if p and p != "—"]))
-        name = " · ".join(unique_parts) if unique_parts else f"Tier {level}"
-        # 한국 알파 강조: Tier 4 (소재/부품) 또는 KR players가 US players보다 많을 때
+        us_unique = list(dict.fromkeys(us_players))
         is_korean_alpha = level == 4 or (len(kr_unique) >= 3 and len(kr_unique) >= len(us_unique))
-        # 표시용 players 리스트 (이름 + ticker 또는 US 심볼)
-        players_display = [
-            f"{p['name']}({p['ticker']})" for p in kr_unique
-        ] + us_unique
-        out.append({
+        players_display = [f"{p['name']}({p['ticker']})" for p in kr_unique] + us_unique
+        detail = (yaml_details or {}).get(level, {})
+        tiers.append({
+            "node_id": node_id,
             "level": level,
-            "name": name,
+            "name": tier_name or f"Tier {level}",
             "players": players_display,
             "players_kr": kr_unique,
             "players_us": us_unique,
             "is_korean_alpha": is_korean_alpha,
+            "roles": detail.get("roles", [])[:4],
+            "signals": detail.get("signals", [])[:4],
+            "cost_drivers": detail.get("cost_drivers", [])[:8],
+            "signal_map": detail.get("signal_map", [])[:8],
+            "materials": detail.get("materials", [])[:10],
         })
-    return out
+    return tiers
 
 
 def _extract_hidden_alpha(body: str) -> str:
@@ -230,7 +311,18 @@ def parse_value_chain() -> list[dict[str, Any]]:
         mermaid_raw = ""
         if mermaid_match:
             mermaid_raw = mermaid_match.group(1).strip()
-            tiers = _parse_mermaid_tiers(mermaid_raw)
+            yaml_details: dict[int, dict[str, Any]] = {}
+            for yaml_match in RE_TIER_YAML_BLOCK.finditer(body):
+                for level, detail in _parse_yaml_tier_details(yaml_match.group(1)).items():
+                    target = yaml_details.setdefault(
+                        level,
+                        {"roles": [], "signals": [], "cost_drivers": [], "signal_map": [], "materials": []},
+                    )
+                    for key, values in detail.items():
+                        for value in values:
+                            if value not in target[key]:
+                                target[key].append(value)
+            tiers = _parse_mermaid_tiers(mermaid_raw, yaml_details)
 
         hidden_alpha = _extract_hidden_alpha(body)
 

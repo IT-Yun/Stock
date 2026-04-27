@@ -175,7 +175,19 @@ def _run_daily_refresh():
         # 2. Refresh commodities
         try:
             CommodityDataService.get_commodity_prices()
-            print("[DAILY-REFRESH] Commodities refreshed")
+            from services.macro_commodity import fetch_feed as fetch_macro_commodity_feed
+            from services.macro_indicators import fetch_macro_indicators
+            from services.macro_sentiment import all_sector_sentiments
+            macro_feed = fetch_macro_commodity_feed(force=True)
+            macro_indicators = fetch_macro_indicators(force=True)
+            sector_sentiments = all_sector_sentiments()
+            _last_daily_refresh["macro_commodities_updated"] = len(macro_feed)
+            _last_daily_refresh["macro_indicators_updated"] = len(macro_indicators)
+            _last_daily_refresh["sector_sentiments_updated"] = len(sector_sentiments)
+            print(
+                f"[DAILY-REFRESH] Commodities/indicators refreshed "
+                f"({len(macro_feed)} commodities, {len(macro_indicators)} macro, {len(sector_sentiments)} sectors)"
+            )
         except Exception as e:
             print(f"[DAILY-REFRESH] Commodity refresh failed: {e}")
 

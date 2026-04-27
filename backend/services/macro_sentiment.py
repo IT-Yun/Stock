@@ -342,6 +342,7 @@ def compute_sentiment(sector_id: str, feed_dict: dict[str, dict[str, Any]]) -> d
         bullish,
         bearish,
         rule_set.get("next", []),
+        feed_dict,
     )
 
     return {
@@ -362,27 +363,95 @@ def compute_sentiment(sector_id: str, feed_dict: dict[str, dict[str, Any]]) -> d
     }
 
 
+INDICATOR_SOURCE_KEYWORDS: list[tuple[tuple[str, ...], str]] = [
+    (("u3o8", "uranium", "우라늄"), "uranium_u3o8"),
+    (("iridium", "이리듐"), "iridium"),
+    (("platinum", "백금"), "platinum"),
+    (("palladium", "팔라듐"), "palladium"),
+    (("gold", "금 "), "gold"),
+    (("silver", "은 "), "silver"),
+    (("lithium", "리튬"), "lithium_carbonate"),
+    (("nickel", "니켈"), "nickel_lme"),
+    (("cobalt", "코발트"), "cobalt"),
+    (("graphite", "흑연"), "natural_graphite"),
+    (("copper", "구리"), "copper"),
+    (("aluminum", "알루미늄"), "aluminum"),
+    (("iron ore", "철광석"), "iron_ore"),
+    (("hrc", "steel", "후판", "철강"), "hrc_steel"),
+    (("brent",), "crude_brent"),
+    (("wti", "oil price", "유가", "원유"), "crude_wti"),
+    (("lng", "gas", "천연가스"), "natgas_henry_hub"),
+    (("cotton", "면화"), "cotton"),
+    (("corn", "옥수수"), "corn"),
+    (("wheat", "밀"), "wheat"),
+    (("sugar", "설탕"), "sugar"),
+    (("coffee", "커피"), "coffee"),
+    (("grain", "곡물"), "corn"),
+    (("gallium", "갈륨"), "gallium"),
+    (("germanium", "게르마늄"), "germanium"),
+    (("neodymium", "희토류", "rare earth"), "neodymium"),
+    (("titanium", "티타늄"), "titanium"),
+    (("helium", "헬륨"), "helium"),
+]
+
+
+def _source_status(signal: str, feed_dict: dict[str, dict[str, Any]]) -> dict[str, str]:
+    s = signal.lower()
+    for keywords, item_id in INDICATOR_SOURCE_KEYWORDS:
+        if not any(k.lower() in s for k in keywords):
+            continue
+        item = feed_dict.get(item_id)
+        if not item:
+            return {"source_status": "missing", "source_name": item_id, "updated_at": ""}
+        status = item.get("coverage_status") or "unknown"
+        if item.get("price") is None:
+            status = "missing"
+        return {
+            "source_status": status,
+            "source_name": item.get("name") or item_id,
+            "updated_at": (item.get("data_as_of") or item.get("fetched_at") or "")[:10],
+        }
+    return {"source_status": "not_connected", "source_name": "수동/외부 지표", "updated_at": ""}
+
+
 def _indicator_assessments(
     watch_signals: list[str],
     bullish: list[str],
     bearish: list[str],
     next_checks: list[str],
+    feed_dict: dict[str, dict[str, Any]],
 ) -> list[dict[str, str]]:
     out: list[dict[str, str]] = []
     for signal in bullish:
-        out.append({"name": signal.split("->")[0].strip(), "direction": "bullish", "reason": signal})
+        out.append({
+            "name": signal.split("->")[0].strip(),
+            "direction": "bullish",
+            "reason": signal,
+            **_source_status(signal, feed_dict),
+        })
     for signal in bearish:
-        out.append({"name": signal.split("->")[0].strip(), "direction": "bearish", "reason": signal})
+        out.append({
+            "name": signal.split("->")[0].strip(),
+            "direction": "bearish",
+            "reason": signal,
+            **_source_status(signal, feed_dict),
+        })
     seen = {x["name"] for x in out}
     for signal in [*next_checks, *watch_signals]:
         name = signal.strip()
         if name in seen:
             continue
         seen.add(name)
+        source = _source_status(name, feed_dict)
         out.append({
             "name": name,
             "direction": "watch",
-            "reason": "실시간 가격 신호만으로 호재/악재 확정 불가. 원자료 업데이트 확인 필요",
+            "reason": (
+                "실시간/프록시 데이터 연결됨. 방향성은 원자료와 함께 확인 필요"
+                if source["source_status"] not in {"not_connected", "missing"}
+                else "아직 자동 수집 미연결. 원자료/API 연결 필요"
+            ),
+            **source,
         })
     return out[:10]
 
@@ -418,12 +487,16 @@ def all_sector_sentiments() -> list[dict[str, Any]]:
         f.id: {
             "id": f.id,
             "name": f.name,
+            "price": f.price,
             "is_surge": f.is_surge,
             "is_plunge": f.is_plunge,
             "is_multi_month_uptrend": f.is_multi_month_uptrend,
             "is_multi_month_downtrend": f.is_multi_month_downtrend,
             "change_pct_60d": f.change_pct_60d,
             "surge_reasons": f.surge_reasons,
+            "coverage_status": f.coverage_status,
+            "data_as_of": f.data_as_of,
+            "fetched_at": f.fetched_at,
         }
         for f in feed
     }

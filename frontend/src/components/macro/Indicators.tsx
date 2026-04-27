@@ -139,8 +139,10 @@ function SectorCard({ sector, onClick }: { sector: SectorMeta; onClick: () => vo
 
       <div className="space-y-0.5">
         {assessments.slice(0, 3).map((a, i) => (
-          <div key={i} className={`truncate text-[10px] leading-tight ${a.direction === "bullish" ? "text-emerald-300" : a.direction === "bearish" ? "text-rose-300" : "text-[var(--color-text-secondary)]"}`}>
-            {a.direction === "bullish" ? "+" : a.direction === "bearish" ? "-" : "·"} {a.name}
+          <div key={i} className={`flex items-center gap-1 truncate text-[10px] leading-tight ${a.direction === "bullish" ? "text-emerald-300" : a.direction === "bearish" ? "text-rose-300" : "text-[var(--color-text-secondary)]"}`}>
+            <span>{a.direction === "bullish" ? "+" : a.direction === "bearish" ? "-" : "·"}</span>
+            <span className="truncate">{a.name}</span>
+            <SourceBadge status={a.source_status} compact />
           </div>
         ))}
       </div>
@@ -196,17 +198,40 @@ function SectorDetailModal({ sector, onClose }: { sector: SectorMeta; onClose: (
                   : "border-slate-700 bg-slate-900/60 text-slate-400"
               }`}>
                 <span className="font-semibold">{a.direction === "bullish" ? "호재" : a.direction === "bearish" ? "악재" : "확인필요"}</span>
+                <SourceBadge status={a.source_status} />
                 <span className="mx-1">·</span>
                 <span>{a.reason}</span>
+                {a.source_name && (
+                  <div className="mt-1 text-[10px] text-slate-500">
+                    소스: {a.source_name}{a.updated_at ? ` · ${a.updated_at}` : ""}
+                  </div>
+                )}
               </div>
             ))}
           </div>
         </div>
 
         <div className="border-t border-slate-800 pt-3 text-[10px] text-slate-500">
-          실시간 가격/원자재 proxy로 판정 가능한 지표만 호재·악재로 계산하고, 나머지는 확인필요로 둡니다.
+          live/proxy로 연결된 지표만 점수에 반영하고, 미수집 지표는 평가에서 제외합니다.
         </div>
       </div>
     </div>
   );
+}
+
+function SourceBadge({ status, compact = false }: { status?: string; compact?: boolean }) {
+  const label =
+    status === "live" ? "live" :
+    status === "proxy" || status === "computed_proxy" ? "proxy" :
+    status === "delayed" ? "지연" :
+    status === "monthly" ? "월간" :
+    status === "missing" ? "없음" :
+    status === "not_connected" ? "미수집" :
+    status ?? "미수집";
+  const cls =
+    status === "live" ? "border-emerald-500/30 bg-emerald-500/15 text-emerald-300" :
+    status === "proxy" || status === "computed_proxy" ? "border-blue-500/30 bg-blue-500/15 text-blue-300" :
+    status === "delayed" || status === "monthly" ? "border-amber-500/30 bg-amber-500/15 text-amber-300" :
+    "border-slate-700 bg-slate-800/60 text-slate-500";
+  return <span className={`ml-1 inline-flex shrink-0 rounded border ${compact ? "px-1 py-0 text-[8px]" : "px-1.5 py-0.5 text-[9px]"} font-semibold ${cls}`}>{label}</span>;
 }

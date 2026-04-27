@@ -1,24 +1,24 @@
-// 거시 전망 페이지 — 라이브 매크로 + 시나리오 자동 감지 + 27섹터 종합 추천
 import { useEffect, useMemo, useState } from "react";
-import { Telescope, AlertCircle, ArrowUp, ArrowDown, Zap, Trophy, ShieldAlert, Radio } from "lucide-react";
+import { ArrowDown, ArrowUp, RotateCcw, SlidersHorizontal } from "lucide-react";
 import MacroLayout from "./MacroLayout";
-import WikiMarkdown from "./WikiMarkdown";
-import { fetchOutlook, fetchWikiPage, fetchIndicators } from "@/api/macro";
-import type { OutlookResponse, WikiPageResponse, LiveMacroIndicator, ActiveScenario, SynthesizedSector, SectorMeta, CurrentMacroEvent } from "@/types/macro";
+import { fetchIndicators, fetchOutlook } from "@/api/macro";
+import type { CurrentMacroEvent, OutlookResponse, SectorMeta } from "@/types/macro";
+
+type Vote = -1 | 0 | 1;
+type ScenarioInput =
+  | { id: string; name: string; triggers: string[]; kind: "scenario"; favorable: string[]; unfavorable: string[] }
+  | { id: string; name: string; triggers: string[]; kind: "event"; favorable: string[]; unfavorable: string[]; event: CurrentMacroEvent };
 
 export default function Outlook() {
   const [data, setData] = useState<OutlookResponse | null>(null);
-  const [wiki, setWiki] = useState<WikiPageResponse | null>(null);
   const [sectorMap, setSectorMap] = useState<Record<string, SectorMeta>>({});
   const [loading, setLoading] = useState(true);
-  const [showFullSpec, setShowFullSpec] = useState(false);
-  const [selectedScenario, setSelectedScenario] = useState<string | null>(null);
+  const [votes, setVotes] = useState<Record<string, Vote>>({});
 
   useEffect(() => {
-    Promise.all([fetchOutlook(), fetchWikiPage("outlook"), fetchIndicators()])
-      .then(([d, w, ind]) => {
+    Promise.all([fetchOutlook(), fetchIndicators()])
+      .then(([d, ind]) => {
         setData(d);
-        setWiki(w);
         const map: Record<string, SectorMeta> = {};
         ind.sectors.forEach((s) => { map[s.id] = s; });
         setSectorMap(map);
@@ -27,325 +27,207 @@ export default function Outlook() {
       .finally(() => setLoading(false));
   }, []);
 
-  const liveByCategory = useMemo(() => {
-    if (!data?.live_indicators) return {};
-    const map: Record<string, LiveMacroIndicator[]> = {};
-    data.live_indicators.forEach((i) => {
-      (map[i.category] ||= []).push(i);
-    });
-    return map;
+  const inputs = useMemo(() => {
+    if (!data) return [];
+    const scenarios: ScenarioInput[] = data.scenarios.map((s) => ({
+      id: s.id,
+      name: s.name,
+      triggers: s.triggers,
+      kind: "scenario",
+      favorable: s.favorable,
+      unfavorable: s.unfavorable,
+    }));
+    const events: ScenarioInput[] = (data.current_events ?? []).map((e) => ({
+      id: `event:${e.id}`,
+      name: e.title,
+      triggers: e.evidence.slice(0, 2),
+      kind: "event",
+      favorable: e.favorable_sectors,
+      unfavorable: e.unfavorable_sectors,
+      event: e,
+    }));
+    return [...events, ...scenarios];
   }, [data]);
 
-  if (loading) return <MacroLayout title="거시 전망" subtitle="라이브 매크로 fetch 중..."><div /></MacroLayout>;
-  if (!data) return <MacroLayout title="거시 전망" subtitle="데이터 로드 실패"><div /></MacroLayout>;
+  const simulation = useMemo(() => simulate(inputs, votes, sectorMap), [inputs, votes, sectorMap]);
 
-  const top = data.synthesis?.top_sectors ?? [];
-  const bottom = data.synthesis?.bottom_sectors ?? [];
-  const active = data.active_scenarios ?? [];
-  const events = data.current_events ?? [];
-  const selected = selectedScenario ? data.scenarios.find((s) => s.id === selectedScenario) : null;
+  if (loading) return <MacroLayout title="거시전망 시뮬레이터" subtitle="시나리오 불러오는 중..."><div /></MacroLayout>;
+  if (!data) return <MacroLayout title="거시전망 시뮬레이터" subtitle="데이터 로드 실패"><div /></MacroLayout>;
+
+  const applyCurrent = () => {
+    const next: Record<string, Vote> = {};
+    for (const s of data.active_scenarios ?? []) next[s.id] = 1;
+    for (const e of data.current_events ?? []) next[`event:${e.id}`] = 1;
+    setVotes(next);
+  };
 
   return (
     <MacroLayout
-      title="거시 전망 (Macro Outlook)"
-      subtitle={`라이브 매크로 + 시나리오 자동 감지 + 27섹터 종합 추천 · ${data.current_regime.as_of} 기준`}
+      title="거시전망 시뮬레이터"
+      subtitle="경제·정치·전쟁·금리 시나리오를 발생/완화로 체크해서 우호 섹터를 종합"
     >
-      {events.length > 0 && (
-        <section className="mb-6">
-          <h2 className="text-sm font-semibold text-[var(--color-text-primary)] mb-3 flex items-center gap-2">
-            <Radio size={14} className="text-[#fbbf24]" />
-            현재 핵심 이슈
-          </h2>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-            {events.map((event) => <CurrentEventCard key={event.id} event={event} sectorMap={sectorMap} />)}
+      <section className="mb-5 rounded-xl border border-slate-800 bg-slate-950/40 p-4">
+        <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-200">
+              <SlidersHorizontal size={16} /> 시나리오 체크
+            </h2>
+            <p className="mt-1 text-xs text-slate-500">발생은 해당 시나리오가 현실화, 완화·실패는 반대 방향으로 계산합니다.</p>
           </div>
-        </section>
-      )}
-
-      {/* 🏆 종합 추천 TOP/BOTTOM — 가장 위 */}
-      <section className="mb-6 grid grid-cols-1 lg:grid-cols-2 gap-3">
-        <div className="rounded-xl border border-[#10b981]/40 bg-gradient-to-br from-[#10b981]/15 to-transparent p-4">
-          <div className="flex items-center gap-2 mb-3 text-[#10b981]">
-            <Trophy size={18} />
-            <h3 className="text-sm font-semibold">🏆 종합 유망 섹터 TOP {top.length}</h3>
-            <span className="ml-auto text-[10px] text-[var(--color-text-muted)]">현재 이슈 + 원자재 + 시나리오</span>
-          </div>
-          <div className="space-y-2.5">
-            {top.map((s) => <SynthesisRow key={s.sector_id} item={s} sectorMap={sectorMap} kind="top" />)}
+          <div className="flex flex-wrap gap-2">
+            <button onClick={applyCurrent} className="rounded-md border border-amber-500/35 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-300 hover:bg-amber-500/15">
+              현재 감지 적용
+            </button>
+            <button onClick={() => setVotes({})} className="inline-flex items-center gap-1 rounded-md border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800">
+              <RotateCcw size={13} /> 초기화
+            </button>
           </div>
         </div>
-        <div className="rounded-xl border border-[#ef4444]/40 bg-gradient-to-br from-[#ef4444]/15 to-transparent p-4">
-          <div className="flex items-center gap-2 mb-3 text-[#ef4444]">
-            <ShieldAlert size={18} />
-            <h3 className="text-sm font-semibold">⚠️ 종합 우려 섹터 BOTTOM {bottom.length}</h3>
-          </div>
-          <div className="space-y-2.5">
-            {bottom.length > 0 ? (
-              bottom.map((s) => <SynthesisRow key={s.sector_id} item={s} sectorMap={sectorMap} kind="bottom" />)
-            ) : (
-              <div className="text-[11px] text-[var(--color-text-muted)] italic">현재 명확한 우려 섹터 없음</div>
-            )}
-          </div>
-        </div>
-      </section>
 
-      {/* 🎯 활성 시나리오 (지금 어디 있나) */}
-      {active.length > 0 && (
-        <section className="mb-6">
-          <h2 className="text-sm font-semibold text-[var(--color-text-primary)] mb-3 flex items-center gap-2">
-            <Zap size={14} className="text-[#fbbf24]" />
-            지금 활성 시나리오 ({active.length}개 감지)
-          </h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            {active.map((s) => <ActiveScenarioCard key={s.id} scenario={s} sectorMap={sectorMap} />)}
-          </div>
-        </section>
-      )}
-
-      {/* 📊 라이브 거시 지표 */}
-      <section className="mb-6">
-        <h2 className="text-sm font-semibold text-[var(--color-text-primary)] mb-3 flex items-center gap-2">
-          <Telescope size={14} /> 📊 라이브 거시 지표 (yfinance · 30분 캐시)
-        </h2>
-        <div className="space-y-2">
-          {Object.entries(liveByCategory).map(([cat, items]) => (
-            <div key={cat}>
-              <div className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)] mb-1">{cat}</div>
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
-                {items.map((i) => <LiveCell key={i.id} ind={i} />)}
-              </div>
-            </div>
+        <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">
+          {inputs.map((input) => (
+            <ScenarioCard
+              key={input.id}
+              input={input}
+              vote={votes[input.id] ?? 0}
+              sectorMap={sectorMap}
+              onVote={(vote) => setVotes((prev) => ({ ...prev, [input.id]: vote }))}
+            />
           ))}
         </div>
       </section>
 
-      {/* 정책 알림 */}
-      {data.policy_alerts.length > 0 && (
-        <section className="mb-6">
-          <div className="rounded-lg border border-[#fbbf24]/30 bg-[#fbbf24]/5 p-3.5">
-            <div className="flex items-center gap-2 mb-2 text-[#fbbf24]">
-              <AlertCircle size={14} />
-              <h3 className="text-xs font-semibold">정책 알림</h3>
-            </div>
-            <ul className="space-y-1 text-xs text-[var(--color-text-secondary)]">
-              {data.policy_alerts.map((a, i) => <li key={i}>{a}</li>)}
-            </ul>
-          </div>
-        </section>
-      )}
-
-      {/* 🔮 시나리오 시뮬레이터 — 9개 시나리오 클릭 → 영향 시뮬 */}
-      <section className="mb-6">
-        <h2 className="text-sm font-semibold text-[var(--color-text-primary)] mb-3">
-          🔮 시나리오 시뮬레이터 — "이 상황이 오면?" 클릭해서 영향 보기
-        </h2>
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 mb-3">
-          {data.scenarios.map((s) => {
-            const isActive = active.some((a) => a.id === s.id);
-            const isSelected = selectedScenario === s.id;
-            return (
-              <button
-                key={s.id}
-                onClick={() => setSelectedScenario(isSelected ? null : s.id)}
-                className={`text-left rounded-md border p-2.5 transition-all ${
-                  isSelected
-                    ? "border-[#3b82f6] bg-[#3b82f6]/15 ring-2 ring-[#3b82f6]/40"
-                    : isActive
-                    ? "border-[#fbbf24]/50 bg-[#fbbf24]/10 hover:border-[#fbbf24]"
-                    : "border-[var(--color-border)] bg-[var(--color-bg-secondary)] hover:border-[#3b82f6]/40"
-                }`}
-              >
-                <div className="text-[11px] font-semibold text-[var(--color-text-primary)] mb-1 flex items-center gap-1">
-                  {isActive && <span className="text-[#fbbf24]">🔥</span>}
-                  {s.name}
-                </div>
-                <div className="text-[9px] text-[var(--color-text-muted)] line-clamp-2">{s.triggers.join(" · ")}</div>
-              </button>
-            );
-          })}
-        </div>
-        {selected && (
-          <div className="rounded-xl border border-[#3b82f6]/40 bg-[#3b82f6]/5 p-4">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-base font-semibold text-[var(--color-text-primary)]">
-                💡 시뮬레이션: {selected.name}
-              </h3>
-              <button onClick={() => setSelectedScenario(null)} className="text-xs text-[var(--color-text-muted)] hover:text-white">×</button>
-            </div>
-            <div className="text-[11px] text-[var(--color-text-muted)] mb-3">트리거 신호: {selected.triggers.join(" / ")}</div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div>
-                <div className="text-[11px] font-semibold text-[#10b981] mb-1.5 flex items-center gap-1"><ArrowUp size={11} /> 호재 섹터</div>
-                <div className="space-y-1">
-                  {selected.favorable.map((sec) => (
-                    <div key={sec} className="text-[11px] px-2 py-1 rounded bg-[#10b981]/15 text-[#6ee7b7]">{sec}</div>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <div className="text-[11px] font-semibold text-[#ef4444] mb-1.5 flex items-center gap-1"><ArrowDown size={11} /> 악재 섹터</div>
-                <div className="space-y-1">
-                  {selected.unfavorable.length > 0 ? selected.unfavorable.map((sec) => (
-                    <div key={sec} className="text-[11px] px-2 py-1 rounded bg-[#ef4444]/15 text-[#fca5a5]">{sec}</div>
-                  )) : <div className="text-[11px] italic text-[var(--color-text-muted)]">명확한 악재 섹터 없음</div>}
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-      </section>
-
-      {/* 8개 거시 차원 */}
-      <section className="mb-6">
-        <h2 className="text-sm font-semibold text-[var(--color-text-primary)] mb-3">8개 거시 차원 (참고)</h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
-          {data.dimensions.map((d) => (
-            <div key={d.id} className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-2.5">
-              <div className="text-[11px] font-semibold text-[var(--color-text-primary)] mb-1">{d.name}</div>
-              <div className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
-                {d.key_indicators.slice(0, 3).join(" · ")}
-                {d.key_indicators.length > 3 && ` 외 ${d.key_indicators.length - 3}`}
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section>
-        <button onClick={() => setShowFullSpec((v) => !v)}
-          className="text-xs px-3 py-1.5 rounded-md border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-white/5">
-          {showFullSpec ? "▼ 전체 명세 닫기" : "▶ 전체 명세 보기 (33개 거시 지표 — wiki/macro/03-outlook.md)"}
-        </button>
-        {showFullSpec && wiki && (
-          <div className="mt-4 p-4 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary)]">
-            <WikiMarkdown content={wiki.content} />
-          </div>
-        )}
+      <section className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+        <ResultPanel title="우호 섹터" tone="good" items={simulation.good} />
+        <ResultPanel title="부담 섹터" tone="bad" items={simulation.bad} />
       </section>
     </MacroLayout>
   );
 }
 
-function SynthesisRow({ item, sectorMap, kind }: { item: SynthesizedSector; sectorMap: Record<string, SectorMeta>; kind: "top" | "bottom" }) {
-  const sec = sectorMap[item.sector_id];
-  const color = kind === "top" ? "#10b981" : "#ef4444";
+function ScenarioCard({
+  input,
+  vote,
+  sectorMap,
+  onVote,
+}: {
+  input: ScenarioInput;
+  vote: Vote;
+  sectorMap: Record<string, SectorMeta>;
+  onVote: (vote: Vote) => void;
+}) {
+  const isEvent = input.kind === "event";
   return (
-    <div className="rounded bg-black/20 p-2.5">
-      <div className="flex items-center justify-between mb-1">
-        <div className="text-sm font-semibold text-[var(--color-text-primary)]">{sec?.name ?? item.sector_id}</div>
-        <div className="flex items-center gap-1.5 text-[10px]">
-          <span style={{ color }} className="font-bold">
-            {item.synthesis_score > 0 ? `+${item.synthesis_score}` : item.synthesis_score}
+    <div className={`rounded-lg border p-3 ${vote === 1 ? "border-emerald-500/35 bg-emerald-500/8" : vote === -1 ? "border-rose-500/35 bg-rose-500/8" : isEvent ? "border-amber-500/25 bg-amber-500/5" : "border-slate-800 bg-slate-900/45"}`}>
+      <div className="mb-2 flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-semibold text-slate-100">{isEvent ? "🔥 " : ""}{input.name}</div>
+          <div className="mt-1 line-clamp-2 text-[10px] leading-relaxed text-slate-500">{input.triggers.join(" · ")}</div>
+        </div>
+        <span className="shrink-0 rounded bg-white/5 px-1.5 py-0.5 text-[9px] font-semibold text-slate-400">{isEvent ? "현재 이슈" : "거시"}</span>
+      </div>
+
+      <div className="mb-2 grid grid-cols-3 gap-1">
+        <VoteButton active={vote === 1} tone="good" label="발생" onClick={() => onVote(vote === 1 ? 0 : 1)} />
+        <VoteButton active={vote === 0} tone="neutral" label="중립" onClick={() => onVote(0)} />
+        <VoteButton active={vote === -1} tone="bad" label="완화/실패" onClick={() => onVote(vote === -1 ? 0 : -1)} />
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 text-[10px]">
+        <MiniSectorList title="우호" tone="good" items={input.favorable} sectorMap={sectorMap} />
+        <MiniSectorList title="부담" tone="bad" items={input.unfavorable} sectorMap={sectorMap} />
+      </div>
+    </div>
+  );
+}
+
+function VoteButton({ active, tone, label, onClick }: { active: boolean; tone: "good" | "bad" | "neutral"; label: string; onClick: () => void }) {
+  const cls = active
+    ? tone === "good" ? "border-emerald-500 bg-emerald-500/20 text-emerald-200"
+    : tone === "bad" ? "border-rose-500 bg-rose-500/20 text-rose-200"
+    : "border-blue-500 bg-blue-500/20 text-blue-200"
+    : "border-slate-800 bg-black/20 text-slate-500 hover:border-slate-600";
+  return <button onClick={onClick} className={`rounded border px-2 py-1.5 text-[10px] font-semibold ${cls}`}>{label}</button>;
+}
+
+function MiniSectorList({ title, tone, items, sectorMap }: { title: string; tone: "good" | "bad"; items: string[]; sectorMap: Record<string, SectorMeta> }) {
+  const color = tone === "good" ? "text-emerald-300" : "text-rose-300";
+  return (
+    <div>
+      <div className={`mb-1 font-semibold ${color}`}>{title}</div>
+      <div className="flex flex-wrap gap-1">
+        {items.slice(0, 5).map((x) => (
+          <span key={x} className={`rounded px-1.5 py-0.5 ${tone === "good" ? "bg-emerald-500/12 text-emerald-200" : "bg-rose-500/12 text-rose-200"}`}>
+            {sectorMap[x]?.name ?? x}
           </span>
-          {sec && <><span className="text-[var(--color-text-muted)]">·</span><span className="text-[var(--color-text-muted)]">{sec.indicator_count}지표</span></>}
-        </div>
-      </div>
-      <div className="space-y-0.5">
-        {item.drivers.slice(0, 4).map((d, i) => (
-          <div key={i} className="text-[11px] text-[var(--color-text-secondary)] leading-relaxed">{d}</div>
         ))}
+        {items.length === 0 && <span className="text-slate-600">없음</span>}
       </div>
     </div>
   );
 }
 
-function ActiveScenarioCard({ scenario, sectorMap }: { scenario: ActiveScenario; sectorMap: Record<string, SectorMeta> }) {
-  const pct = Math.round(scenario.strength * 100);
+function ResultPanel({ title, tone, items }: { title: string; tone: "good" | "bad"; items: SimResult[] }) {
+  const Icon = tone === "good" ? ArrowUp : ArrowDown;
+  const color = tone === "good" ? "text-emerald-300" : "text-rose-300";
+  const border = tone === "good" ? "border-emerald-500/35 bg-emerald-500/8" : "border-rose-500/35 bg-rose-500/8";
   return (
-    <div className="rounded-xl border border-[#fbbf24]/40 bg-[#fbbf24]/5 p-3.5">
-      <div className="flex items-center justify-between mb-2">
-        <div className="text-sm font-semibold text-[var(--color-text-primary)]">🔥 {scenario.name}</div>
-        <span className="text-[10px] px-2 py-0.5 rounded bg-[#fbbf24]/25 text-[#fbbf24] font-semibold">{pct}%</span>
-      </div>
-      <div className="w-full h-1 rounded bg-white/5 mb-2">
-        <div className="h-full rounded bg-[#fbbf24]" style={{ width: `${pct}%` }} />
-      </div>
-      <div className="space-y-0.5 mb-2">
-        {scenario.evidence.map((e, i) => (
-          <div key={i} className="text-[10px] text-[var(--color-text-secondary)] leading-relaxed">· {e}</div>
-        ))}
-      </div>
-      <div className="grid grid-cols-2 gap-2 text-[10px]">
-        <div>
-          <div className="text-[#10b981] mb-0.5">↑ 호재</div>
-          <div className="flex flex-wrap gap-1">
-            {scenario.favorable_sectors.slice(0, 4).map((sid) => (
-              <span key={sid} className="px-1.5 py-0.5 rounded bg-[#10b981]/15 text-[#6ee7b7]">{sectorMap[sid]?.name ?? sid}</span>
-            ))}
+    <div className={`rounded-xl border p-4 ${border}`}>
+      <div className={`mb-3 flex items-center gap-2 text-sm font-semibold ${color}`}><Icon size={16} /> {title}</div>
+      <div className="space-y-2">
+        {items.length ? items.map((item) => (
+          <div key={item.name} className="rounded-lg bg-black/25 p-3">
+            <div className="mb-1 flex items-center justify-between gap-3">
+              <div className="font-semibold text-slate-100">{item.name}</div>
+              <div className={`font-mono text-sm font-bold ${color}`}>{item.score > 0 ? "+" : ""}{item.score.toFixed(1)}</div>
+            </div>
+            <div className="space-y-0.5">
+              {item.reasons.slice(0, 5).map((reason) => (
+                <div key={reason} className="text-[11px] leading-relaxed text-slate-400">· {reason}</div>
+              ))}
+            </div>
           </div>
-        </div>
-        <div>
-          <div className="text-[#ef4444] mb-0.5">↓ 악재</div>
-          <div className="flex flex-wrap gap-1">
-            {scenario.unfavorable_sectors.length > 0 ? scenario.unfavorable_sectors.slice(0, 4).map((sid) => (
-              <span key={sid} className="px-1.5 py-0.5 rounded bg-[#ef4444]/15 text-[#fca5a5]">{sectorMap[sid]?.name ?? sid}</span>
-            )) : <span className="text-[var(--color-text-muted)] italic">없음</span>}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function CurrentEventCard({ event, sectorMap }: { event: CurrentMacroEvent; sectorMap: Record<string, SectorMeta> }) {
-  const pct = Math.round(event.severity * 100);
-  return (
-    <div className="rounded-xl border border-[#fbbf24]/40 bg-[#fbbf24]/5 p-3.5">
-      <div className="flex items-start justify-between gap-3 mb-2">
-        <div>
-          <div className="text-sm font-semibold text-[var(--color-text-primary)]">{event.title}</div>
-          <div className="text-[10px] text-[#fbbf24] mt-0.5">{event.status}</div>
-        </div>
-        <span className="text-[10px] px-2 py-0.5 rounded bg-[#fbbf24]/25 text-[#fbbf24] font-semibold">{pct}%</span>
-      </div>
-      <div className="w-full h-1 rounded bg-white/5 mb-2">
-        <div className="h-full rounded bg-[#fbbf24]" style={{ width: `${pct}%` }} />
-      </div>
-      <div className="space-y-0.5 mb-3">
-        {event.evidence.slice(0, 3).map((e, i) => (
-          <div key={i} className="text-[10px] text-[var(--color-text-secondary)] leading-relaxed">· {e}</div>
-        ))}
-      </div>
-      <div className="grid grid-cols-2 gap-2 text-[10px]">
-        <div>
-          <div className="text-[#10b981] mb-1">↑ 우호</div>
-          <div className="flex flex-wrap gap-1">
-            {event.favorable_sectors.slice(0, 6).map((sid) => (
-              <span key={sid} className="px-1.5 py-0.5 rounded bg-[#10b981]/15 text-[#6ee7b7]">{sectorMap[sid]?.name ?? sid}</span>
-            ))}
-          </div>
-        </div>
-        <div>
-          <div className="text-[#ef4444] mb-1">↓ 부담</div>
-          <div className="flex flex-wrap gap-1">
-            {event.unfavorable_sectors.slice(0, 6).map((sid) => (
-              <span key={sid} className="px-1.5 py-0.5 rounded bg-[#ef4444]/15 text-[#fca5a5]">{sectorMap[sid]?.name ?? sid}</span>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function LiveCell({ ind }: { ind: LiveMacroIndicator }) {
-  const c1 = ind.change_pct_1d;
-  const z = ind.zscore_60d;
-  const colorByDir = (val: number | null) =>
-    val == null ? "text-[var(--color-text-muted)]" : val > 0 ? "text-[#10b981]" : val < 0 ? "text-[#ef4444]" : "text-[var(--color-text-muted)]";
-  const isAnomalous = z != null && Math.abs(z) > 1.5;
-  return (
-    <div className={`rounded-md border p-2 ${isAnomalous ? "border-[#fbbf24]/50 bg-[#fbbf24]/5" : "border-[var(--color-border)] bg-[var(--color-bg-secondary)]"}`}>
-      <div className="text-[10px] text-[var(--color-text-muted)] truncate">{ind.name}</div>
-      <div className="text-base font-bold text-[var(--color-text-primary)]">
-        {ind.price != null ? ind.price.toLocaleString(undefined, { maximumFractionDigits: 4 }) : "—"}
-      </div>
-      <div className="flex items-center justify-between text-[10px]">
-        <span className={colorByDir(c1)}>{c1 != null ? `${c1 > 0 ? "+" : ""}${c1}%` : "—"}</span>
-        {z != null && Math.abs(z) > 0.5 && (
-          <span className={colorByDir(z)}>Z {z > 0 ? "+" : ""}{z}</span>
+        )) : (
+          <div className="rounded-lg bg-black/20 p-4 text-center text-xs text-slate-500">선택된 시나리오가 없습니다.</div>
         )}
       </div>
     </div>
   );
+}
+
+type SimResult = { name: string; score: number; reasons: string[] };
+
+function simulate(inputs: ScenarioInput[], votes: Record<string, Vote>, sectorMap: Record<string, SectorMeta>) {
+  const scores: Record<string, SimResult> = {};
+  const add = (key: string, delta: number, reason: string) => {
+    const name = sectorMap[key]?.name ?? key;
+    const item = scores[name] ?? { name, score: 0, reasons: [] };
+    item.score += delta;
+    item.reasons.push(reason);
+    scores[name] = item;
+  };
+
+  for (const input of inputs) {
+    const vote = votes[input.id] ?? 0;
+    if (vote === 0) continue;
+    const base = input.kind === "event" ? Math.max(1.2, input.event.severity * 3) : 2;
+    const success = vote === 1;
+
+    if (input.kind === "event" && input.event.sector_impacts?.length) {
+      for (const impact of input.event.sector_impacts) {
+        const delta = impact.score * base * (success ? 1 : -1);
+        add(impact.sector_id, delta, `${input.name} ${success ? "발생" : "완화"}: ${impact.reason}`);
+      }
+      continue;
+    }
+
+    for (const sec of input.favorable) add(sec, success ? base : -base * 0.8, `${input.name} ${success ? "발생 시 우호" : "실패/완화 시 우호 약화"}`);
+    for (const sec of input.unfavorable) add(sec, success ? -base : base * 0.8, `${input.name} ${success ? "발생 시 부담" : "실패/완화 시 부담 완화"}`);
+  }
+
+  const all = Object.values(scores).filter((x) => Math.abs(x.score) >= 0.1);
+  return {
+    good: all.filter((x) => x.score > 0).sort((a, b) => b.score - a.score).slice(0, 12),
+    bad: all.filter((x) => x.score < 0).sort((a, b) => a.score - b.score).slice(0, 12),
+  };
 }

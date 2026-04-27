@@ -110,6 +110,9 @@ export interface SectorSentiment {
     name: string;
     direction: "bullish" | "bearish" | "watch";
     reason: string;
+    source_status?: string;
+    source_name?: string;
+    updated_at?: string;
   }[];
 }
 

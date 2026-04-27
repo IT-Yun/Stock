@@ -272,6 +272,7 @@ class CommodityFeedItem:
     price: float | None = None
     change_pct_1d: float | None = None
     change_pct_5d: float | None = None
+    change_pct_10d: float | None = None
     change_pct_20d: float | None = None
     change_pct_60d: float | None = None
     change_pct_120d: float | None = None
@@ -294,6 +295,10 @@ class CommodityFeedItem:
     cause_reasons: list[str] | None = None
     bullish_thesis: str | None = None
     caution: str | None = None
+    strategic_watch: bool = False
+    strategic_score: float = 0.0
+    strategic_label: str | None = None
+    strategic_reasons: list[str] | None = None
     fallback_url: str | None = None
     note: str | None = None
     is_hidden_bottleneck: bool = False
@@ -340,6 +345,11 @@ def _compute_metrics(history) -> dict[str, Any]:
         p5 = float(closes.iloc[-6])
         if p5:
             metrics["change_pct_5d"] = round((price - p5) / p5 * 100, 2)
+
+    if len(closes) >= 11:
+        p10 = float(closes.iloc[-11])
+        if p10:
+            metrics["change_pct_10d"] = round((price - p10) / p10 * 100, 2)
 
     if len(closes) >= 21:
         p20 = float(closes.iloc[-21])
@@ -425,6 +435,7 @@ def _computed_crack_321(spec: dict[str, Any]) -> CommodityFeedItem:
         item.timing_reasons = ["구성 선물 데이터 부족"]
         item.risk_notes = ["CL/RB/HO 중 하나라도 실패하면 계산 불가"]
         _assign_cause(item)
+        _classify_strategic_watch(item)
     return item
 
 
@@ -517,6 +528,7 @@ def _classify(item: CommodityFeedItem) -> None:
 
     _classify_timing(item)
     _assign_cause(item)
+    _classify_strategic_watch(item)
 
 
 def _classify_timing(item: CommodityFeedItem) -> None:
@@ -607,6 +619,74 @@ def _classify_timing(item: CommodityFeedItem) -> None:
     item.timing_score = round(score, 1)
     item.timing_reasons = reasons[:4]
     item.risk_notes = risks[:4]
+
+
+STRATEGIC_MATERIALS: dict[str, tuple[str, list[str]]] = {
+    "copper": ("전력망·AI 데이터센터 핵심금속", ["AI 전력망", "전선/변압기", "전기차"]),
+    "aluminum": ("전력망·차량경량화·전력기기 소재", ["송전망", "전기차", "데이터센터 설비"]),
+    "silver": ("태양광·전장·반도체 전도성 소재", ["태양광", "전장", "반도체 패키징"]),
+    "uranium_u3o8": ("AI 전력 병목과 에너지 안보의 구조 원료", ["원전", "SMR", "데이터센터 PPA"]),
+    "natgas_henry_hub": ("전력 피크와 LNG 수급의 변동성 원료", ["발전", "LNG", "전력가격"]),
+    "lithium_carbonate": ("EV/ESS 배터리 원가의 핵심 소재", ["EV", "ESS", "양극재"]),
+    "nickel_lme": ("고에너지밀도 배터리와 스테인리스 원료", ["배터리", "스테인리스", "방산"]),
+    "cobalt": ("배터리·항공합금 공급망 민감 소재", ["배터리", "항공합금", "공급망"]),
+    "natural_graphite": ("음극재·중국 통제 리스크 핵심 소재", ["음극재", "EV", "수출통제"]),
+    "manganese": ("LMFP·배터리 다변화 소재", ["LMFP", "ESS", "양극재"]),
+    "gallium": ("GaN 전력반도체·RF·방산 소재", ["전력반도체", "RF", "수출통제"]),
+    "germanium": ("광통신·열영상·방산 소재", ["광통신", "방산", "수출통제"]),
+    "neodymium": ("영구자석·로봇·EV·방산 소재", ["영구자석", "로봇", "EV"]),
+    "dysprosium": ("고온 영구자석 병목 소재", ["EV 모터", "방산", "로봇"]),
+    "terbium": ("고성능 자석·방산 소재", ["자석", "방산", "공급망"]),
+    "titanium": ("항공기·미사일·우주 구조재", ["항공", "방산", "우주"]),
+    "iridium": ("PEM 전해조 촉매 병목", ["수소", "PEM 전해조", "공급병목"]),
+    "helium": ("반도체·MRI·우주 극저온 가스", ["반도체", "MRI", "우주"]),
+    "neon": ("반도체 노광 가스", ["EUV/DUV", "반도체", "공급차질"]),
+    "krypton": ("반도체 특수가스", ["반도체", "식각/노광", "공급차질"]),
+    "xenon": ("반도체·위성 추진 특수가스", ["반도체", "우주", "방산"]),
+}
+
+
+def _classify_strategic_watch(item: CommodityFeedItem) -> None:
+    """많이 빠졌지만 산업 필수성이 높은 원료를 '바로 매수'와 분리해 관찰한다."""
+    meta = STRATEGIC_MATERIALS.get(item.id)
+    if not meta:
+        return
+
+    thesis, use_cases = meta
+    d20 = item.change_pct_20d
+    d60 = item.change_pct_60d
+    d120 = item.change_pct_120d
+    confidence = item.confidence or 0
+    score = 0.0
+    reasons: list[str] = [thesis, f"용도: {', '.join(use_cases)}"]
+
+    if d60 is not None and d60 <= -10:
+        score += min(35, abs(d60) * 1.2)
+        reasons.append(f"3개월 {d60:+.1f}%: 낙폭 과대 후보")
+    if d120 is not None and d120 <= -20:
+        score += min(35, abs(d120))
+        reasons.append(f"6개월 {d120:+.1f}%: 장기 낙폭 확인")
+    if d20 is not None and d20 > 0 and d60 is not None and d60 < 0:
+        score += 12
+        reasons.append(f"1개월 {d20:+.1f}%: 장기 하락 뒤 반등 시도")
+    if item.is_plunge:
+        score -= 18
+        reasons.append("단기 급락 중이라 가격 안정 확인 전까지 관망")
+    if item.is_surge:
+        score -= 20
+        reasons.append("이미 단기 급등이라 전략 관심보다 추격 위험이 큼")
+    if confidence < 45:
+        score -= 10
+        reasons.append(f"신뢰도 {confidence}%: 공개 가격 제한/월간 데이터")
+
+    item.strategic_score = round(max(0.0, score), 1)
+    item.strategic_watch = item.strategic_score >= 12 and not item.is_surge
+    if item.strategic_watch:
+        item.strategic_label = "낙폭+핵심원료 관찰"
+        item.strategic_reasons = reasons[:5]
+    elif score > 0:
+        item.strategic_label = "핵심원료 감시"
+        item.strategic_reasons = reasons[:4]
 
 
 def _assign_cause(item: CommodityFeedItem) -> None:
@@ -792,6 +872,7 @@ def fetch_feed(force: bool = False) -> list[CommodityFeedItem]:
             item.timing_reasons = [item.note or "공개 가격 제한: 소스 이벤트 확인"]
             item.risk_notes = ["차트/정량 판정 불가: 공개 spot 데이터 제한"]
             _assign_cause(item)
+            _classify_strategic_watch(item)
         items.append(item)
 
     _FEED_CACHE = (now, items)

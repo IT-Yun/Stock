@@ -124,14 +124,20 @@ export default function ValueChain() {
           </div>
 
           <div className="grid grid-cols-1 xl:grid-cols-[1fr_420px] gap-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-3 gap-3">
-              {visibleTiers.map((tier) => (
-                <TierPanel
-                  key={`${tier.level}-${tier.name}`}
-                  tier={tier}
-                  onSelectStock={(stock) => setSelectedStock(stock)}
-                />
-              ))}
+            <div className="min-w-0">
+              {selectedStage === "all" ? (
+                <FlowDiagram tiers={visibleTiers} onSelectStock={(stock) => setSelectedStock(stock)} />
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {visibleTiers.map((tier) => (
+                    <TierPanel
+                      key={`${tier.level}-${tier.name}`}
+                      tier={tier}
+                      onSelectStock={(stock) => setSelectedStock(stock)}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
 
             <div className="rounded-lg border border-[var(--color-border)] bg-black/20 p-3 min-h-[360px]">
@@ -219,6 +225,29 @@ export default function ValueChain() {
   );
 }
 
+function FlowDiagram({ tiers, onSelectStock }: { tiers: ValueChainTier[]; onSelectStock: (stock: { ticker: string; name: string }) => void }) {
+  const sorted = [...tiers].sort((a, b) => a.level - b.level);
+  return (
+    <div className="overflow-x-auto pb-2">
+      <div className="min-w-[980px] flex items-stretch gap-3">
+        {sorted.map((tier, idx) => (
+          <div key={`${tier.level}-${tier.name}`} className="flex items-stretch gap-3">
+            <div className="w-[230px] shrink-0">
+              <TierPanel tier={tier} compact onSelectStock={onSelectStock} />
+            </div>
+            {idx < sorted.length - 1 && (
+              <div className="flex items-center">
+                <div className="h-px w-9 bg-slate-600" />
+                <ChevronRight size={18} className="text-slate-500 -ml-1" />
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function StageButton({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
   return (
     <button
@@ -234,13 +263,13 @@ function StageButton({ label, active, onClick }: { label: string; active: boolea
   );
 }
 
-function TierPanel({ tier, onSelectStock }: { tier: ValueChainTier; onSelectStock: (stock: { ticker: string; name: string }) => void }) {
+function TierPanel({ tier, compact = false, onSelectStock }: { tier: ValueChainTier; compact?: boolean; onSelectStock: (stock: { ticker: string; name: string }) => void }) {
   const theme = TIER_THEMES[tier.level] ?? TIER_THEMES[0];
   const stage = groupName(tier);
   const detail = tier.name.includes("·") ? tier.name.split("·").slice(1).join("·").trim() : TIER_LABELS[tier.level];
 
   return (
-    <div className={`rounded-lg border ${theme.border} ${theme.bg} p-3`}>
+    <div className={`rounded-lg border ${theme.border} ${theme.bg} p-3 ${compact ? "min-h-[360px]" : ""}`}>
       <div className="flex items-start justify-between gap-2 mb-3">
         <div>
           <div className={`text-[10px] font-bold ${theme.tint}`}>T{tier.level} · {stage}</div>
@@ -250,7 +279,7 @@ function TierPanel({ tier, onSelectStock }: { tier: ValueChainTier; onSelectStoc
           <span className="text-[9px] px-1.5 py-0.5 rounded bg-[#fbbf24]/25 text-[#fbbf24] font-bold">KR alpha</span>
         )}
       </div>
-      <div className="flex flex-wrap gap-1.5">
+      <div className={`flex flex-wrap gap-1.5 ${compact ? "content-start" : ""}`}>
         {tier.players.map((p) => {
           const ticker = extractTicker(p);
           const name = cleanName(p);
@@ -268,7 +297,7 @@ function TierPanel({ tier, onSelectStock }: { tier: ValueChainTier; onSelectStoc
               }`}
             >
               <Boxes size={10} />
-              {name}
+              <span className="truncate max-w-[150px]">{name}</span>
               {ticker && <ChevronRight size={10} />}
             </button>
           );

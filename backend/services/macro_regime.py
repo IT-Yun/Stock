@@ -106,6 +106,46 @@ EVENT_META: dict[str, dict[str, Any]] = {
         "weight": 1.4,
         "source_notes": ["인플레 재점화는 장기 성장주의 할인율 부담을 키움"],
     },
+    "usd_krw_fx_pressure": {
+        "title": "달러/원 고환율·아시아 FX 압박",
+        "status": "수입원가·외국인 수급 리스크",
+        "favorable": ["shipbuilding", "aerospace", "ai_semi", "medical_device"],
+        "unfavorable": ["hotel_leisure", "food", "cosmetics", "retail", "battery"],
+        "weight": 1.2,
+        "source_notes": ["원화 약세는 수출주 매출 환산에는 우호적이나 수입 원가·여행 수요에는 부담"],
+    },
+    "industrial_reflation": {
+        "title": "산업금속·인프라 재평가",
+        "status": "중국/AI 전력망/인프라 수요 확인",
+        "favorable": ["ai_semi", "steel", "shipbuilding", "robotics", "hydrogen_energy"],
+        "unfavorable": ["construction", "ev", "battery"],
+        "weight": 1.3,
+        "source_notes": ["구리·알루미늄 강세는 경기/전력망 capex proxy이면서 일부 섹터에는 원가 부담"],
+    },
+    "food_inflation": {
+        "title": "식품 원가 인플레",
+        "status": "곡물·설탕·커피 가격 압박",
+        "favorable": ["finance"],
+        "unfavorable": ["food", "retail", "hotel_leisure", "cosmetics"],
+        "weight": 1.1,
+        "source_notes": ["곡물/커피/설탕 상승은 판가 전가 전까지 식품·소비재 마진 부담"],
+    },
+    "rare_earth_controls": {
+        "title": "희토류·특수금속 수출통제",
+        "status": "공급망 병목 프리미엄",
+        "favorable": ["aerospace", "cybersec", "ai_semi", "ev_materials"],
+        "unfavorable": ["ev", "battery", "display"],
+        "weight": 1.4,
+        "source_notes": ["갈륨·게르마늄·희토류는 방산/반도체/EV 필수 소재이나 가격 데이터는 proxy 비중이 큼"],
+    },
+    "credit_volatility": {
+        "title": "신용·변동성 스트레스",
+        "status": "risk-off/자금조달 비용 점검",
+        "favorable": ["cybersec", "telecom", "biotech"],
+        "unfavorable": ["platform", "gaming", "k_content", "construction", "holding_reit"],
+        "weight": 1.3,
+        "source_notes": ["VIX 상승·신용스프레드 확대는 장기 성장주와 레버리지 섹터에 불리"],
+    },
 }
 
 
@@ -127,6 +167,7 @@ def detect_active_scenarios() -> list[dict[str, Any]]:
     three_m = _safe(macro.get("treasury_3m"), "price")
     dxy = _safe(macro.get("dxy"), "price")
     krw = _safe(macro.get("usd_krw"), "price")
+    krw_z = _safe(macro.get("usd_krw"), "zscore_60d", 0)
     jpy = _safe(macro.get("usd_jpy"), "price")
     sp_z = _safe(macro.get("sp500"), "zscore_60d", 0)
     sp_5d = _safe(macro.get("sp500"), "change_pct_5d", 0)
@@ -251,15 +292,24 @@ def detect_current_events() -> list[dict[str, Any]]:
     ten_y = _safe(macro.get("treasury_10y"), "price")
     dxy = _safe(macro.get("dxy"), "price")
     krw = _safe(macro.get("usd_krw"), "price")
+    krw_z = _safe(macro.get("usd_krw"), "zscore_60d", 0)
     nasdaq_z = _safe(macro.get("nasdaq"), "zscore_60d", 0)
     sp_z = _safe(macro.get("sp500"), "zscore_60d", 0)
 
     wti = feed.get("crude_wti")
     brent = feed.get("crude_brent")
     gold = feed.get("gold")
-    natgas = feed.get("natgas")
+    natgas = feed.get("natgas_henry_hub")
     uranium = feed.get("uranium_u3o8")
     copper = feed.get("copper")
+    aluminum = feed.get("aluminum")
+    coffee = feed.get("coffee")
+    sugar = feed.get("sugar")
+    wheat = feed.get("wheat")
+    corn = feed.get("corn")
+    gallium = feed.get("gallium")
+    germanium = feed.get("germanium")
+    neodymium = feed.get("neodymium")
 
     oil_5d_max = max([_safe(wti, "change_pct_5d", 0), _safe(brent, "change_pct_5d", 0)])
     oil_120d_max = max([_safe(wti, "change_pct_120d", 0), _safe(brent, "change_pct_120d", 0)])
@@ -268,6 +318,7 @@ def detect_current_events() -> list[dict[str, Any]]:
     natgas_5d = _safe(natgas, "change_pct_5d", 0)
     uranium_60d = _safe(uranium, "change_pct_60d", 0)
     copper_60d = _safe(copper, "change_pct_60d", 0)
+    aluminum_60d = _safe(aluminum, "change_pct_60d", 0)
 
     events: list[dict[str, Any]] = []
 
@@ -319,6 +370,51 @@ def detect_current_events() -> list[dict[str, Any]]:
             rate_score += 0.15
             rate_evidence.append("유가 충격은 인플레/금리인하 지연 리스크")
         events.append(_event_payload("higher_for_longer", rate_score, rate_evidence))
+
+    if krw and krw > 1400:
+        fx_score = 0.35 + (0.15 if (krw_z or 0) > 1 else 0)
+        fx_evidence = [f"USD/KRW {krw:.0f}: 수입원가·외국인 수급 부담"]
+        if (krw_z or 0) > 1:
+            fx_evidence.append(f"KRW Z {krw_z:+.1f}: 60일 대비 원화 약세")
+        events.append(_event_payload("usd_krw_fx_pressure", fx_score, fx_evidence))
+
+    industrial_score = 0.0
+    industrial_evidence: list[str] = []
+    if (copper_60d or 0) > 8:
+        industrial_score += 0.3
+        industrial_evidence.append(f"구리 3개월 {copper_60d:+.1f}%: 전력망/산업 capex proxy")
+    if (aluminum_60d or 0) > 8:
+        industrial_score += 0.25
+        industrial_evidence.append(f"알루미늄 3개월 {aluminum_60d:+.1f}%: 전력기기/차량 경량화 소재")
+    if industrial_score >= 0.25:
+        events.append(_event_payload("industrial_reflation", industrial_score, industrial_evidence))
+
+    food_moves = [
+        ("커피", coffee),
+        ("설탕", sugar),
+        ("밀", wheat),
+        ("옥수수", corn),
+    ]
+    food_evidence = []
+    for name, obj in food_moves:
+        ret60 = _safe(obj, "change_pct_60d", 0)
+        ret5 = _safe(obj, "change_pct_5d", 0)
+        if (ret60 or 0) > 8:
+            food_evidence.append(f"{name} 3개월 {ret60:+.1f}%")
+        elif _safe(obj, "is_surge") and (ret5 or 0) > 0:
+            food_evidence.append(f"{name} 단기 급등: 5일 {ret5:+.1f}%")
+    if food_evidence:
+        events.append(_event_payload("food_inflation", min(0.75, 0.25 + len(food_evidence) * 0.12), food_evidence))
+
+    rare_evidence = []
+    for label, obj in [("갈륨", gallium), ("게르마늄", germanium), ("네오디뮴", neodymium)]:
+        if _safe(obj, "is_surge") or (_safe(obj, "change_pct_60d", 0) or 0) > 10:
+            rare_evidence.append(f"{label}: 수출통제/방산·반도체 소재 병목 proxy")
+    if rare_evidence:
+        events.append(_event_payload("rare_earth_controls", min(0.75, 0.35 + len(rare_evidence) * 0.1), rare_evidence))
+
+    if vix and vix > 22:
+        events.append(_event_payload("credit_volatility", min(0.8, 0.35 + (vix - 22) / 30), [f"VIX {vix:.1f}: 변동성 확대"]))
 
     return sorted(events, key=lambda x: x["severity"], reverse=True)
 

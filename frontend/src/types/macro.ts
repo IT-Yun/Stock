@@ -39,6 +39,7 @@ export interface CommodityFeedItem {
   price?: number | null;
   change_pct_1d?: number | null;
   change_pct_5d?: number | null;
+  change_pct_10d?: number | null;
   change_pct_20d?: number | null;
   change_pct_60d?: number | null;
   change_pct_120d?: number | null;
@@ -61,6 +62,10 @@ export interface CommodityFeedItem {
   cause_reasons?: string[] | null;
   bullish_thesis?: string | null;
   caution?: string | null;
+  strategic_watch?: boolean;
+  strategic_score?: number;
+  strategic_label?: string | null;
+  strategic_reasons?: string[] | null;
   fallback_url?: string | null;
   note?: string | null;
   is_hidden_bottleneck?: boolean;
@@ -97,6 +102,15 @@ export interface SectorSentiment {
   bearish_signals: string[];
   watch_signals?: string[];
   data_coverage: "commodity_only" | "core_watchlist" | "no_commodity_link" | "no_data";
+  verdict?: string;
+  key_takeaway?: string;
+  leading_signals?: string[];
+  next_checks?: string[];
+  indicator_assessments?: {
+    name: string;
+    direction: "bullish" | "bearish" | "watch";
+    reason: string;
+  }[];
 }
 
 export interface SectorMeta {

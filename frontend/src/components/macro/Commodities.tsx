@@ -183,7 +183,7 @@ function CommodityTableRow({
           </div>
           <div className={`text-right text-sm font-bold ${pctColor(value)}`}>{fmtPct(value)}</div>
           <div className="truncate px-3 text-[11px] text-slate-400">{item.driver_label ?? shortReason(item)}</div>
-          <div><Sparkline ticker={item.ticker} width={96} height={26} period={period.spark} /></div>
+          <div><Sparkline ticker={item.ticker} dataOverride={item.chart_series} width={96} height={26} period={period.spark} /></div>
           <div className="flex items-center justify-end gap-1.5">
             <CoverageBadge item={item} />
             <span className="text-[10px] text-slate-500">{item.confidence ?? "—"}%</span>
@@ -236,7 +236,12 @@ function CommodityModal({
 
         <div className="grid grid-cols-1 gap-4 p-4 xl:grid-cols-[1fr_380px]">
           <div>
-            {item.chartable && item.ticker ? (
+            {item.chart_series?.length ? (
+              <div className="rounded-xl border border-[var(--color-border)] bg-black/20 p-4">
+                <div className="mb-3 text-sm font-semibold text-[var(--color-text-primary)]">계산 시계열</div>
+                <Sparkline ticker={item.ticker} dataOverride={item.chart_series} width={720} height={260} period={period.spark} />
+              </div>
+            ) : item.chartable && item.ticker ? (
               <ChartView ticker={item.ticker} />
             ) : (
               <div className="rounded-xl border border-[var(--color-border)] bg-black/20 p-8 text-center">
@@ -252,6 +257,28 @@ function CommodityModal({
               <p>{use}</p>
               {item.proxy_for && <p className="mt-1 text-[10px] text-slate-500">직접 가격 대신 {item.proxy_for} proxy 사용</p>}
             </InfoBox>
+
+            {item.related_stocks_kr?.length ? (
+              <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-3">
+                <div className="mb-2 text-xs font-semibold text-[var(--color-text-primary)]">국내 관련주</div>
+                <div className="max-h-72 space-y-1.5 overflow-y-auto pr-1">
+                  {item.related_stocks_kr.map((stock) => (
+                    <a
+                      key={`${stock.ticker}-${stock.sector}`}
+                      href={`/sector/ai_semi?stock=${encodeURIComponent(`${stock.ticker}.KS`)}`}
+                      className="block rounded-md border border-slate-800 bg-black/20 px-2.5 py-2 hover:border-slate-600"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[12px] font-semibold text-slate-200">{stock.name}</span>
+                        <span className="font-mono text-[10px] text-slate-500">{stock.ticker}</span>
+                      </div>
+                      <div className="mt-1 text-[10px] text-slate-500">{stock.sector} · {stock.direction}</div>
+                      {stock.mechanism && <div className="mt-1 text-[10px] leading-relaxed text-slate-400">{stock.mechanism}</div>}
+                    </a>
+                  ))}
+                </div>
+              </div>
+            ) : null}
 
             <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-3">
               <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-[var(--color-text-primary)]">

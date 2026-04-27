@@ -7,8 +7,45 @@ watchlist of indicators that should be checked before forming a view.
 """
 
 from __future__ import annotations
+import math
+import time
 from typing import Any
 from services.macro_commodity import fetch_feed
+from services.stock_data import StockDataService
+
+
+_SECTOR_PROXY_CACHE: tuple[float, dict[str, dict[str, Any]]] | None = None
+_SECTOR_PROXY_TTL = 1800
+
+SECTOR_PROXY_TICKERS: dict[str, tuple[str, str]] = {
+    "ai_semi": ("SOXX", "반도체 ETF"),
+    "robotics": ("BOTZ", "로봇/자동화 ETF"),
+    "smr_nuclear": ("URA", "우라늄/원전 ETF"),
+    "cybersec": ("CIBR", "사이버보안 ETF"),
+    "aerospace": ("ITA", "우주항공/방산 ETF"),
+    "biotech": ("XBI", "바이오테크 ETF"),
+    "quantum": ("IONQ", "양자컴퓨팅 대표주 proxy"),
+    "hydrogen_energy": ("ICLN", "청정에너지 ETF"),
+    "battery": ("LIT", "리튬/배터리 ETF"),
+    "ev": ("TSLA", "전기차 대표주 proxy"),
+    "ev_materials": ("LIT", "EV 소재 ETF proxy"),
+    "shipbuilding": ("009540.KS", "HD한국조선해양"),
+    "steel": ("SLX", "글로벌 철강 ETF"),
+    "display": ("034220.KS", "LG디스플레이"),
+    "platform": ("KWEB", "인터넷 플랫폼 ETF proxy"),
+    "gaming": ("HERO", "게임 ETF"),
+    "k_content": ("352820.KS", "하이브"),
+    "cosmetics": ("090430.KS", "아모레퍼시픽"),
+    "food": ("KXI", "글로벌 필수소비재 ETF"),
+    "retail": ("XRT", "리테일 ETF"),
+    "apparel": ("XLY", "소비재 ETF proxy"),
+    "construction": ("ITB", "주택건설 ETF"),
+    "finance": ("XLF", "금융 ETF"),
+    "telecom": ("IYZ", "통신 ETF"),
+    "holding_reit": ("VNQ", "리츠 ETF"),
+    "medical_device": ("IHI", "의료기기 ETF"),
+    "hotel_leisure": ("JETS", "항공/여행 ETF proxy"),
+}
 
 
 CORE_WATCH_SIGNALS: dict[str, list[str]] = {
@@ -295,10 +332,86 @@ def _commodity_signal(item: dict[str, Any], rule: str, label: str) -> tuple[str,
     return None
 
 
+def _compute_proxy_metrics(ticker: str) -> dict[str, Any] | None:
+    try:
+        hist = StockDataService.get_stock_history(ticker, period="6mo")
+        if hist is None or hist.empty or "Close" not in hist.columns:
+            return None
+        closes = hist["Close"].dropna()
+        if len(closes) < 22:
+            return None
+        price = float(closes.iloc[-1])
+        p20 = float(closes.iloc[-21])
+        p60 = float(closes.iloc[-61]) if len(closes) >= 62 else None
+        d20 = ((price - p20) / p20 * 100) if p20 else None
+        d60 = ((price - p60) / p60 * 100) if p60 else None
+        z = None
+        rets = closes.pct_change().dropna().iloc[-60:]
+        if len(rets) >= 30:
+            mean = float(rets.mean())
+            std = float(rets.std())
+            if std and not math.isnan(std):
+                latest = float(rets.iloc[-1])
+                z = (latest - mean) / std
+        return {
+            "ticker": ticker,
+            "price": round(price, 4),
+            "change_pct_20d": round(d20, 2) if d20 is not None else None,
+            "change_pct_60d": round(d60, 2) if d60 is not None else None,
+            "zscore_60d": round(z, 2) if z is not None else None,
+            "data_as_of": closes.index[-1].isoformat() if hasattr(closes.index[-1], "isoformat") else str(closes.index[-1]),
+        }
+    except Exception as e:
+        return {"ticker": ticker, "error": str(e)[:80]}
+
+
+def _sector_proxy_map() -> dict[str, dict[str, Any]]:
+    global _SECTOR_PROXY_CACHE
+    now = time.time()
+    if _SECTOR_PROXY_CACHE and now - _SECTOR_PROXY_CACHE[0] < _SECTOR_PROXY_TTL:
+        return _SECTOR_PROXY_CACHE[1]
+    out: dict[str, dict[str, Any]] = {}
+    for sid, (ticker, label) in SECTOR_PROXY_TICKERS.items():
+        metrics = _compute_proxy_metrics(ticker) or {"ticker": ticker, "error": "no data"}
+        out[sid] = {**metrics, "label": label}
+    _SECTOR_PROXY_CACHE = (now, out)
+    return out
+
+
+def _proxy_assessment(sector_id: str) -> tuple[list[str], list[str], dict[str, str] | None]:
+    proxy = _sector_proxy_map().get(sector_id)
+    if not proxy or proxy.get("error"):
+        return [], [], None
+    d20 = proxy.get("change_pct_20d")
+    d60 = proxy.get("change_pct_60d")
+    label = proxy.get("label") or proxy.get("ticker")
+    if d20 is None or d60 is None:
+        return [], [], {
+            "name": f"{label} 가격 모멘텀",
+            "source_status": "missing",
+            "source_name": f"{label} · {proxy.get('ticker')}",
+            "updated_at": (proxy.get("data_as_of") or "")[:10],
+            "reason": "섹터 proxy 가격 데이터 부족",
+        }
+    reason = f"{label}({proxy.get('ticker')}) 1개월 {d20:+.1f}% / 3개월 {d60:+.1f}%"
+    meta = {
+        "name": f"{label} 가격 모멘텀",
+        "source_status": "proxy",
+        "source_name": f"{label} · {proxy.get('ticker')}",
+        "updated_at": (proxy.get("data_as_of") or "")[:10],
+    }
+    if d20 is not None and d60 is not None and d20 > 3 and d60 > 5:
+        return [f"{reason} -> 섹터 모멘텀 우호"], [], meta
+    if d20 is not None and d60 is not None and d20 < -3 and d60 < -5:
+        return [], [f"{reason} -> 섹터 모멘텀 약화"], meta
+    return [], [], {**meta, "reason": f"{reason}: 방향성 중립"}
+
+
 def compute_sentiment(sector_id: str, feed_dict: dict[str, dict[str, Any]]) -> dict[str, Any]:
     bullish: list[str] = []
     bearish: list[str] = []
     leading: list[str] = []
+    proxy_watch: dict[str, str] | None = None
 
     for cid, rule, label in DIRECT_COMMODITY_RULES.get(sector_id, []):
         item = feed_dict.get(cid)
@@ -329,6 +442,11 @@ def compute_sentiment(sector_id: str, feed_dict: dict[str, dict[str, Any]]) -> d
             bearish.append(label)
             leading.append(label)
 
+    proxy_bull, proxy_bear, proxy_watch = _proxy_assessment(sector_id)
+    bullish.extend(proxy_bull)
+    bearish.extend(proxy_bear)
+    leading.extend(proxy_bull or proxy_bear)
+
     score = len(bullish) - len(bearish)
     if score > 0:
         sentiment = "bullish"
@@ -343,6 +461,7 @@ def compute_sentiment(sector_id: str, feed_dict: dict[str, dict[str, Any]]) -> d
         bearish,
         rule_set.get("next", []),
         feed_dict,
+        proxy_watch,
     )
 
     return {
@@ -420,6 +539,7 @@ def _indicator_assessments(
     bearish: list[str],
     next_checks: list[str],
     feed_dict: dict[str, dict[str, Any]],
+    proxy_watch: dict[str, str] | None = None,
 ) -> list[dict[str, str]]:
     out: list[dict[str, str]] = []
     for signal in bullish:
@@ -435,6 +555,15 @@ def _indicator_assessments(
             "direction": "bearish",
             "reason": signal,
             **_source_status(signal, feed_dict),
+        })
+    if proxy_watch and not any(x["name"] == proxy_watch.get("name") for x in out):
+        out.append({
+            "name": proxy_watch.get("name", "섹터 proxy"),
+            "direction": "watch",
+            "reason": proxy_watch.get("reason", "실시간 proxy 연결됨"),
+            "source_status": proxy_watch.get("source_status", "proxy"),
+            "source_name": proxy_watch.get("source_name", "proxy"),
+            "updated_at": proxy_watch.get("updated_at", ""),
         })
     seen = {x["name"] for x in out}
     for signal in [*next_checks, *watch_signals]:

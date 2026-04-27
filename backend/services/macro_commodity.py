@@ -12,13 +12,34 @@ from __future__ import annotations
 
 import time
 import math
+import re
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
 from services.stock_data import StockDataService
+
+
+WIKI_COMMODITIES = Path(__file__).resolve().parents[2] / "wiki" / "macro" / "01-commodities.md"
+_RELATED_STOCKS_CACHE: tuple[float, dict[str, list[dict[str, str]]]] | None = None
+
+RELATED_STOCK_OVERRIDES: dict[str, list[dict[str, str]]] = {
+    "aluminum": [
+        {"name": "삼아알미늄", "ticker": "006110", "sector": "알루미늄박", "direction": "가격 민감", "mechanism": "알루미늄박/2차전지박 노출. 알루미늄 가격·가공마진 동시 확인", "lead_lag": "동행~1분기"},
+        {"name": "조일알미늄", "ticker": "018470", "sector": "알루미늄 압연", "direction": "가격 민감", "mechanism": "알루미늄 판재/압연. LME 알루미늄과 판가 전가력 확인", "lead_lag": "동행~1분기"},
+        {"name": "남선알미늄", "ticker": "008350", "sector": "알루미늄 압출/샷시", "direction": "원가·판가 민감", "mechanism": "건자재/자동차 알루미늄 제품. 원재료 상승은 판가 전가 여부가 핵심", "lead_lag": "1분기"},
+        {"name": "알멕", "ticker": "354320", "sector": "EV 알루미늄 부품", "direction": "수요 proxy", "mechanism": "전기차 배터리 모듈/경량화 부품. 알루미늄 수요와 EV capex 동시 확인", "lead_lag": "1~2분기"},
+        {"name": "피제이메탈", "ticker": "128660", "sector": "알루미늄 탈산제", "direction": "가격 민감", "mechanism": "알루미늄 탈산제/스크랩 chain. 원재료 가격과 철강 가동률 동시 확인", "lead_lag": "동행"},
+    ],
+    "crack_321": [
+        {"name": "S-Oil", "ticker": "010950", "sector": "정유", "direction": "수혜", "mechanism": "크랙 스프레드 상승은 정제마진 개선으로 EPS에 직접 연결", "lead_lag": "동행~1개월"},
+        {"name": "SK이노베이션", "ticker": "096770", "sector": "정유", "direction": "수혜", "mechanism": "제품 마진 확대 시 정유 부문 실적 개선", "lead_lag": "동행~1개월"},
+        {"name": "GS", "ticker": "078930", "sector": "정유 지주", "direction": "수혜", "mechanism": "GS칼텍스 정제마진 proxy", "lead_lag": "동행~1개월"},
+    ],
+}
 
 
 # wiki/macro/01-commodities.md의 52개 원자재 중 yfinance에서 fetch 가능한 것들 매핑.
@@ -307,6 +328,8 @@ class CommodityFeedItem:
     fallback_url: str | None = None
     note: str | None = None
     is_hidden_bottleneck: bool = False
+    chart_series: list[float] | None = None
+    related_stocks_kr: list[dict[str, str]] | None = None
     error: str | None = None
 
 
@@ -329,6 +352,85 @@ def _last_index_iso(history) -> str | None:
         return str(idx)
     except Exception:
         return None
+
+
+def _parse_inline_tickers(value: str) -> list[dict[str, str]]:
+    out: list[dict[str, str]] = []
+    for name, ticker in re.findall(r"([^\",\[]+?)\((\d{6})\)", value):
+        clean_name = name.strip().strip("\"'").strip()
+        if clean_name:
+            out.append({"name": clean_name, "ticker": ticker})
+    return out
+
+
+def _extract_field(block: str, key: str) -> str:
+    m = re.search(rf"^\s*{re.escape(key)}:\s*(.+?)\s*$", block, re.MULTILINE)
+    if not m:
+        return ""
+    return m.group(1).strip().strip("\"'")
+
+
+def _parse_related_stocks_from_wiki() -> dict[str, list[dict[str, str]]]:
+    global _RELATED_STOCKS_CACHE
+    if not WIKI_COMMODITIES.exists():
+        return RELATED_STOCK_OVERRIDES.copy()
+    mtime = WIKI_COMMODITIES.stat().st_mtime
+    if _RELATED_STOCKS_CACHE and _RELATED_STOCKS_CACHE[0] == mtime:
+        return _RELATED_STOCKS_CACHE[1]
+
+    text = WIKI_COMMODITIES.read_text(encoding="utf-8")
+    blocks = re.findall(r"```yaml\s*\n(.*?)\n```", text, flags=re.DOTALL)
+    mapping: dict[str, list[dict[str, str]]] = {}
+
+    for block in blocks:
+        id_match = re.search(r"^id:\s*([A-Za-z0-9_]+)\s*$", block, re.MULTILINE)
+        if not id_match:
+            continue
+        item_id = id_match.group(1)
+        effects = re.findall(r"^\s*-\s+sector:\s*(.+?)(?=^\s*-\s+sector:|\Z)", block, flags=re.DOTALL | re.MULTILINE)
+        rows: list[dict[str, str]] = []
+        for effect in effects:
+            sector = effect.splitlines()[0].strip().strip("\"'")
+            direction = _extract_field(effect, "direction")
+            mechanism = _extract_field(effect, "mechanism")
+            lead_lag = _extract_field(effect, "lead_lag")
+            ticker_lines = re.findall(r"tickers_kr(?:_secondary)?:\s*(\[.*?\])", effect)
+            for line in ticker_lines:
+                for stock in _parse_inline_tickers(line):
+                    rows.append({
+                        **stock,
+                        "sector": sector,
+                        "direction": direction,
+                        "mechanism": mechanism,
+                        "lead_lag": lead_lag,
+                    })
+
+        # 티커 중복 제거. 같은 종목이 여러 effect에 있으면 mechanism을 합친다.
+        dedup: dict[str, dict[str, str]] = {}
+        for row in rows:
+            ticker = row["ticker"]
+            if ticker not in dedup:
+                dedup[ticker] = row
+                continue
+            prev = dedup[ticker]
+            if row.get("sector") and row["sector"] not in prev.get("sector", ""):
+                prev["sector"] = " / ".join([x for x in [prev.get("sector"), row["sector"]] if x])
+            if row.get("mechanism") and row["mechanism"] not in prev.get("mechanism", ""):
+                prev["mechanism"] = " | ".join([x for x in [prev.get("mechanism"), row["mechanism"]] if x])
+        mapping[item_id] = list(dedup.values())
+
+    for item_id, extras in RELATED_STOCK_OVERRIDES.items():
+        existing = {x["ticker"]: x for x in mapping.get(item_id, [])}
+        for row in extras:
+            existing.setdefault(row["ticker"], row)
+        mapping[item_id] = list(existing.values())
+
+    _RELATED_STOCKS_CACHE = (mtime, mapping)
+    return mapping
+
+
+def _related_stocks(item_id: str) -> list[dict[str, str]]:
+    return _parse_related_stocks_from_wiki().get(item_id, [])
 
 
 def _compute_metrics(history) -> dict[str, Any]:
@@ -404,6 +506,7 @@ def _build_item(spec: dict[str, Any], *, fetchable: bool = True) -> CommodityFee
         fallback_url=spec.get("fallback_url") or spec.get("source_url"),
         note=spec.get("note"),
         is_hidden_bottleneck=spec.get("is_hidden_bottleneck", False),
+        related_stocks_kr=_related_stocks(spec["id"]),
         fetched_at=_now_iso(),
     )
 
@@ -432,6 +535,7 @@ def _computed_crack_321(spec: dict[str, Any]) -> CommodityFeedItem:
         # RBOB/Heating Oil are quoted in USD/gallon. Convert to USD/barrel by *42.
         spread = (2 * df["gasoline"] * 42 + df["heating"] * 42 - 3 * df["crude"]) / 3
         hist = pd.DataFrame({"Close": spread})
+        item.chart_series = [round(float(v), 4) for v in spread.dropna().tail(140).tolist()]
         _apply_history(item, hist)
     except Exception as e:
         item.error = str(e)[:120]

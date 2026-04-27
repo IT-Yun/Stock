@@ -69,6 +69,15 @@ export interface CommodityFeedItem {
   fallback_url?: string | null;
   note?: string | null;
   is_hidden_bottleneck?: boolean;
+  chart_series?: number[] | null;
+  related_stocks_kr?: {
+    name: string;
+    ticker: string;
+    sector?: string;
+    direction?: string;
+    mechanism?: string;
+    lead_lag?: string;
+  }[] | null;
   error?: string | null;
 }
 
@@ -204,6 +213,23 @@ export interface CurrentMacroEvent {
   source_notes: string[];
 }
 
+export interface BreakingMacroIssue {
+  id: string;
+  title: string;
+  urgency: number;
+  impact: string;
+  favorable_sectors: string[];
+  unfavorable_sectors: string[];
+  updated_at: string;
+  error?: string | null;
+  articles: {
+    title: string;
+    url: string;
+    source: string;
+    published_at: string;
+  }[];
+}
+
 export interface SynthesizedSector {
   sector_id: string;
   synthesis_score: number;
@@ -214,6 +240,7 @@ export interface SynthesizedSector {
 export interface OutlookResponse {
   status: string;
   live_indicators?: LiveMacroIndicator[];
+  breaking_issues?: BreakingMacroIssue[];
   current_events?: CurrentMacroEvent[];
   active_scenarios?: ActiveScenario[];
   synthesis?: {

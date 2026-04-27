@@ -19,6 +19,7 @@ from services.macro_commodity import fetch_feed, get_movers, feed_as_dicts
 from services.macro_sentiment import all_sector_sentiments, top_sectors
 from services.macro_indicators import macro_as_dicts
 from services.macro_regime import synthesize_sectors
+from services.macro_news import scan_macro_news
 from services.commodity_regime_history import (
     load_state as load_regime_state,
     RECOMMENDATION_MATRIX as REGIME_RECOMMENDATION,
@@ -440,6 +441,7 @@ async def get_outlook() -> dict[str, Any]:
     return {
         "status": "live",
         "live_indicators": macro_as_dicts(),
+        "breaking_issues": scan_macro_news(),
         "current_events": syn["current_events"],
         "active_scenarios": syn["active_scenarios"],
         "synthesis": {

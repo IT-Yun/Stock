@@ -7,6 +7,7 @@ interface SparklineProps {
   height?: number;
   period?: string;
   fallbackText?: string;
+  dataOverride?: number[] | null;
 }
 
 const DATA_CACHE: Map<string, number[] | "error"> = new Map();
@@ -17,10 +18,11 @@ export default function Sparkline({
   height = 32,
   period = "3mo",
   fallbackText = "no data",
+  dataOverride,
 }: SparklineProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [data, setData] = useState<number[] | null>(
-    ticker ? (DATA_CACHE.get(`${ticker}|${period}`) as number[]) ?? null : null
+    dataOverride?.length ? dataOverride : ticker ? (DATA_CACHE.get(`${ticker}|${period}`) as number[]) ?? null : null
   );
   const [errored, setErrored] = useState(
     ticker ? DATA_CACHE.get(`${ticker}|${period}`) === "error" : false
@@ -43,6 +45,10 @@ export default function Sparkline({
   }, []);
 
   useEffect(() => {
+    if (dataOverride?.length) {
+      setData(dataOverride);
+      return;
+    }
     if (!visible || !ticker || data || errored) return;
     const cacheKey = `${ticker}|${period}`;
     const cached = DATA_CACHE.get(cacheKey);
@@ -71,9 +77,9 @@ export default function Sparkline({
     return () => {
       cancelled = true;
     };
-  }, [visible, ticker, period, data, errored]);
+  }, [visible, ticker, period, data, errored, dataOverride]);
 
-  if (!ticker) {
+  if (!ticker && !dataOverride?.length) {
     return (
       <div
         style={{ width, height }}
@@ -121,14 +127,14 @@ export default function Sparkline({
     <div ref={containerRef} className="relative" style={{ width, height }} title={`${trendPct.toFixed(1)}% over ${period}`}>
       <svg width={width} height={height} className="block">
         <defs>
-          <linearGradient id={`g-${ticker}`} x1="0" y1="0" x2="0" y2="1">
+          <linearGradient id={`g-${ticker ?? "series"}`} x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor={color} stopOpacity="0.3" />
             <stop offset="100%" stopColor={color} stopOpacity="0" />
           </linearGradient>
         </defs>
         <polygon
           points={`0,${height} ${pts} ${width},${height}`}
-          fill={`url(#g-${ticker})`}
+          fill={`url(#g-${ticker ?? "series"})`}
         />
         <polyline points={pts} fill="none" stroke={color} strokeWidth="1.5" strokeLinejoin="round" />
       </svg>

@@ -212,7 +212,7 @@ function SectorDetailModal({ sector, onClose }: { sector: SectorMeta; onClose: (
         </div>
 
         <div className="border-t border-slate-800 pt-3 text-[10px] text-slate-500">
-          live/proxy로 연결된 지표만 점수에 반영하고, 미수집 지표는 평가에서 제외합니다.
+          live/proxy로 연결된 지표만 점수에 반영하고, 외부 원자료 지표는 보조 확인 항목으로 표시합니다.
         </div>
       </div>
     </div>
@@ -225,13 +225,15 @@ function SourceBadge({ status, compact = false }: { status?: string; compact?: b
     status === "proxy" || status === "computed_proxy" ? "proxy" :
     status === "delayed" ? "지연" :
     status === "monthly" ? "월간" :
-    status === "missing" ? "없음" :
+    status === "missing" ? "미수집" :
+    status === "manual" ? "외부" :
     status === "not_connected" ? "미수집" :
     status ?? "미수집";
   const cls =
     status === "live" ? "border-emerald-500/30 bg-emerald-500/15 text-emerald-300" :
     status === "proxy" || status === "computed_proxy" ? "border-blue-500/30 bg-blue-500/15 text-blue-300" :
     status === "delayed" || status === "monthly" ? "border-amber-500/30 bg-amber-500/15 text-amber-300" :
+    status === "manual" || status === "not_connected" ? "border-slate-600 bg-slate-700/50 text-slate-300" :
     "border-slate-700 bg-slate-800/60 text-slate-500";
   return <span className={`ml-1 inline-flex shrink-0 rounded border ${compact ? "px-1 py-0 text-[8px]" : "px-1.5 py-0.5 text-[9px]"} font-semibold ${cls}`}>{label}</span>;
 }

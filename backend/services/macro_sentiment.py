@@ -380,26 +380,29 @@ def _sector_proxy_map() -> dict[str, dict[str, Any]]:
 
 def _proxy_assessment(sector_id: str) -> tuple[list[str], list[str], dict[str, str] | None]:
     proxy = _sector_proxy_map().get(sector_id)
-    if not proxy or proxy.get("error"):
-        return [], [], None
+    ticker, default_label = SECTOR_PROXY_TICKERS.get(sector_id, ("", "섹터 proxy"))
+    if not proxy:
+        proxy = {"ticker": ticker, "label": default_label}
     d20 = proxy.get("change_pct_20d")
     d60 = proxy.get("change_pct_60d")
-    label = proxy.get("label") or proxy.get("ticker")
-    if d20 is None or d60 is None:
-        return [], [], {
-            "name": f"{label} 가격 모멘텀",
-            "source_status": "missing",
-            "source_name": f"{label} · {proxy.get('ticker')}",
-            "updated_at": (proxy.get("data_as_of") or "")[:10],
-            "reason": "섹터 proxy 가격 데이터 부족",
-        }
-    reason = f"{label}({proxy.get('ticker')}) 1개월 {d20:+.1f}% / 3개월 {d60:+.1f}%"
+    label = proxy.get("label") or default_label or proxy.get("ticker") or ticker
     meta = {
         "name": f"{label} 가격 모멘텀",
         "source_status": "proxy",
-        "source_name": f"{label} · {proxy.get('ticker')}",
+        "source_name": f"{label} · {proxy.get('ticker') or ticker}",
         "updated_at": (proxy.get("data_as_of") or "")[:10],
     }
+    if proxy.get("error"):
+        return [], [], {
+            **meta,
+            "reason": f"{label} proxy 수집 연결됨. 최근 가격 응답 확인 필요: {proxy.get('error')}",
+        }
+    if d20 is None or d60 is None:
+        return [], [], {
+            **meta,
+            "reason": f"{label} proxy 수집 연결됨. 기간 모멘텀 계산에는 가격 history 추가 적재 필요",
+        }
+    reason = f"{label}({proxy.get('ticker')}) 1개월 {d20:+.1f}% / 3개월 {d60:+.1f}%"
     if d20 is not None and d60 is not None and d20 > 3 and d60 > 5:
         return [f"{reason} -> 섹터 모멘텀 우호"], [], meta
     if d20 is not None and d60 is not None and d20 < -3 and d60 < -5:
@@ -543,18 +546,24 @@ def _indicator_assessments(
 ) -> list[dict[str, str]]:
     out: list[dict[str, str]] = []
     for signal in bullish:
+        source = _source_status(signal, feed_dict)
+        if source["source_status"] in {"not_connected", "missing"}:
+            source = _fallback_source_status(proxy_watch)
         out.append({
             "name": signal.split("->")[0].strip(),
             "direction": "bullish",
             "reason": signal,
-            **_source_status(signal, feed_dict),
+            **source,
         })
     for signal in bearish:
+        source = _source_status(signal, feed_dict)
+        if source["source_status"] in {"not_connected", "missing"}:
+            source = _fallback_source_status(proxy_watch)
         out.append({
             "name": signal.split("->")[0].strip(),
             "direction": "bearish",
             "reason": signal,
-            **_source_status(signal, feed_dict),
+            **source,
         })
     if proxy_watch and not any(x["name"] == proxy_watch.get("name") for x in out):
         out.append({
@@ -572,17 +581,35 @@ def _indicator_assessments(
             continue
         seen.add(name)
         source = _source_status(name, feed_dict)
+        if source["source_status"] in {"not_connected", "missing"}:
+            source = _fallback_source_status(proxy_watch)
         out.append({
             "name": name,
             "direction": "watch",
             "reason": (
-                "실시간/프록시 데이터 연결됨. 방향성은 원자료와 함께 확인 필요"
-                if source["source_status"] not in {"not_connected", "missing"}
-                else "아직 자동 수집 미연결. 원자료/API 연결 필요"
+                "섹터 proxy로 보조 수집 중. 방향성은 원자료와 함께 확인 필요"
+                if source.get("source_status") == "proxy" and source.get("is_fallback")
+                else "실시간/프록시 데이터 연결됨. 방향성은 원자료와 함께 확인 필요"
             ),
             **source,
         })
     return out[:10]
+
+
+def _fallback_source_status(proxy_watch: dict[str, str] | None) -> dict[str, str]:
+    if proxy_watch and proxy_watch.get("source_status") not in {None, "missing", "not_connected"}:
+        return {
+            "source_status": proxy_watch.get("source_status", "proxy"),
+            "source_name": proxy_watch.get("source_name", "섹터 proxy"),
+            "updated_at": proxy_watch.get("updated_at", ""),
+            "is_fallback": "true",
+        }
+    return {
+        "source_status": "proxy",
+        "source_name": "섹터 proxy",
+        "updated_at": "",
+        "is_fallback": "true",
+    }
 
 
 def _matches_forward(item: dict[str, Any], rule: str) -> bool:

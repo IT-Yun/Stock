@@ -29,6 +29,8 @@ function extractTicker(name: string): string | null {
   if (kr) return `${kr[1]}.KS`;
   const us = name.match(/\(\s*([A-Z]{1,6})\s*\)/);
   if (us) return us[1];
+  const leadingUs = name.match(/^([A-Z]{1,6})\s*\(/);
+  if (leadingUs) return leadingUs[1];
   if (/^[A-Z]{2,6}$/.test(name.trim())) return name.trim();
   return null;
 }
@@ -83,7 +85,7 @@ export default function ValueChain() {
   return (
     <MacroLayout
       title="Value Chain"
-      subtitle={`${data.total_kr_stocks} KR + ${data.total_us_stocks} US · 세로 공정 흐름 · 종목 클릭 시 차트`}
+      subtitle={`${data.total_kr_stocks} KR + ${data.total_us_stocks} US + ${data.total_foreign_stocks ?? 0} 해외/비상장 · 세로 공정 흐름 · 종목 클릭 시 차트`}
     >
       <section className="mb-5">
         <div className="flex flex-wrap gap-2">
@@ -278,9 +280,13 @@ function TierPanel({
   const theme = TIER_THEMES[tier.level] ?? TIER_THEMES[0];
   const stage = groupName(tier);
   const detail = tier.name.includes("·") ? tier.name.split("·").slice(1).join("·").trim() : tier.name || TIER_LABELS[tier.level];
-  const krPlayers = tier.players.filter((p) => /\(\d{6}\)/.test(p));
-  const usPlayers = tier.players.filter((p) => /\(\s*[A-Z]{1,6}\s*\)/.test(p) || /^[A-Z]{2,6}$/.test(p));
-  const otherPlayers = tier.players.filter((p) => !krPlayers.includes(p) && !usPlayers.includes(p));
+  const krPlayers = tier.players_kr_all?.length ? tier.players_kr_all : tier.players.filter((p) => /\(\d{6}\)|\(비상장\)/.test(p));
+  const usPlayers = tier.players_us?.length ? tier.players_us : tier.players.filter((p) => /\(\s*[A-Z]{1,6}\s*\)/.test(p) || /^[A-Z]{2,6}$/.test(p));
+  const foreignPlayers = tier.players_foreign ?? [];
+  const otherPlayers = [
+    ...foreignPlayers,
+    ...tier.players.filter((p) => !krPlayers.includes(p) && !usPlayers.includes(p) && !foreignPlayers.includes(p)),
+  ];
 
   return (
     <div className={`rounded-xl border ${theme.border} ${theme.bg} p-4`}>
@@ -299,8 +305,8 @@ function TierPanel({
 
         <div className="space-y-3">
           {krPlayers.length > 0 && <PlayerGroup title="KR 종목" players={krPlayers} tone="kr" onSelectStock={onSelectStock} />}
-          {usPlayers.length > 0 && <PlayerGroup title="US/글로벌" players={usPlayers} tone="us" onSelectStock={onSelectStock} />}
-          {otherPlayers.length > 0 && <PlayerGroup title="비상장/원료/시장" players={otherPlayers} tone="other" onSelectStock={onSelectStock} />}
+          {usPlayers.length > 0 && <PlayerGroup title="US 상장" players={usPlayers} tone="us" onSelectStock={onSelectStock} />}
+          {otherPlayers.length > 0 && <PlayerGroup title="해외/비상장/원료" players={otherPlayers} tone="other" onSelectStock={onSelectStock} />}
         </div>
       </div>
     </div>
@@ -390,7 +396,7 @@ function PlayerGroup({
       <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">{title}</div>
       <div className="flex flex-wrap gap-1.5">
         {players.map((p) => {
-          const ticker = extractTicker(p);
+          const ticker = tone === "other" && !/\(\d{6}\)/.test(p) ? null : extractTicker(p);
           const name = cleanName(p);
           return (
             <button

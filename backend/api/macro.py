@@ -545,8 +545,9 @@ async def get_value_chain(sector_id: str | None = None) -> dict[str, Any]:
     if sector_id:
         parsed = [s for s in parsed if s["sector_id"] == sector_id]
 
-    total_kr = sum(sum(len(t["players_kr"]) for t in s["tiers"]) for s in parsed)
-    total_us = sum(sum(len(t["players_us"]) for t in s["tiers"]) for s in parsed)
+    total_kr = sum(sum(len(t.get("players_kr_all") or t.get("players_kr") or []) for t in s["tiers"]) for s in parsed)
+    total_us = sum(sum(len(t.get("players_us") or []) for t in s["tiers"]) for s in parsed)
+    total_foreign = sum(sum(len(t.get("players_foreign") or []) for t in s["tiers"]) for s in parsed)
 
     return {
         "status": "mapped",
@@ -554,6 +555,7 @@ async def get_value_chain(sector_id: str | None = None) -> dict[str, Any]:
         "total_sectors": len(parsed),
         "total_kr_stocks": total_kr,
         "total_us_stocks": total_us,
+        "total_foreign_stocks": total_foreign,
         "sectors": parsed,
         "hidden_alpha_top": _HIDDEN_ALPHA_TOP,
         "warnings": [

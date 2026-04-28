@@ -278,7 +278,9 @@ export interface ValueChainTier {
   name: string;
   players: string[];
   players_kr?: ValueChainPlayerKR[];
+  players_kr_all?: string[];
   players_us?: string[];
+  players_foreign?: string[];
   is_korean_alpha?: boolean;
   roles?: string[];
   signals?: string[];
@@ -309,6 +311,7 @@ export interface ValueChainResponse {
   total_sectors: number;
   total_kr_stocks: number | string;
   total_us_stocks: number | string;
+  total_foreign_stocks?: number | string;
   sectors: ValueChainSector[];
   hidden_alpha_top: HiddenAlphaItem[];
   warnings: string[];

@@ -56,19 +56,41 @@ export default function Outlook() {
 
 function IssueCard({ issue, sectorMap }: { issue: BreakingMacroIssue; sectorMap: Record<string, SectorMeta> }) {
   const pct = Math.round((issue.urgency ?? 0) * 100);
+  const effects = getIssueEffects(issue);
   return (
     <div className="rounded-lg border border-slate-700 bg-slate-950/70 p-3">
       <div className="mb-2 flex items-start justify-between gap-3">
         <div>
-          <div className="text-base font-semibold text-slate-100">🔥 {issue.title}</div>
+          <div className="text-base font-semibold text-slate-100">{issue.title}</div>
           <div className="mt-1 text-[11px] leading-relaxed text-slate-400">{issue.impact}</div>
         </div>
         <span className="shrink-0 rounded bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-300">긴급 {pct}</span>
       </div>
 
-      <div className="mb-3 grid grid-cols-2 gap-2 text-[11px]">
-        <SectorChips title="우호" tone="good" ids={issue.favorable_sectors} sectorMap={sectorMap} />
-        <SectorChips title="부담" tone="bad" ids={issue.unfavorable_sectors} sectorMap={sectorMap} />
+      {issue.macro_paths?.length ? (
+        <div className="mb-3 rounded border border-slate-800 bg-black/20 p-2">
+          <div className="mb-1 text-[10px] font-semibold text-slate-300">상황별 해석</div>
+          <div className="space-y-1">
+            {issue.macro_paths.map((path) => (
+              <div key={path} className="text-[11px] leading-relaxed text-slate-400">{path}</div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      <div className="mb-3 grid grid-cols-1 gap-2 text-[11px] lg:grid-cols-2">
+        <SectorImpactList
+          title="좋아지는 섹터"
+          tone="good"
+          effects={effects.filter((e) => e.direction === "favorable")}
+          sectorMap={sectorMap}
+        />
+        <SectorImpactList
+          title="나빠지는 섹터"
+          tone="bad"
+          effects={effects.filter((e) => e.direction === "unfavorable")}
+          sectorMap={sectorMap}
+        />
       </div>
 
       <div className="space-y-1.5">
@@ -93,15 +115,51 @@ function IssueCard({ issue, sectorMap }: { issue: BreakingMacroIssue; sectorMap:
   );
 }
 
-function SectorChips({ title, tone, ids, sectorMap }: { title: string; tone: "good" | "bad"; ids: string[]; sectorMap: Record<string, SectorMeta> }) {
+function getIssueEffects(issue: BreakingMacroIssue) {
+  if (issue.sector_effects?.length) return issue.sector_effects;
+  return [
+    ...issue.favorable_sectors.map((sector_id) => ({
+      sector_id,
+      direction: "favorable" as const,
+      reason: "해당 거시 이벤트가 수요, 가격, 정책 모멘텀에 긍정적으로 작용합니다.",
+    })),
+    ...issue.unfavorable_sectors.map((sector_id) => ({
+      sector_id,
+      direction: "unfavorable" as const,
+      reason: "해당 거시 이벤트가 비용, 할인율, 수요 둔화 압력으로 작용합니다.",
+    })),
+  ];
+}
+
+function SectorImpactList({
+  title,
+  tone,
+  effects,
+  sectorMap,
+}: {
+  title: string;
+  tone: "good" | "bad";
+  effects: ReturnType<typeof getIssueEffects>;
+  sectorMap: Record<string, SectorMeta>;
+}) {
   return (
     <div>
       <div className={`mb-1 font-semibold ${tone === "good" ? "text-emerald-300" : "text-rose-300"}`}>{title}</div>
-      <div className="flex flex-wrap gap-1">
-        {ids.map((id) => (
-          <span key={id} className={`rounded px-1.5 py-0.5 ${tone === "good" ? "bg-emerald-500/15 text-emerald-200" : "bg-rose-500/15 text-rose-200"}`}>
-            {sectorMap[id]?.name ?? id}
-          </span>
+      <div className="space-y-1">
+        {effects.map((effect) => (
+          <div
+            key={`${effect.direction}-${effect.sector_id}`}
+            className={`rounded border px-2 py-1.5 ${
+              tone === "good"
+                ? "border-emerald-500/20 bg-emerald-500/8"
+                : "border-rose-500/20 bg-rose-500/8"
+            }`}
+          >
+            <div className={`font-semibold ${tone === "good" ? "text-emerald-200" : "text-rose-200"}`}>
+              {sectorMap[effect.sector_id]?.name ?? effect.sector_id}
+            </div>
+            <div className="mt-0.5 leading-relaxed text-slate-400">{effect.reason}</div>
+          </div>
         ))}
       </div>
     </div>
@@ -112,16 +170,12 @@ function ImpactSummary({ issues, sectorMap }: { issues: BreakingMacroIssue[]; se
   const scores: Record<string, { score: number; reasons: string[] }> = {};
   for (const issue of issues) {
     const weight = Math.max(0.5, issue.urgency || 0.5);
-    for (const sid of issue.favorable_sectors) {
+    for (const effect of getIssueEffects(issue)) {
+      const sid = effect.sector_id;
       const row = scores[sid] ?? { score: 0, reasons: [] };
-      row.score += weight;
-      row.reasons.push(`+ ${issue.title}`);
-      scores[sid] = row;
-    }
-    for (const sid of issue.unfavorable_sectors) {
-      const row = scores[sid] ?? { score: 0, reasons: [] };
-      row.score -= weight;
-      row.reasons.push(`- ${issue.title}`);
+      const sign = effect.direction === "favorable" ? 1 : -1;
+      row.score += weight * sign;
+      row.reasons.push(`${sign > 0 ? "+" : "-"} ${issue.title}: ${effect.reason}`);
       scores[sid] = row;
     }
   }
@@ -134,7 +188,7 @@ function ImpactSummary({ issues, sectorMap }: { issues: BreakingMacroIssue[]; se
             <div className="font-semibold text-slate-100">{sectorMap[sid]?.name ?? sid}</div>
             <div className={`font-mono text-sm font-bold ${row.score >= 0 ? "text-emerald-300" : "text-rose-300"}`}>{row.score > 0 ? "+" : ""}{row.score.toFixed(1)}</div>
           </div>
-          {row.reasons.slice(0, 3).map((r) => <div key={r} className="text-[10px] text-slate-400">{r}</div>)}
+          {row.reasons.slice(0, 3).map((r) => <div key={r} className="line-clamp-3 text-[10px] leading-relaxed text-slate-400">{r}</div>)}
         </div>
       ))}
     </div>

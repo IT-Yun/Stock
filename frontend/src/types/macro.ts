@@ -218,8 +218,14 @@ export interface BreakingMacroIssue {
   title: string;
   urgency: number;
   impact: string;
+  macro_paths?: string[];
   favorable_sectors: string[];
   unfavorable_sectors: string[];
+  sector_effects?: {
+    sector_id: string;
+    direction: "favorable" | "unfavorable";
+    reason: string;
+  }[];
   updated_at: string;
   error?: string | null;
   articles: {

@@ -578,7 +578,7 @@ async def get_wiki_page(name: str) -> dict[str, Any]:
 
     file_path = _WIKI_MACRO_DIR / _WIKI_PAGE_MAP[name]
     if not file_path.exists():
-        raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
+        raise HTTPException(status_code=404, detail=f"Page not available: {name}")
 
     try:
         content = file_path.read_text(encoding="utf-8")
@@ -588,5 +588,5 @@ async def get_wiki_page(name: str) -> dict[str, Any]:
             "content": content,
             "size_bytes": len(content.encode("utf-8")),
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Read failed: {e}")
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to read page content")

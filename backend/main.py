@@ -3,7 +3,7 @@ import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -11,7 +11,7 @@ import uvicorn
 
 from config import settings
 from api import sectors_router, analysis_router, news_router, members_router, macro_router
-from api.members import get_all_allowed, _normalize
+from api.members import get_all_allowed, _normalize, _require_admin
 
 
 class AuthMiddleware:
@@ -287,8 +287,10 @@ async def refresh_status():
 
 
 @app.post("/api/refresh-now")
-async def refresh_now():
+async def refresh_now(x_auth_nickname: str = Header("")):
     """Manually trigger a full data refresh (admin only)."""
+    from urllib.parse import unquote
+    _require_admin(unquote(x_auth_nickname))
     if _last_daily_refresh["status"] == "running":
         return {"message": "이미 새로고침 진행 중입니다."}
     threading.Thread(target=_run_daily_refresh, daemon=True).start()
@@ -308,10 +310,12 @@ if FRONTEND_DIST.is_dir():
         # Don't intercept API routes
         if full_path.startswith("api/"):
             return {"error": "not found"}
-        # Try to serve the exact file first (but NOT stale .js/.css with wrong hash)
-        file_path = FRONTEND_DIST / full_path
-        if file_path.is_file():
-            return FileResponse(str(file_path))
+        # Try to serve the exact file first (but NOT stale .js/.css with wrong hash).
+        # Resolve + containment check to block path traversal (e.g. ../../etc/passwd).
+        dist_root = FRONTEND_DIST.resolve()
+        candidate = (dist_root / full_path).resolve()
+        if candidate.is_relative_to(dist_root) and candidate.is_file():
+            return FileResponse(str(candidate))
         # If browser requests a hashed asset that no longer exists → 404 (not index.html!)
         # This prevents serving HTML as JS, which causes parse errors
         if full_path.startswith("assets/"):

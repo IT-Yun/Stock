@@ -1,5 +1,9 @@
 # AI-Powered Stock Analysis Platform
 
+**🌐 Live app: [stock-pz9q.onrender.com](https://stock-pz9q.onrender.com)** &nbsp;·&nbsp; 📐 [Architecture deep dive](docs/ARCHITECTURE.md)
+
+> The live deployment is invite-gated (nickname login). Reviewers can explore the architecture docs and code freely; ask the author for demo access to the dashboards.
+
 A full-stack platform that combines technical analysis, fundamentals, news, macro regime detection, and **LLM-verified investment checklists** across eight investment themes — AI / semiconductors, robotics, SMR (small modular reactors), cybersecurity, aerospace, biotech, quantum computing, and hydrogen.
 
 Built as a personal project to explore how far LLM agents can go in replacing manual market research — and how to run an AI-heavy pipeline reliably on free-tier data sources and minimal infrastructure.

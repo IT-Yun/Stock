@@ -1,0 +1,98 @@
+[
+  {
+    "id": "semiconductors",
+    "name": "반도체",
+    "description": "AI·데이터센터 수요 폭증으로 메모리·파운드리 반도체 시장이 구조적 성장기에 진입했으며, 글로벌 공급망 재편 속에서 한국 반도체 기업의 기술 경쟁력이 더욱 부각되고 있습니다.",
+    "icon": "🔬",
+    "stocks": [
+      {
+        "ticker": "005930.KS",
+        "name": "삼성전자",
+        "description": "글로벌 메모리 반도체 1위 및 파운드리 사업을 영위하는 종합 반도체 기업"
+      },
+      {
+        "ticker": "000660.KS",
+        "name": "SK하이닉스",
+        "description": "HBM 기술력을 바탕으로 AI 반도체 시장을 선도하는 메모리 반도체 전문기업"
+      },
+      {
+        "ticker": "TSM",
+        "name": "TSMC",
+        "description": "세계 최대 반도체 위탁생산(파운드리) 기업으로 첨단 공정 기술을 보유"
+      }
+    ],
+    "related_commodities": ["SI=F", "GC=F"]
+  },
+  {
+    "id": "robotics",
+    "name": "로봇",
+    "description": "제조업 자동화와 서비스 로봇 수요 확대로 로봇 산업이 빠르게 성장하고 있으며, 한국 기업들이 협동로봇·산업용로봇 분야에서 글로벌 경쟁력을 확보하고 있습니다.",
+    "icon": "🤖",
+    "stocks": [
+      {
+        "ticker": "267250.KS",
+        "name": "현대로보틱스",
+        "description": "현대자동차그룹 산하 산업용 로봇 및 자동화 솔루션 전문기업"
+      },
+      {
+        "ticker": "454910.KS",
+        "name": "두산로보틱스",
+        "description": "협동로봇 분야 글로벌 선두주자로 다양한 산업에 로봇 솔루션 제공"
+      },
+      {
+        "ticker": "090150.KS",
+        "name": "로보스타",
+        "description": "산업용 로봇 및 자동화 장비 전문 제조기업"
+      }
+    ],
+    "related_commodities": ["COPX", "LIT"]
+  },
+  {
+    "id": "biotech-genetics",
+    "name": "생명공학/유전자",
+    "description": "바이오시밀러·세포유전자치료제·분자진단 등 첨단 바이오 기술이 고령화 시대 핵심 성장 동력으로 부상하고 있으며, 한국 바이오 기업의 글로벌 시장 점유율이 꾸준히 확대되고 있습니다.",
+    "icon": "🧬",
+    "stocks": [
+      {
+        "ticker": "207940.KS",
+        "name": "삼성바이오로직스",
+        "description": "세계 최대 규모의 바이오의약품 위탁생산(CMO/CDMO) 기업"
+      },
+      {
+        "ticker": "068270.KS",
+        "name": "셀트리온",
+        "description": "바이오시밀러 글로벌 선두기업으로 자체 개발·생산·판매 역량 보유"
+      },
+      {
+        "ticker": "096530.KS",
+        "name": "씨젠",
+        "description": "분자진단 기술 기반 체외진단 전문기업으로 다중진단 원천기술 보유"
+      }
+    ],
+    "related_commodities": ["XBI", "IBB"]
+  },
+  {
+    "id": "smr",
+    "name": "SMR 소형원전",
+    "description": "탄소중립 달성과 에너지 안보 강화를 위해 소형모듈원전(SMR)이 차세대 에너지원으로 주목받고 있으며, AI 데이터센터 전력 수요 급증이 SMR 시장 성장을 가속화하고 있습니다.",
+    "icon": "⚛️",
+    "stocks": [
+      {
+        "ticker": "034020.KS",
+        "name": "두산에너빌리티",
+        "description": "원전 기자재 국내 1위 기업으로 SMR 핵심 기기 제작 역량 보유"
+      },
+      {
+        "ticker": "015760.KS",
+        "name": "한국전력공사",
+        "description": "국내 최대 전력 공기업으로 원전 운영 및 해외 원전 수출 사업 추진"
+      },
+      {
+        "ticker": "BWXT",
+        "name": "BWX Technologies",
+        "description": "미국 원자력 기술 전문기업으로 SMR 핵심 부품 및 원자로 설계 기술 보유"
+      }
+    ],
+    "related_commodities": ["URA", "UX1!=F"]
+  }
+]

@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+yfinance
+finance-datareader
+curl_cffi
+pandas
+numpy
+requests
+beautifulsoup4
+feedparser
+pydantic
+python-dotenv
+supabase
